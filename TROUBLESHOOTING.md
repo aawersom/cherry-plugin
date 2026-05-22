@@ -117,6 +117,8 @@ function proxyM3u8(m3u8Url) {
 
 **Приоритет:** MP4 > HLS. Если доступны прямые MP4-ссылки — использовать их (нет CORS-проблем). HLS прокси — фолбэк.
 
+> ⚠️ Однуровневый `proxyM3u8` (выше) недостаточен — см. раздел 14 для рекурсивной реализации.
+
 ---
 
 ## 7. Карточки прижаты влево, один ряд
@@ -232,6 +234,61 @@ if (Lampa.Storage.get('cherry_proxy_key', null) === null) {
 ---
 
 ## 13. HellPorno — chs_object JS паттерн
+
+---
+
+## 14. Pornhub HLS: двухуровневый плейлист — hls.js теряет base URL сегментов
+
+**Симптом:** Видео не воспроизводится (hls.js запрашивает сегменты по неверным URL).
+
+**Причина:** Pornhub HLS использует двухуровневую иерархию:
+```
+master.m3u8  →  index-v1-a1.m3u8  →  seg-001.ts, seg-002.ts, ...
+```
+Первая версия `proxyM3u8` переписывала только `master.m3u8`, превращая ссылку на `index.m3u8` в прокси-URL. Когда hls.js загружал `index.m3u8` через прокси (получая сырой контент с относительными путями `.ts`), он пытался разрешать сегменты относительно прокси-URL — и получал URL вида `https://cherry-proxy.workers.dev/seg-001.ts` вместо реального CDN-пути.
+
+**Решение:** Рекурсивный `proxyM3u8` — при обнаружении `.m3u8` в теле плейлиста сам вызывает себя:
+```javascript
+function proxyM3u8(m3u8Url, referer) {
+  return cherryFetch(m3u8Url, referer).then(function (content) {
+    var basePath = m3u8Url.split('?')[0];
+    var baseUrl = basePath.substring(0, basePath.lastIndexOf('/') + 1);
+    var promises = content.split('\n').map(function (line) {
+      var l = line.trim();
+      if (!l || l[0] === '#') return Promise.resolve(line);
+      var abs = (l.indexOf('http') === 0) ? l : baseUrl + l;
+      // Sub-playlist → рекурсивный blob
+      if (/\.m3u8/.test(abs.split('?')[0])) {
+        return proxyM3u8(abs, referer).catch(function() { return buildProxyUrl(abs, referer); });
+      }
+      return Promise.resolve(buildProxyUrl(abs, referer));
+    });
+    return Promise.all(promises).then(function (lines) {
+      var blob = new Blob([lines.join('\n')], { type: 'application/vnd.apple.mpegurl' });
+      var blobUrl = URL.createObjectURL(blob);
+      _blobUrls.push(blobUrl);
+      return blobUrl;
+    });
+  });
+}
+```
+Каждый уровень плейлиста получает свой blob URL. hls.js всегда разрешает сегменты относительно blob URL, в котором все пути уже проксированы.
+
+---
+
+## 15. Stream URL привязан к IP прокси (токены v-acctoken, signed URL)
+
+**Симптом:** Плагин находит видео, но при нажатии Play ничего не происходит (или мгновенная ошибка). Актуально для KVS-сайтов (FamilyPorn, Porntrex и др.).
+
+**Причина:** При фетче страницы видео через прокси (IP Cloudflare Worker) сайт генерирует подписанный URL с токеном, привязанным к IP запроса. Когда плеер Lampa пытается воспроизвести этот URL напрямую с IP пользователя — токен невалиден → 403.
+
+**Решение:** Все stream URL перед передачей в `Lampa.Player.play` проксировать, кроме blob-URL (которые уже содержат проксированные сегменты):
+```javascript
+function px(u) { return (!u || u.indexOf('blob:') === 0) ? u : buildProxyUrl(u); }
+var proxiedQuality = {};
+Object.keys(quality).forEach(function(k) { proxiedQuality[k] = px(quality[k]); });
+Lampa.Player.play({ url: px(url), quality: proxiedQuality, ... });
+```
 
 yt-dlp extractor для HellPorno использует JS-переменную `chs_object`:
 ```javascript
