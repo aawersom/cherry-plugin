@@ -8,7 +8,10 @@
   // CONFIG — user sets these after deploying their proxy
   // ============================================================
   var PROXY_URL = 'https://cherry-proxy.aawersom.workers.dev';
-  var PROXY_KEY = Lampa.Storage.get('cherry_proxy_key', '1206');
+
+  function getProxyKey() {
+    return Lampa.Storage.get('cherry_proxy_key', '1206');
+  }
 
   // ============================================================
   // PROXY HELPERS
@@ -16,9 +19,10 @@
 
   /** @param {string} url @param {string=} referer @returns {string} */
   function buildProxyUrl(url, referer) {
+    var key = getProxyKey();
     var p = PROXY_URL + '/proxy?url=' + encodeURIComponent(url);
-    if (PROXY_KEY) p += '&key=' + encodeURIComponent(PROXY_KEY);
-    if (referer)   p += '&referer=' + encodeURIComponent(referer);
+    if (key)     p += '&key=' + encodeURIComponent(key);
+    if (referer) p += '&referer=' + encodeURIComponent(referer);
     return p;
   }
 
@@ -60,6 +64,9 @@
     return bestUrl || quality[keys[0]];
   }
 
+  // Track blob URLs created by proxyM3u8 so they can be revoked on player close.
+  var _blobUrls = [];
+
   // Fetches an HLS m3u8 through the proxy, rewrites all segment/playlist lines
   // to also pass through the proxy, and returns a Blob URL the player can use.
   // This bypasses CORS restrictions on CDN segment URLs.
@@ -73,7 +80,9 @@
         return buildProxyUrl(abs, referer);
       }).join('\n');
       var blob = new Blob([rewritten], { type: 'application/vnd.apple.mpegurl' });
-      return URL.createObjectURL(blob);
+      var blobUrl = URL.createObjectURL(blob);
+      _blobUrls.push(blobUrl);
+      return blobUrl;
     });
   }
 
@@ -328,7 +337,7 @@
 
     this.render  = function () { return html; };
     this.pause   = function () {};
-    this.stop    = function () {};
+    this.stop    = function () { if (scroll) scroll.body().off('scroll'); };
 
     this.destroy = function () {
       destroyed = true;
@@ -1116,6 +1125,14 @@
         });
       }
     );
+
+    // Revoke HLS blob URLs when the player closes to prevent memory leaks on TV devices.
+    Lampa.Listener.follow('player', function (e) {
+      if (e.type === 'destroy' && _blobUrls.length) {
+        _blobUrls.forEach(function (u) { try { URL.revokeObjectURL(u); } catch (_) {} });
+        _blobUrls = [];
+      }
+    });
   }
 
   // Handle both early-load (before app:ready) and late-load cases.
@@ -2178,7 +2195,7 @@ function _pornoneCards(html) {
         var videoUrl = m[1];
         var slug = m[2];
         // Skip single-segment navigation URLs like /category/, /page/
-        if (!slug || slug.indexOf('/') === -1 && /^(?:page|category|tag|search|feed|wp-content)$/i.test(slug)) continue;
+        if (!slug || (slug.indexOf('/') === -1 && /^(?:page|category|tag|search|feed|wp-content)$/i.test(slug))) continue;
         var id = slug.replace(/[^a-z0-9]/gi, '_');
         if (!id || seen[id]) continue;
         seen[id] = true;
@@ -2744,11 +2761,13 @@ SOURCES.push({
 
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
-            // Primary: iframe player from videos.porndig.com
+            // Primary: fetch iframe player page and extract direct stream URL
             var m = /src="(https?:\/\/videos\.porndig\.com\/player\/index\/[^"]+)"/i.exec(html);
             if (m) {
-                // The player URL is the stream source for Lampa embed
-                return { url: m[1], quality: {} };
+                return cherryFetch(m[1]).then(function (ihtml) {
+                    var result = extractStreams(ihtml);
+                    return result.url ? result : extractStreams(html);
+                }).catch(function () { return extractStreams(html); });
             }
             return extractStreams(html);
         }).catch(function () { return { url: '', quality: {} }; });
@@ -2862,7 +2881,7 @@ SOURCES.push({
             views: 0
           });
         }
-        return { items: items, total_pages: 0 };
+        return { items: items, total_pages: items.length ? 1 : 0 };
       })
       .catch(function() { return { items: [], total_pages: 0 }; });
   },
