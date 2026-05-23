@@ -1482,13 +1482,23 @@ SOURCES.push({
       var highUrl = highMatch ? highMatch[1] : '';
       var lowUrl = lowMatch ? lowMatch[1] : '';
 
-      var quality = {};
-      if (hlsUrl) quality['HLS'] = hlsUrl;
-      if (highUrl) quality['MP4 High'] = highUrl;
-      if (lowUrl) quality['MP4 Low'] = lowUrl;
+      // Prefer direct MP4 — CDN77 tokens are not IP-bound, no CORS issue.
+      // HLS segments from xvideos-cdn.com are CORS-restricted in browsers.
+      if (highUrl || lowUrl) {
+        var quality = {};
+        if (highUrl) quality['High'] = highUrl;
+        if (lowUrl && lowUrl !== highUrl) quality['Low'] = lowUrl;
+        return { url: highUrl || lowUrl, quality: quality };
+      }
 
-      var url = hlsUrl || highUrl || lowUrl || '';
-      return { url: url, quality: quality };
+      // HLS-only fallback: proxy segments to bypass CORS.
+      if (hlsUrl) {
+        return proxyM3u8(hlsUrl, 'https://www.xvideos2.com/').then(function(blob) {
+          return { url: blob, quality: { HLS: blob } };
+        }).catch(function() { return { url: hlsUrl, quality: { HLS: hlsUrl } }; });
+      }
+
+      return { url: '', quality: {} };
     }).catch(function() { return { url: '', quality: {} }; });
   }
 });
@@ -2349,8 +2359,8 @@ SOURCES.push({
     browse: function (category, page) {
         var p = page || 1;
         var url = p > 1
-            ? 'https://xozilla.com/' + p + '/'
-            : 'https://xozilla.com/';
+            ? 'https://www.xozilla.com/latest-updates/' + p + '/'
+            : 'https://www.xozilla.com/latest-updates/';
         return cherryFetch(url).then(function (html) {
             return { items: _xozillaCards(html), total_pages: _xozillaPages(html) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
@@ -2358,33 +2368,16 @@ SOURCES.push({
 
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
-            // JWPlayer setup block
-            var setupRx = /jwplayer\s*\(\s*['"]?\w+['"]?\s*\)\s*\.setup\s*\(\s*(\{[\s\S]+?\})\s*\)/;
-            var sm = setupRx.exec(html);
-            if (sm) {
-                var block = sm[1];
-                // sources array: [{file:"url", label:"720p"}, ...]
-                var srcRx = /\{\s*['"]?file['"]?\s*:\s*['"]([^'"]+)['"]\s*(?:,\s*['"]?label['"]?\s*:\s*['"]([^'"]+)['"])?/g;
-                var srcs = [];
-                var fm;
-                while ((fm = srcRx.exec(block)) !== null) {
-                    srcs.push({ url: fm[1], label: fm[2] || 'default' });
-                }
-                if (srcs.length) {
-                    var quality = {};
-                    srcs.forEach(function (s) { quality[s.label] = s.url; });
-                    // pick highest
-                    var order = ['1080p', '720p', '480p', '360p', '240p', 'default'];
-                    var best = srcs[0].url;
-                    order.forEach(function (lbl) {
-                        if (quality[lbl] && best === srcs[0].url) best = quality[lbl];
-                    });
-                    return { url: best, quality: quality };
-                }
-                // single file field
-                var fileM = /['"]?file['"]?\s*:\s*['"]([^'"]+)['"]/.exec(block);
-                if (fileM) return { url: fileM[1], quality: {} };
+            // kt_player flashvars: video_url: 'url', video_alt_url: 'url'
+            var varM = /(video_url|video_alt_url2|video_alt_url)\s*[=:]\s*['"]([^'"]+)['"]/g;
+            var best = '', quality = {};
+            var labels = { video_url: '480p', video_alt_url: '720p', video_alt_url2: '1080p' };
+            var fm;
+            while ((fm = varM.exec(html)) !== null) {
+                quality[labels[fm[1]] || fm[1]] = fm[2];
+                if (!best || fm[1] === 'video_alt_url2') best = fm[2];
             }
+            if (best) return { url: best, quality: quality };
             return extractStreams(html);
         }).catch(function () { return { url: '', quality: {} }; });
     }
@@ -2392,13 +2385,12 @@ SOURCES.push({
 
 function _xozillaCards(html) {
     var items = [];
-    var hrefRx = /href="(https?:\/\/xozilla\.com\/(?:videos?|[^"?#]+\/)[^"]+)"/g;
+    var hrefRx = /href="(https?:\/\/(?:www\.)?xozilla\.com\/videos\/[0-9]+\/[^"]+)"/g;
     var seen = {};
     var m;
     while ((m = hrefRx.exec(html)) !== null) {
         var videoUrl = m[1];
-        // Filter out navigation/category links — video pages have a numeric segment or /videos/
-        if (!/\/(?:videos?|watch)\//.test(videoUrl) && !/\/\d+[-/]/.test(videoUrl)) continue;
+        // Already filtered by regex to /videos/NUMBER/ pattern — no extra check needed
         var id = videoUrl.replace(/^https?:\/\/[^/]+/, '').replace(/[^a-z0-9]/gi, '_');
         if (seen[id]) continue;
         seen[id] = true;
@@ -2445,8 +2437,8 @@ SOURCES.push({
     browse: function (category, page) {
         var p = page || 1;
         var url = p > 1
-            ? 'https://www.3movs.com/videos/newest/' + p + '/'
-            : 'https://www.3movs.com/videos/newest/';
+            ? 'https://www.3movs.com/latest-updates/' + p + '/'
+            : 'https://www.3movs.com/latest-updates/';
         return cherryFetch(url).then(function (html) {
             return { items: _3movsCards(html), total_pages: _3movsPages(html) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
@@ -2454,6 +2446,16 @@ SOURCES.push({
 
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
+            // kt_player flashvars: video_url: 'url', video_alt_url: '720p', video_alt_url2: '1080p'
+            var varM = /(video_url|video_alt_url2|video_alt_url)\s*[=:]\s*['"]([^'"]+)['"]/g;
+            var best = '', quality = {};
+            var labels = { video_url: '480p', video_alt_url: '720p', video_alt_url2: '1080p' };
+            var fm;
+            while ((fm = varM.exec(html)) !== null) {
+                quality[labels[fm[1]] || fm[1]] = fm[2];
+                if (!best || fm[1] === 'video_alt_url2') best = fm[2];
+            }
+            if (best) return { url: best, quality: quality };
             return extractStreams(html);
         }).catch(function () { return { url: '', quality: {} }; });
     }
@@ -2514,8 +2516,8 @@ SOURCES.push({
     browse: function (category, page) {
         var p = page || 1;
         var url = p > 1
-            ? 'https://analdin.com/videos/newest/' + p + '/'
-            : 'https://analdin.com/videos/newest/';
+            ? 'https://analdin.com/' + p + '/'
+            : 'https://analdin.com/';
         return cherryFetch(url).then(function (html) {
             return { items: _analdinCards(html), total_pages: _analdinPages(html) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
@@ -2523,30 +2525,16 @@ SOURCES.push({
 
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
-            // JWPlayer setup block (same pattern as Xozilla)
-            var setupRx = /jwplayer\s*\(\s*['"]?\w+['"]?\s*\)\s*\.setup\s*\(\s*(\{[\s\S]+?\})\s*\)/;
-            var sm = setupRx.exec(html);
-            if (sm) {
-                var block = sm[1];
-                var srcRx = /\{\s*['"]?file['"]?\s*:\s*['"]([^'"]+)['"]\s*(?:,\s*['"]?label['"]?\s*:\s*['"]([^'"]+)['"])?/g;
-                var srcs = [];
-                var fm;
-                while ((fm = srcRx.exec(block)) !== null) {
-                    srcs.push({ url: fm[1], label: fm[2] || 'default' });
-                }
-                if (srcs.length) {
-                    var quality = {};
-                    srcs.forEach(function (s) { quality[s.label] = s.url; });
-                    var order = ['1080p', '720p', '480p', '360p', '240p', 'default'];
-                    var best = srcs[srcs.length - 1].url;
-                    order.forEach(function (lbl) {
-                        if (quality[lbl]) best = quality[lbl];
-                    });
-                    return { url: best, quality: quality };
-                }
-                var fileM = /['"]?file['"]?\s*:\s*['"]([^'"]+)['"]/.exec(block);
-                if (fileM) return { url: fileM[1], quality: {} };
+            // kt_player flashvars: video_url: 'url', video_alt_url: '720p', video_alt_url2: '1080p'
+            var varM = /(video_url|video_alt_url2|video_alt_url)\s*[=:]\s*['"]([^'"]+)['"]/g;
+            var best = '', quality = {};
+            var labels = { video_url: '480p', video_alt_url: '720p', video_alt_url2: '1080p' };
+            var fm;
+            while ((fm = varM.exec(html)) !== null) {
+                quality[labels[fm[1]] || fm[1]] = fm[2];
+                if (!best || fm[1] === 'video_alt_url2') best = fm[2];
             }
+            if (best) return { url: best, quality: quality };
             return extractStreams(html);
         }).catch(function () { return { url: '', quality: {} }; });
     }
@@ -2554,12 +2542,12 @@ SOURCES.push({
 
 function _analdinCards(html) {
     var items = [];
-    var hrefRx = /href="(https?:\/\/analdin\.com\/[^"?#]+)"/g;
+    var hrefRx = /href="(https?:\/\/(?:www\.)?analdin\.com\/videos\/[0-9]+\/[^"]+)"/g;
     var seen = {};
     var m;
     while ((m = hrefRx.exec(html)) !== null) {
         var videoUrl = m[1];
-        if (/\/(search|page|category|tag)\//.test(videoUrl)) continue;
+        // Already filtered by regex to /videos/NUMBER/ pattern — no extra check needed
         var id = videoUrl.replace(/^https?:\/\/[^/]+\//, '').replace(/[^a-z0-9]/gi, '_');
         if (!id || seen[id]) continue;
         seen[id] = true;
@@ -2618,14 +2606,16 @@ SOURCES.push({
 
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
-            // SisiStyle: videoUrl JS variable
-            var m = /videoUrl\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))['"]/i.exec(html);
-            if (m) return { url: m[1], quality: {} };
-
-            // Also try video_url / video_alt_url assignments
-            var varM = /(video_url|video_alt_url)\s*[=:]\s*['"]([^'"]+)['"]/i.exec(html);
-            if (varM) return { url: varM[2], quality: {} };
-
+            // kt_player flashvars: video_url: 'url', video_alt_url: '720p', video_alt_url2: '1080p'
+            var varM = /(video_url|video_alt_url2|video_alt_url)\s*[=:]\s*['"]([^'"]+)['"]/g;
+            var best = '', quality = {};
+            var labels = { video_url: '480p', video_alt_url: '720p', video_alt_url2: '1080p' };
+            var fm;
+            while ((fm = varM.exec(html)) !== null) {
+                quality[labels[fm[1]] || fm[1]] = fm[2];
+                if (!best || fm[1] === 'video_alt_url2') best = fm[2];
+            }
+            if (best) return { url: best, quality: quality };
             return extractStreams(html);
         }).catch(function () { return { url: '', quality: {} }; });
     }
@@ -2697,6 +2687,16 @@ SOURCES.push({
 
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
+            // kt_player flashvars: video_url: 'url', video_alt_url: '720p', video_alt_url2: '1080p'
+            var varM = /(video_url|video_alt_url2|video_alt_url)\s*[=:]\s*['"]([^'"]+)['"]/g;
+            var best = '', quality = {};
+            var labels = { video_url: '480p', video_alt_url: '720p', video_alt_url2: '1080p' };
+            var fm;
+            while ((fm = varM.exec(html)) !== null) {
+                quality[labels[fm[1]] || fm[1]] = fm[2];
+                if (!best || fm[1] === 'video_alt_url2') best = fm[2];
+            }
+            if (best) return { url: best, quality: quality };
             return extractStreams(html);
         }).catch(function () { return { url: '', quality: {} }; });
     }
@@ -2782,11 +2782,11 @@ SOURCES.push({
 
 function _porndigCards(html) {
     var items = [];
-    var hrefRx = /href="(https?:\/\/porndig\.com\/videos\/(\d+)\/[^"]+\.html)"/g;
+    var hrefRx = /href="((?:https?:\/\/porndig\.com)?\/videos\/(\d+)\/[^"]+\.html)"/g;
     var seen = {};
     var m;
     while ((m = hrefRx.exec(html)) !== null) {
-        var videoUrl = m[1];
+        var videoUrl = m[1].charAt(0) === '/' ? 'https://porndig.com' + m[1] : m[1];
         var id = m[2];
         if (seen[id]) continue;
         seen[id] = true;
@@ -2953,11 +2953,11 @@ SOURCES.push({
 
 function _perfektCards(html) {
     var items = [];
-    var hrefRx = /href="(https?:\/\/perfektdamen\.co\/video\/(\d+)\/)"/g;
+    var hrefRx = /href="((?:https?:\/\/(?:www\.)?perfektdamen\.co)?\/video\/(\d+)\/)"/g;
     var seen = {};
     var m;
     while ((m = hrefRx.exec(html)) !== null) {
-        var videoUrl = m[1];
+        var videoUrl = m[1].charAt(0) === '/' ? 'https://www.perfektdamen.co' + m[1] : m[1];
         var id = m[2];
         if (seen[id]) continue;
         seen[id] = true;
@@ -3257,15 +3257,33 @@ SOURCES.push({
 
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
-            // pbcdn.tv CDN
+            // Playerjs with server-resolved /videofile/BASE64 path
+            var pjRx = /Playerjs\s*\(\s*\{[^}]*?file\s*:\s*["']([^"']+)["']/i;
+            var pm = pjRx.exec(html);
+            if (pm) {
+                var filePath = pm[1];
+                var fileUrl = filePath.charAt(0) === '/' ? 'https://sex.pornobolt.in' + filePath : filePath;
+                return cherryFetch(fileUrl).then(function (resp) {
+                    try {
+                        var arr = JSON.parse(resp);
+                        if (Array.isArray(arr)) {
+                            var quality = {}, best = '';
+                            arr.forEach(function (item) {
+                                if (item.file) { quality[item.title || 'SD'] = item.file; best = item.file; }
+                            });
+                            if (best) return { url: best, quality: quality };
+                        }
+                    } catch (e) {}
+                    return extractStreams(resp);
+                }).catch(function () { return extractStreams(html); });
+            }
+            // pbcdn.tv CDN fallback
             var cdnRx = /['"]?(https?:\/\/pbcdn\.tv\/[^"'\s]+\.(?:mp4|m3u8))['"]/gi;
-            var found = [];
-            var m;
+            var found = [], m;
             while ((m = cdnRx.exec(html)) !== null) {
                 if (found.indexOf(m[1]) === -1) found.push(m[1]);
             }
             if (found.length) return _kvsPickBest(found);
-
             return extractStreams(html);
         }).catch(function () { return { url: '', quality: {} }; });
     }
@@ -3273,11 +3291,11 @@ SOURCES.push({
 
 function _pornoboltCards(html) {
     var items = [];
-    var hrefRx = /href="(https?:\/\/sex\.pornobolt\.in\/video\/([^/"]+)\.html)"/g;
+    var hrefRx = /href="((?:https?:\/\/sex\.pornobolt\.in)?\/video\/([^/"]+)\.html)"/g;
     var seen = {};
     var m;
     while ((m = hrefRx.exec(html)) !== null) {
-        var videoUrl = m[1];
+        var videoUrl = m[1].charAt(0) === '/' ? 'https://sex.pornobolt.in' + m[1] : m[1];
         var slug = m[2];
         if (!slug || seen[slug]) continue;
         seen[slug] = true;
@@ -3553,6 +3571,13 @@ SOURCES.push({
 
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
+            var iframeM = /src="(https?:\/\/666-emded\.com\/embed\/[^"]+)"/i.exec(html);
+            if (iframeM) {
+                return cherryFetch(iframeM[1]).then(function (ihtml) {
+                    var result = extractStreams(ihtml);
+                    return result.url ? result : { url: '', quality: {} };
+                }).catch(function () { return { url: '', quality: {} }; });
+            }
             return extractStreams(html);
         }).catch(function () { return { url: '', quality: {} }; });
     }
@@ -3715,11 +3740,11 @@ SOURCES.push({
 
 function _rolikaCards(html) {
     var items = [];
-    var hrefRx = /href="(https?:\/\/w2\.huyalkino\.com\/[^"]+\.html)"/g;
+    var hrefRx = /href="((?:https?:\/\/w2\.huyalkino\.com)?\/[a-z]+\/\d+[^"]+\.html)"/g;
     var seen = {};
     var m;
     while ((m = hrefRx.exec(html)) !== null) {
-        var videoUrl = m[1];
+        var videoUrl = m[1].charAt(0) === '/' ? 'https://w2.huyalkino.com' + m[1] : m[1];
         // DLE URL: /{category}/{id}-{slug}.html
         var idMatch = /\/(\d+)-[^/]+\.html/.exec(videoUrl);
         var id = idMatch ? idMatch[1] : videoUrl;
@@ -3779,11 +3804,25 @@ SOURCES.push({
 
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
+            // Playerjs multi-quality: new Playerjs({file:'[360p]url,[720p]url,...'})
+            var pjRx = /new\s+Playerjs\s*\(\s*\{[^}]*?file\s*:\s*['"]([^'"]+)['"]/i;
+            var pm = pjRx.exec(html);
+            if (pm) {
+                var fileStr = pm[1];
+                var quality = {}, best = '';
+                var qRx = /\[([^\]]+)\](https?:\/\/[^,\s'"[\]]+)/g;
+                var qm;
+                while ((qm = qRx.exec(fileStr)) !== null) {
+                    quality[qm[1]] = qm[2];
+                    best = qm[2];
+                }
+                if (best) return { url: best, quality: quality };
+                if (/^https?:/.test(fileStr)) return { url: fileStr, quality: {} };
+            }
             // DLE JWPlayer pattern
             var jwRx = /jwplayer\s*\(\s*['"]?\w+['"]?\s*\)\s*\.setup\s*\(\s*\{[\s\S]*?['"]?file['"]?\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))['"]/;
             var m = jwRx.exec(html);
             if (m) return { url: m[1], quality: {} };
-
             return extractStreams(html);
         }).catch(function () { return { url: '', quality: {} }; });
     }
