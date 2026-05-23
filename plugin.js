@@ -67,22 +67,36 @@
   // Track blob URLs created by proxyM3u8 so they can be revoked on player close.
   var _blobUrls = [];
 
-  // Fetches an HLS m3u8 through the proxy, rewrites all segment/playlist lines
-  // to also pass through the proxy, and returns a Blob URL the player can use.
-  // This bypasses CORS restrictions on CDN segment URLs.
+  // Fetches an HLS m3u8 through the proxy and rewrites all non-comment lines:
+  //   - Sub-playlist lines (.m3u8) → recursively proxied → inner blob URL
+  //   - Segment lines (.ts, etc.) → direct proxy URL
+  // Handles multi-level HLS (master → index → segments) so hls.js resolves
+  // segment paths against a blob URL that already has correct proxied paths.
   function proxyM3u8(m3u8Url, referer) {
     return cherryFetch(m3u8Url, referer).then(function (content) {
-      var baseUrl = m3u8Url.substring(0, m3u8Url.lastIndexOf('/') + 1);
-      var rewritten = content.split('\n').map(function (line) {
+      var basePath = m3u8Url.split('?')[0];
+      var baseUrl = basePath.substring(0, basePath.lastIndexOf('/') + 1);
+
+      var lines = content.split('\n');
+      var promises = lines.map(function (line) {
         var l = line.trim();
-        if (!l || l[0] === '#') return line;
+        if (!l || l[0] === '#') return Promise.resolve(line);
         var abs = (l.indexOf('http') === 0) ? l : baseUrl + l;
-        return buildProxyUrl(abs, referer);
-      }).join('\n');
-      var blob = new Blob([rewritten], { type: 'application/vnd.apple.mpegurl' });
-      var blobUrl = URL.createObjectURL(blob);
-      _blobUrls.push(blobUrl);
-      return blobUrl;
+        // Sub-playlist: proxy recursively so its segments are also rewritten.
+        if (/\.m3u8/.test(abs.split('?')[0])) {
+          return proxyM3u8(abs, referer).catch(function () {
+            return buildProxyUrl(abs, referer);
+          });
+        }
+        return Promise.resolve(buildProxyUrl(abs, referer));
+      });
+
+      return Promise.all(promises).then(function (rewrittenLines) {
+        var blob = new Blob([rewrittenLines.join('\n')], { type: 'application/vnd.apple.mpegurl' });
+        var blobUrl = URL.createObjectURL(blob);
+        _blobUrls.push(blobUrl);
+        return blobUrl;
+      });
     });
   }
 
@@ -233,11 +247,16 @@
         return;
       }
 
+      // Proxy non-blob stream URLs so that tokens bound to the proxy IP stay valid.
+      function px(u) { return (!u || u.indexOf('blob:') === 0) ? u : buildProxyUrl(u); }
+      var proxiedQuality = {};
+      Object.keys(quality).forEach(function(k) { proxiedQuality[k] = px(quality[k]); });
+
       Lampa.Player.play({
         title:   video.title,
-        url:     url,
+        url:     px(url),
         poster:  video.thumb,
-        quality: quality
+        quality: proxiedQuality
       });
     }).catch(function (err) {
       console.warn('[Cherry] getStream error:', err);
@@ -1973,30 +1992,15 @@ SOURCES.push({
 
   getStream: function(video) {
     return cherryFetch(video.url).then(function(html) {
-      var quality = {};
-      var url = '';
-
-      // Source with res/label attribute (both attribute orders)
-      var re1 = /<source[^>]+src="([^"]+)"[^>]*(?:res|label)="([^"]+)"/gi;
-      var re2 = /<source[^>]+(?:res|label)="([^"]+)"[^>]*src="([^"]+)"/gi;
-      var m;
-      while ((m = re1.exec(html)) !== null) quality[m[2]] = m[1];
-      while ((m = re2.exec(html)) !== null) quality[m[1]] = m[2];
-
-      // Plain MP4 sources as fallback
-      var rePlain = /<source[^>]+src="([^"]+\.mp4)"/gi;
-      while ((m = rePlain.exec(html)) !== null) { if (!url) url = m[1]; }
-
-      // Pick best by resolution number
-      var keys = Object.keys(quality);
-      if (keys.length) {
-        var best = keys.reduce(function(a, b) {
-          return (parseInt(a, 10) || 0) >= (parseInt(b, 10) || 0) ? a : b;
-        });
-        url = quality[best];
+      // HQPorner loads its player via AJAX: url: '/blocks/altplayer.php?i=//mydaddy.cc/video/ID/'
+      var embedM = /url:\s*['"]\/blocks\/altplayer\.php\?i=\/\/mydaddy\.cc\/video\/([^'"\/]+)\//i.exec(html);
+      if (embedM) {
+        return cherryFetch('https://mydaddy.cc/video/' + embedM[1] + '/').then(function(embedHtml) {
+          var result = extractStreams(embedHtml);
+          return result.url ? result : { url: '', quality: {} };
+        }).catch(function() { return { url: '', quality: {} }; });
       }
-
-      return { url: url, quality: quality };
+      return extractStreams(html);
     }).catch(function() { return { url: '', quality: {} }; });
   }
 });
@@ -2903,8 +2907,8 @@ SOURCES.push({
       var m = html.match(/src="(https?:\/\/[^"]+\.mp4)"\s+type="video\/mp4"/);
       if (m) return { url: m[1], quality: {} };
 
-      // Fallback: tizam.cc CDN
-      var m2 = html.match(/src="(https?:\/\/video2?\.tizam\.cc\/[^"]+)"/);
+      // Fallback: tizam.cc CDN (video1/video2/.../videoN)
+      var m2 = html.match(/src="(https?:\/\/video\d*\.tizam\.cc\/[^"]+)"/);
       if (m2) return { url: m2[1], quality: {} };
 
       // Last resort
@@ -3088,19 +3092,17 @@ SOURCES.push({
         } catch (e) {}
       }
 
-      // Pattern 1: src="..." type="video/mp4" with optional res attribute
-      var re1 = /<source\s[^>]*src="([^"]+)"[^>]*(?:type="video\/mp4"|res="([^"]*)")/gi;
-      while ((m = re1.exec(html)) !== null) {
-        var res = m[2] || 'mp4';
-        quality[res] = m[1];
-        if (!url) url = m[1];
-      }
-
-      // Pattern 2: res attribute before src
-      var re2 = /<source\s[^>]*res="([^"]*)"[^>]*src="([^"]+\.mp4)"/gi;
-      while ((m = re2.exec(html)) !== null) {
-        quality[m[1] || 'mp4'] = m[2];
-        if (!url) url = m[2];
+      // Pattern 1: <source type="video/mp4"> — extract quality from res/label/title attribute
+      var srcRe = /<source\s([^>]+)>/gi;
+      while ((m = srcRe.exec(html)) !== null) {
+        var attrs = m[1];
+        if (!/type="video\/mp4"/i.test(attrs)) continue;
+        var srcM = /src="([^"]+)"/.exec(attrs);
+        if (!srcM) continue;
+        var labelM = /(?:res|label|title)="([^"]+)"/.exec(attrs);
+        var lbl = labelM ? labelM[1] : (_kvsPickBest([srcM[1]]).quality['default'] ? 'default' : 'mp4');
+        quality[lbl] = srcM[1];
+        if (!url) url = srcM[1];
       }
 
       // Fallback
@@ -3594,17 +3596,19 @@ function _ebunPages(html) {
 SOURCES.push({
     id: 'lenporno',
     name: 'LenPorno',
-    host: 'my.lenporno.live',
+    host: 'xxx.lenporno.xyz',
 
     search: function (query, page) {
-        var url = 'https://my.lenporno.live/search/?text=' + encodeURIComponent(query) + '&page=' + page;
+        var url = 'https://xxx.lenporno.xyz/search/?q=' + encodeURIComponent(query);
         return cherryFetch(url).then(function (html) {
-            return { items: _lenpornoCards(html), total_pages: _lenpornoPages(html) };
+            return { items: _lenpornoCards(html), total_pages: 1 };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
     browse: function (category, page) {
-        var url = 'https://my.lenporno.live/new-update/' + page + '/';
+        var url = page > 1
+            ? 'https://xxx.lenporno.xyz/the-best/?page=' + page
+            : 'https://xxx.lenporno.xyz/the-best/';
         return cherryFetch(url).then(function (html) {
             return { items: _lenpornoCards(html), total_pages: _lenpornoPages(html) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
@@ -3612,25 +3616,23 @@ SOURCES.push({
 
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
-            // Try to find video ID in page for direct upload path
-            var idM = /<video[^>]*id="(\d+)"/i.exec(html) ||
-                      /\/uploads\/(\d+)\//.exec(html);
-            if (idM) {
-                var vidId = idM[1];
-                // Try direct MP4 path
-                var directUrl = 'https://my.lenporno.live/uploads/' + vidId + '/video.mp4';
-                // Also check if there's a different video file referenced
-                var pathM = /\/uploads\/(\d+)\/(video\.(?:mp4|m3u8))/i.exec(html);
-                if (pathM) {
-                    return { url: 'https://my.lenporno.live/uploads/' + pathM[1] + '/' + pathM[2], quality: {} };
+            // PlayerJS multi-quality format: [label1]url1.mp4,[label2]url2.mp4
+            // or unlabeled first: url1.mp4,[label2]url2.mp4
+            var fileM = /(?:file|src)\s*[:=]\s*['"]([^'"]*cdnv365[^'"]+\.mp4[^'"]*)['"]/i.exec(html) ||
+                        /Playerjs\s*\([^)]*file\s*:\s*['"]([^'"]+\.mp4[^'"]*)['"]/i.exec(html);
+            if (fileM) {
+                var pjStr = fileM[1];
+                var quality = {};
+                var best = '';
+                var pjRe = /(?:\[([^\]]+)\])?(https?:\/\/[^,\[\]<>\s"']+\.mp4)/gi;
+                var m;
+                while ((m = pjRe.exec(pjStr)) !== null) {
+                    var lbl = m[1] || (/[_-](\d+p)/i.exec(m[2]) || ['', 'mp4'])[1];
+                    quality[lbl] = m[2];
+                    if (!best) best = m[2];
                 }
-                return { url: directUrl, quality: {} };
+                if (best) return { url: bestQualityUrl(quality) || best, quality: quality };
             }
-
-            // Source tags
-            var srcM = /<source\s[^>]*src="([^"]+\.(?:mp4|m3u8))"[^>]*>/gi.exec(html);
-            if (srcM) return { url: srcM[1], quality: {} };
-
             return extractStreams(html);
         }).catch(function () { return { url: '', quality: {} }; });
     }
@@ -3638,7 +3640,7 @@ SOURCES.push({
 
 function _lenpornoCards(html) {
     var items = [];
-    var hrefRx = /href="(https?:\/\/my\.lenporno\.live\/video\/([^/"?]+))"/g;
+    var hrefRx = /href="(https?:\/\/xxx\.lenporno\.xyz\/video\/([^/"?]+))"/g;
     var seen = {};
     var m;
     while ((m = hrefRx.exec(html)) !== null) {
@@ -3649,13 +3651,8 @@ function _lenpornoCards(html) {
 
         var chunk = html.slice(Math.max(0, m.index - 800), m.index + 600);
 
-        // Thumb: /uploads/{id}/thumb{N}.jpg
-        var thumb = _attr(chunk, /(?:data-src|src)="([^"]+\/uploads\/\d+\/thumb[\d.]+\.jpe?g)"/i) ||
-                    _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i);
-
-        // Derive numeric ID from thumb if possible
-        var thumbIdM = /\/uploads\/(\d+)\//.exec(thumb);
-        var id = thumbIdM ? thumbIdM[1] : slug;
+        var thumb = _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i) ||
+                    _attr(chunk, /(?:data-src|src)="([^"]+\.(?:webp|png))"/i);
 
         var title = _decodeHtml(
             _attr(chunk, /<(?:h\d|div)[^>]*class="[^"]*(?:title|name)[^"]*"[^>]*>([^<]+)<\//) ||
@@ -3667,15 +3664,14 @@ function _lenpornoCards(html) {
         var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
 
         if (title || thumb) {
-            items.push({ id: id, source: 'lenporno', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
+            items.push({ id: slug, source: 'lenporno', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
         }
     }
     return items;
 }
 
 function _lenpornoPages(html) {
-    var m = /\/new-update\/(\d+)\/["'][^>]*(?:last|>>)/i.exec(html) ||
-            /[?&]page=(\d+)["'][^>]*(?:last|>>)/i.exec(html);
+    var m = /[?&]page=(\d+)["'][^>]*(?:last|>>|&raquo;)/i.exec(html);
     return m ? (parseInt(m[1], 10) || 10) : 10;
 }
 
@@ -3844,7 +3840,9 @@ SOURCES.push({
     },
 
     browse: function (category, page) {
-        var url = 'https://www.gayporntube.com/channels/1/gay-porn/page' + page + '.html';
+        var url = page > 1
+            ? 'https://www.gayporntube.com/page' + page + '.html'
+            : 'https://www.gayporntube.com/';
         return cherryFetch(url).then(function (html) {
             return { items: _gayptCards(html), total_pages: _gayptPages(html) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
