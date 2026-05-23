@@ -1974,12 +1974,12 @@ SOURCES.push({
   browse: function(category, page) {
     var self = this;
     var p = page || 1;
-    var url = 'https://hqporner.com/all-hd-porn/' + p + '/';
+    var url = p > 1 ? 'https://hqporner.com/hdporn/' + p : 'https://hqporner.com/';
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html);
-      // Pagination: look for highest page number
+      // Pagination: look for highest page number in /hdporn/N links
       var pgNums = [];
-      var pgRe = /\/all-hd-porn\/(\d+)\//g;
+      var pgRe = /\/hdporn\/(\d+)/g;
       var m;
       while ((m = pgRe.exec(html)) !== null) {
         var n = parseInt(m[1], 10);
@@ -2825,10 +2825,11 @@ SOURCES.push({
   _parseCards: function(html) {
     var items = [];
     // Find video card links pointing to tizam.org video paths
-    var cardRe = /<a\s[^>]*href="(https?:\/\/tv4\.tizam\.org\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+    // Site uses relative hrefs — match /category/subcategory/slug/ pattern
+    var cardRe = /<a\s[^>]*href="((?:https?:\/\/tv4\.tizam\.org)?\/fil_my_dlya_vzroslyh\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
     var m;
     while ((m = cardRe.exec(html)) !== null) {
-      var cardUrl = m[1];
+      var cardUrl = m[1].charAt(0) === '/' ? 'https://tv4.tizam.org' + m[1] : m[1];
       var cardBody = m[2];
       // Skip navigation/menu links — valid video URLs have at least 3 path segments
       if (!/tv4\.tizam\.org\/[^/]+\/[^/]+\/[^/]+/.test(cardUrl)) continue;
@@ -3596,10 +3597,10 @@ function _ebunPages(html) {
 SOURCES.push({
     id: 'lenporno',
     name: 'LenPorno',
-    host: 'xxx.lenporno.xyz',
+    host: 'www.lenporno.net',
 
     search: function (query, page) {
-        var url = 'https://xxx.lenporno.xyz/search/?q=' + encodeURIComponent(query);
+        var url = 'https://www.lenporno.net/search/?q=' + encodeURIComponent(query);
         return cherryFetch(url).then(function (html) {
             return { items: _lenpornoCards(html), total_pages: 1 };
         }).catch(function () { return { items: [], total_pages: 0 }; });
@@ -3607,8 +3608,8 @@ SOURCES.push({
 
     browse: function (category, page) {
         var url = page > 1
-            ? 'https://xxx.lenporno.xyz/the-best/?page=' + page
-            : 'https://xxx.lenporno.xyz/the-best/';
+            ? 'https://www.lenporno.net/the-best/?page=' + page
+            : 'https://www.lenporno.net/the-best/';
         return cherryFetch(url).then(function (html) {
             return { items: _lenpornoCards(html), total_pages: _lenpornoPages(html) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
@@ -3640,7 +3641,7 @@ SOURCES.push({
 
 function _lenpornoCards(html) {
     var items = [];
-    var hrefRx = /href="(https?:\/\/xxx\.lenporno\.xyz\/video\/([^/"?]+))"/g;
+    var hrefRx = /href="(https?:\/\/(?:xxx\.lenporno\.xyz|www\.lenporno\.net)\/video\/([^/"?]+))"/g;
     var seen = {};
     var m;
     while ((m = hrefRx.exec(html)) !== null) {
