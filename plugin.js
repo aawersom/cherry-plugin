@@ -1405,7 +1405,7 @@ SOURCES.push({
 SOURCES.push({
   id: 'xvideos',
   name: 'Xvideos',
-  host: 'xvideos.com',
+  host: 'xvideos2.com',
 
   _parseCards: function(html, page) {
     var items = [];
@@ -1414,11 +1414,12 @@ SOURCES.push({
     // Skip first element (it's content before the first block)
     for (var i = 1; i < blocks.length; i++) {
       var block = blocks[i];
-      var hrefMatch = block.match(/href="(\/video(\d+)\/[^"]+)"/);
+      // New URL format: /video.TOKEN/slug  (TOKEN is alphanumeric, replaces old /video{numId}/)
+      var hrefMatch = block.match(/href="(\/video\.([a-z0-9]+)\/[^"]+)"/);
       if (!hrefMatch) continue;
       var href = hrefMatch[1];
       var numId = hrefMatch[2];
-      var videoUrl = 'https://www.xvideos.com' + href;
+      var videoUrl = 'https://www.xvideos2.com' + href;
 
       var thumbMatch = block.match(/data-src="([^"]+)"/) || block.match(/src="([^"]+\.jpg[^"]*)"/);
       var thumb = thumbMatch ? thumbMatch[1] : '';
@@ -1452,7 +1453,7 @@ SOURCES.push({
     var self = this;
     var p = page || 1;
     // Xvideos p is 0-indexed
-    var url = 'https://www.xvideos.com/?k=' + encodeURIComponent(query) + '&p=' + (p - 1);
+    var url = 'https://www.xvideos2.com/?k=' + encodeURIComponent(query) + '&p=' + (p - 1);
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html, p);
       return { items: items, total_pages: p + 10 };
@@ -1463,7 +1464,8 @@ SOURCES.push({
     var self = this;
     var p = page || 1;
     var pageIdx = p - 1;
-    var url = 'https://www.xvideos.com/new/' + pageIdx;
+    // xvideos2.com: root for page 1, /new/(N-1) for subsequent pages
+    var url = pageIdx === 0 ? 'https://www.xvideos2.com/' : 'https://www.xvideos2.com/new/' + pageIdx;
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html, p);
       return { items: items, total_pages: p + 10 };
