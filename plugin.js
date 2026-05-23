@@ -1474,9 +1474,9 @@ SOURCES.push({
 
   getStream: function(video) {
     return cherryFetch(video.url).then(function(html) {
-      var hlsMatch = html.match(/html5player\.setVideoHLS\s*\(\s*['"]([^'"]+)['"]\)/);
-      var highMatch = html.match(/html5player\.setVideoUrlHigh\s*\(\s*['"]([^'"]+)['"]\)/);
-      var lowMatch = html.match(/html5player\.setVideoUrlLow\s*\(\s*['"]([^'"]+)['"]\)/);
+      var hlsMatch = html.match(/(?:html5player\.)?setVideoHLS\s*\(\s*['"]([^'"]+)['"]\)/);
+      var highMatch = html.match(/(?:html5player\.)?setVideoUrlHigh\s*\(\s*['"]([^'"]+)['"]\)/);
+      var lowMatch = html.match(/(?:html5player\.)?setVideoUrlLow\s*\(\s*['"]([^'"]+)['"]\)/);
 
       var hlsUrl = hlsMatch ? hlsMatch[1] : '';
       var highUrl = highMatch ? highMatch[1] : '';
@@ -1568,9 +1568,9 @@ SOURCES.push({
 
   getStream: function(video) {
     return cherryFetch(video.url).then(function(html) {
-      var hlsMatch = html.match(/html5player\.setVideoHLS\s*\(\s*['"]([^'"]+)['"]\)/);
-      var highMatch = html.match(/html5player\.setVideoUrlHigh\s*\(\s*['"]([^'"]+)['"]\)/);
-      var lowMatch = html.match(/html5player\.setVideoUrlLow\s*\(\s*['"]([^'"]+)['"]\)/);
+      var hlsMatch = html.match(/(?:html5player\.)?setVideoHLS\s*\(\s*['"]([^'"]+)['"]\)/);
+      var highMatch = html.match(/(?:html5player\.)?setVideoUrlHigh\s*\(\s*['"]([^'"]+)['"]\)/);
+      var lowMatch = html.match(/(?:html5player\.)?setVideoUrlLow\s*\(\s*['"]([^'"]+)['"]\)/);
 
       var hlsUrl = hlsMatch ? hlsMatch[1] : '';
       var highUrl = highMatch ? highMatch[1] : '';
