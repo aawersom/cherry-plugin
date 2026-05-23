@@ -2249,7 +2249,7 @@ SOURCES.push({
 
     browse: function (category, page) {
         var p = page || 1;
-        var url = 'https://www.porntrex.com/videos/newest/' + (p > 1 ? p + '/' : '');
+        var url = 'https://www.porntrex.com/latest-updates/' + (p > 1 ? p + '/' : '');
         return cherryFetch(url).then(function (html) {
             return { items: _porntrexCards(html), total_pages: _porntrexPages(html) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
@@ -2609,8 +2609,8 @@ SOURCES.push({
 
     browse: function (category, page) {
         var url = page > 1
-            ? 'https://pornve.com/videos/?page=' + page
-            : 'https://pornve.com/videos/';
+            ? 'https://pornve.com/latest-updates/?page=' + page
+            : 'https://pornve.com/latest-updates/';
         return cherryFetch(url).then(function (html) {
             return { items: _pornveCards(html), total_pages: _pornvePages(html) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
