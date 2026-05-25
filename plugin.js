@@ -1179,6 +1179,10 @@ function parseDur(str) {
   if (!str) return 0;
   str = ('' + str).trim();
   if (/^\d+$/.test(str)) return parseInt(str, 10);
+  var mms = str.match(/(\d+)m\s*(\d+)s/i);
+  if (mms) return parseInt(mms[1], 10) * 60 + parseInt(mms[2], 10);
+  var mm = str.match(/(\d+)m/i);
+  if (mm) return parseInt(mm[1], 10) * 60;
   var p = str.split(':').map(Number);
   if (p.length === 2) return p[0] * 60 + p[1];
   if (p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
@@ -1196,14 +1200,14 @@ function parseViews(str) {
 function extractStreams(html) {
   var quality = {};
   var url = '';
+  var m;
   // KVS get_file pattern
   var kvs = html.match(/https?:\/\/[^"'\s]+get_file[^"'\s]+\.mp4[^"'\s]*/g);
   if (kvs) kvs.forEach(function(u) { var q = (u.match(/(\d{3,4}p)/i) || ['', 'mp4'])[1]; quality[q] = u; });
-  // Source tags with res/label attribute (both orders)
-  var srcRe = /<source\s[^>]*src="([^"]+)"[^>]*(?:res|label)="([^"]+)"/gi;
-  var m;
+  // Source tags with res/label/title attribute (both orders)
+  var srcRe = /<source\s[^>]*src="([^"]+)"[^>]*(?:res|label|title)="([^"]+)"/gi;
   while ((m = srcRe.exec(html)) !== null) quality[m[2]] = m[1];
-  var srcRe2 = /<source\s[^>]*(?:res|label)="([^"]+)"[^>]*src="([^"]+)"/gi;
+  var srcRe2 = /<source\s[^>]*(?:res|label|title)="([^"]+)"[^>]*src="([^"]+)"/gi;
   while ((m = srcRe2.exec(html)) !== null) quality[m[1]] = m[2];
   // JWPlayer / generic file
   var jwRe = /['"]file['"]\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))['"]/g;
@@ -1211,12 +1215,16 @@ function extractStreams(html) {
   // Plain source tags
   var plainRe = /<source\s[^>]*src="([^"]+\.(?:mp4|m3u8)[^"']*)"/gi;
   while ((m = plainRe.exec(html)) !== null) { if (!url) url = m[1]; }
-  // Fallback: find any mp4 URL
+  // Fallback: find any mp4 URL (http/https or protocol-relative)
   if (!url && !Object.keys(quality).length) {
-    var any = html.match(/https?:\/\/[^"'\s]+\.mp4[^"'\s]*/);
+    var any = html.match(/(?:https?:)?\/\/[^"'\s]+\.mp4[^"'\s]*/);
     if (any) url = any[0];
   }
   if (!url && Object.keys(quality).length) url = quality[Object.keys(quality)[0]];
+  // Normalize protocol-relative URLs to https://
+  function fixProto(u) { return (u && u.slice(0, 2) === '//') ? 'https:' + u : u; }
+  url = fixProto(url);
+  Object.keys(quality).forEach(function(k) { quality[k] = fixProto(quality[k]); });
   return { url: url, quality: quality };
 }
 
@@ -1482,23 +1490,14 @@ SOURCES.push({
       var highUrl = highMatch ? highMatch[1] : '';
       var lowUrl = lowMatch ? lowMatch[1] : '';
 
-      // Prefer direct MP4 — CDN77 tokens are not IP-bound, no CORS issue.
-      // HLS segments from xvideos-cdn.com are CORS-restricted in browsers.
-      if (highUrl || lowUrl) {
-        var quality = {};
-        if (highUrl) quality['High'] = highUrl;
-        if (lowUrl && lowUrl !== highUrl) quality['Low'] = lowUrl;
-        return { url: highUrl || lowUrl, quality: quality };
-      }
+      var quality = {};
+      // HLS carries 720p/1080p variants; prefer it over single-bitrate SD MP4
+      if (hlsUrl) quality['HLS'] = hlsUrl;
+      if (highUrl) quality['High'] = highUrl;
+      if (lowUrl && lowUrl !== highUrl) quality['Low'] = lowUrl;
 
-      // HLS-only fallback: proxy segments to bypass CORS.
-      if (hlsUrl) {
-        return proxyM3u8(hlsUrl, 'https://www.xvideos2.com/').then(function(blob) {
-          return { url: blob, quality: { HLS: blob } };
-        }).catch(function() { return { url: hlsUrl, quality: { HLS: hlsUrl } }; });
-      }
-
-      return { url: '', quality: {} };
+      var url = hlsUrl || highUrl || lowUrl;
+      return url ? { url: url, quality: quality } : { url: '', quality: {} };
     }).catch(function() { return { url: '', quality: {} }; });
   }
 });
@@ -1763,157 +1762,6 @@ SOURCES.push({
   }
 });
 
-// ---- NoodleMagazine ----
-SOURCES.push({
-  id: 'noodlemagazine',
-  name: 'NoodleMagazine',
-  host: 'noodlemagazine.com',
-
-  _parseCards: function(html) {
-    var items = [];
-    var seen = {};
-    var re = /href="(\/watch\/([^/"?]+))"/g;
-    var m;
-    while ((m = re.exec(html)) !== null) {
-      var href = m[1];
-      var id = m[2];
-      if (seen[id]) continue;
-      seen[id] = true;
-
-      var videoUrl = 'https://noodlemagazine.com' + href;
-
-      // Gather context around the match
-      var start = Math.max(0, m.index - 400);
-      var end = Math.min(html.length, m.index + 500);
-      var ctx = html.slice(start, end);
-
-      var thumbMatch = ctx.match(/data-src="([^"]+)"/) ||
-                       ctx.match(/src="([^"]+\.jpg[^"]*)"/);
-      var thumb = thumbMatch ? thumbMatch[1] : '';
-
-      var titleMatch = ctx.match(/<div[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\/div>/) ||
-                       ctx.match(/title="([^"]+)"/);
-      var title = titleMatch ? stripTags(titleMatch[1]) : id.replace(/-/g, ' ');
-
-      var durMatch = ctx.match(/([\d]+:[\d]{2}(?::[\d]{2})?)/);
-      var duration = durMatch ? parseDur(durMatch[1]) : 0;
-
-      items.push({
-        id: 'nm-' + id,
-        source: 'noodlemagazine',
-        title: title,
-        thumb: thumb,
-        url: videoUrl,
-        duration: duration,
-        views: 0
-      });
-    }
-    return items;
-  },
-
-  _parseTotalPages: function(html) {
-    // Look for next page link or last page number
-    var pgNums = [];
-    var pgRe = /\/page\/(\d+)/g;
-    var m;
-    while ((m = pgRe.exec(html)) !== null) {
-      var n = parseInt(m[1], 10);
-      if (!isNaN(n)) pgNums.push(n);
-    }
-    if (pgNums.length) return Math.max.apply(null, pgNums);
-    return 10;
-  },
-
-  search: function(query, page) {
-    var self = this;
-    var p = page || 1;
-    var baseUrl = 'https://noodlemagazine.com/search/' + encodeURIComponent(query) + '/';
-    var url = p > 1 ? baseUrl + 'page/' + p + '/' : baseUrl;
-    return cherryFetch(url).then(function(html) {
-      var items = self._parseCards(html);
-      var total = self._parseTotalPages(html);
-      if (total < p) total = p + 5;
-      return { items: items, total_pages: total };
-    }).catch(function() { return { items: [], total_pages: 0 }; });
-  },
-
-  browse: function(category, page) {
-    var self = this;
-    var p = page || 1;
-    var url = p > 1
-      ? 'https://noodlemagazine.com/page/' + p + '/'
-      : 'https://noodlemagazine.com/';
-    return cherryFetch(url).then(function(html) {
-      var items = self._parseCards(html);
-      var total = self._parseTotalPages(html);
-      if (total < p) total = p + 5;
-      return { items: items, total_pages: total };
-    }).catch(function() { return { items: [], total_pages: 0 }; });
-  },
-
-  getStream: function(video) {
-    var watchUrl = 'https://noodlemagazine.com/watch/' + video.id.replace(/^nm-/, '');
-    return cherryFetch(watchUrl).then(function(html) {
-      var quality = {};
-      var url = '';
-      var m;
-
-      // Pattern 1: "sources": [{file: url, label: quality}]
-      var sourcesMatch = html.match(/"sources"\s*:\s*(\[[^\]]+\])/);
-      if (sourcesMatch) {
-        try {
-          var sources = JSON.parse(sourcesMatch[1]);
-          sources.forEach(function(s) {
-            var f = s.file || s.src || s.url || '';
-            var label = s.label || s.quality || s.res || 'mp4';
-            if (f) {
-              quality[label] = f;
-              if (!url) url = f;
-            }
-          });
-        } catch (e) { /* ignore parse errors */ }
-      }
-
-      // Pattern 2: playlist = [{...sources...}]
-      if (!url) {
-        var plMatch = html.match(/playlist\s*=\s*(\[[\s\S]+?\]);/);
-        if (plMatch) {
-          try {
-            var playlist = JSON.parse(plMatch[1]);
-            (playlist[0] && playlist[0].sources || []).forEach(function(s) {
-              var f = s.file || s.src || '';
-              var label = s.label || 'mp4';
-              if (f) {
-                quality[label] = f;
-                if (!url) url = f;
-              }
-            });
-          } catch (e) { /* ignore */ }
-        }
-      }
-
-      // Pattern 3: file: 'url.mp4'
-      if (!url) {
-        var fileRe = /file\s*:\s*['"]([^'"]+\.(?:m3u8|mp4))['"]/g;
-        while ((m = fileRe.exec(html)) !== null) { if (!url) url = m[1]; }
-      }
-
-      if (!url && !Object.keys(quality).length) {
-        return extractStreams(html);
-      }
-
-      // Pick best quality by resolution number
-      if (!url && Object.keys(quality).length) {
-        var best = Object.keys(quality).reduce(function(a, b) {
-          return (parseInt(a, 10) || 0) >= (parseInt(b, 10) || 0) ? a : b;
-        });
-        url = quality[best];
-      }
-
-      return { url: url, quality: quality };
-    }).catch(function() { return { url: '', quality: {} }; });
-  }
-});
 
 // ---- HQPorner ----
 SOURCES.push({
@@ -1923,9 +1771,10 @@ SOURCES.push({
 
   _parseCards: function(html) {
     var items = [];
-    // Split on article or post-video div
-    var raw = html.indexOf('<article') !== -1 ? html.split('<article') : html.split('<div class="post-video"');
-    for (var i = 1; i < raw.length; i++) {
+    var seen = {};
+    // Cards are in <section class="box feature"> blocks; skip first (site header)
+    var raw = html.split('<section class="box feature"');
+    for (var i = 2; i < raw.length; i++) {
       var block = raw[i];
       var hrefMatch = block.match(/href="((?:https?:\/\/hqporner\.com)?\/hdporn\/[^"]+)"/);
       if (!hrefMatch) continue;
@@ -1933,18 +1782,26 @@ SOURCES.push({
         ? 'https://hqporner.com' + hrefMatch[1]
         : hrefMatch[1];
 
-      // ID from URL slug: /hdporn/{slug}.html → use slug as id
       var idMatch = videoUrl.match(/\/hdporn\/([^/]+?)(?:\.html)?(?:\/)?$/);
       var id = idMatch ? idMatch[1] : videoUrl;
+      if (seen[id]) continue;
+      seen[id] = true;
 
-      var thumbMatch = block.match(/<img[^>]*src="([^"]+)"/);
-      var thumb = thumbMatch ? thumbMatch[1] : '';
+      // Thumbnail: in defaultImage(...) or first img
+      var thumbMatch = block.match(/defaultImage\("(\/\/[^"]+_main\.jpg)"/) ||
+                       block.match(/<img[^>]*src="([^"]+)"/);
+      var rawThumb = thumbMatch ? (thumbMatch[1].charAt(0) === '/' ? 'https:' + thumbMatch[1] : thumbMatch[1]) : '';
+      // CDN blocks direct hotlink access — route through proxy
+      var thumb = rawThumb ? buildProxyUrl(rawThumb) : '';
 
-      var titleMatch = block.match(/<div[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)/) ||
-                       block.match(/alt="([^"]+)"/);
-      var title = titleMatch ? stripTags(titleMatch[1]) : '';
+      // Title: in <h3 class="meta-data-title"><a>TITLE</a></h3>
+      var titleMatch = block.match(/<h3[^>]*meta-data-title[^>]*><a[^>]*>([^<]+)<\/a>/) ||
+                       block.match(/<h3[^>]*><a[^>]*>([^<]+)<\/a>/);
+      var slug = id.replace(/^\d+-/, '').replace(/_/g, ' ');
+      var title = titleMatch ? stripTags(titleMatch[1]) : slug;
 
-      var durMatch = block.match(/<span[^>]*class="[^"]*duration[^"]*"[^>]*>([^<]+)/) ||
+      // Duration: "12m 28s" format in <span class="icon fa-clock-o...">
+      var durMatch = block.match(/fa-clock-o[^>]*>([^<]+)/) ||
                      block.match(/([\d]+:[\d]{2})/);
       var duration = durMatch ? parseDur(durMatch[1].trim()) : 0;
 
@@ -2008,7 +1865,8 @@ SOURCES.push({
       var embedM = /url:\s*['"]\/blocks\/altplayer\.php\?i=\/\/mydaddy\.cc\/video\/([^'"\/]+)\//i.exec(html);
       if (embedM) {
         return cherryFetch('https://mydaddy.cc/video/' + embedM[1] + '/').then(function(embedHtml) {
-          var result = extractStreams(embedHtml);
+          // mydaddy embeds HTML inside JS strings with escaped quotes — unescape first
+          var result = extractStreams(embedHtml.replace(/\\"/g, '"'));
           return result.url ? result : { url: '', quality: {} };
         }).catch(function() { return { url: '', quality: {} }; });
       }
@@ -2025,8 +1883,7 @@ SOURCES.push({
 
   _parseCards: function(html) {
     var items = [];
-    var blocks = html.split('<div class="video-block"');
-    if (blocks.length < 2) blocks = html.split('<div class="thumb"');
+    var blocks = html.split('<div class="video-thumb"');
 
     for (var i = 1; i < blocks.length; i++) {
       var block = blocks[i];
@@ -2088,18 +1945,11 @@ SOURCES.push({
   browse: function(category, page) {
     var self = this;
     var p = page || 1;
-    var url = 'https://www.youjizz.com/videos/newest-' + p + '.html';
+    // youjizz.com/videos/newest-N.html returns 500; use homepage instead
+    var url = 'https://www.youjizz.com/';
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html);
-      var pgNums = [];
-      var pgRe = /\/videos\/newest-(\d+)\.html/g;
-      var m;
-      while ((m = pgRe.exec(html)) !== null) {
-        var n = parseInt(m[1], 10);
-        if (!isNaN(n)) pgNums.push(n);
-      }
-      var total = pgNums.length ? Math.max.apply(null, pgNums) : p + 5;
-      return { items: items, total_pages: total };
+      return { items: items, total_pages: 1 };
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
@@ -2385,25 +2235,29 @@ SOURCES.push({
 
 function _xozillaCards(html) {
     var items = [];
+    // Strip inline base64 placeholder images so they don't blow out the chunk window
+    var clean = html.replace(/\bsrc="data:[^"]+"/g, 'src=""');
     var hrefRx = /href="(https?:\/\/(?:www\.)?xozilla\.com\/videos\/[0-9]+\/[^"]+)"/g;
     var seen = {};
     var m;
-    while ((m = hrefRx.exec(html)) !== null) {
+    while ((m = hrefRx.exec(clean)) !== null) {
         var videoUrl = m[1];
         // Already filtered by regex to /videos/NUMBER/ pattern — no extra check needed
         var id = videoUrl.replace(/^https?:\/\/[^/]+/, '').replace(/[^a-z0-9]/gi, '_');
         if (seen[id]) continue;
         seen[id] = true;
 
-        var chunk = html.slice(Math.max(0, m.index - 800), m.index + 600);
+        // Look only FORWARD from href — title in <strong class="title">, thumb in data-src or vthumb
+        var chunk = clean.slice(m.index, m.index + 800);
 
         var thumb = _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i) ||
-                    _attr(chunk, /(?:data-src|src)="([^"]+\.(?:webp|png))"/i);
+                    _attr(chunk, /(?:data-src|src)="([^"]+\.(?:webp|png))"/i) ||
+                    _attr(chunk, /vthumb="([^"]+\.mp4[^"]*)"/i);
 
         var title = _decodeHtml(
+            _attr(chunk, /<strong[^>]*class="[^"]*title[^"]*"[^>]*>\s*([^<]+)/) ||
             _attr(chunk, /title="([^"]+)"/) ||
-            _attr(chunk, /alt="([^"]+)"/) ||
-            _attr(chunk, /<h\d[^>]*>([^<]+)<\/h\d>/)
+            _attr(chunk, /alt="([^"]+)"/)
         );
 
         var duration = parseDur(_attr(chunk, /class="[^"]*duration[^"]*"[^>]*>([^<]+)</));
@@ -2516,8 +2370,8 @@ SOURCES.push({
     browse: function (category, page) {
         var p = page || 1;
         var url = p > 1
-            ? 'https://analdin.com/' + p + '/'
-            : 'https://analdin.com/';
+            ? 'https://analdin.com/latest-updates/' + p + '/'
+            : 'https://analdin.com/latest-updates/';
         return cherryFetch(url).then(function (html) {
             return { items: _analdinCards(html), total_pages: _analdinPages(html) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
@@ -2542,25 +2396,30 @@ SOURCES.push({
 
 function _analdinCards(html) {
     var items = [];
+    // Strip base64 placeholders so the 900-char chunk reaches past the inline img
+    var clean = html.replace(/\bsrc="data:[^"]+"/g, 'src=""');
     var hrefRx = /href="(https?:\/\/(?:www\.)?analdin\.com\/videos\/[0-9]+\/[^"]+)"/g;
     var seen = {};
     var m;
-    while ((m = hrefRx.exec(html)) !== null) {
+    while ((m = hrefRx.exec(clean)) !== null) {
         var videoUrl = m[1];
         // Already filtered by regex to /videos/NUMBER/ pattern — no extra check needed
         var id = videoUrl.replace(/^https?:\/\/[^/]+\//, '').replace(/[^a-z0-9]/gi, '_');
         if (!id || seen[id]) continue;
         seen[id] = true;
 
-        var chunk = html.slice(Math.max(0, m.index - 800), m.index + 600);
+        // Look only FORWARD from href — thumb in thumb="" or data-original="", title in strong.title
+        var chunk = clean.slice(m.index, m.index + 1400);
 
-        var thumb = _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i) ||
+        var thumb = _attr(chunk, /\bthumb="([^"]+\.jpe?g)"/i) ||
+                    _attr(chunk, /data-original="([^"]+\.jpe?g)"/i) ||
+                    _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i) ||
                     _attr(chunk, /(?:data-src|src)="([^"]+\.(?:webp|png))"/i);
 
         var title = _decodeHtml(
-            _attr(chunk, /title="([^"]+)"/) ||
+            _attr(chunk, /<strong[^>]*class="[^"]*title[^"]*"[^>]*>\s*([^<]+)/) ||
             _attr(chunk, /alt="([^"]+)"/) ||
-            _attr(chunk, /<h\d[^>]*>([^<]+)<\/h\d>/)
+            _attr(chunk, /title="([^"]+)"/)
         );
 
         var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
@@ -2715,15 +2574,16 @@ function _familypornCards(html) {
         if (seen[id]) continue;
         seen[id] = true;
 
-        var chunk = html.slice(Math.max(0, m.index - 800), m.index + 600);
+        // Look only FORWARD from href — title is in title="" attr on same <a> tag
+        var chunk = html.slice(m.index, m.index + 800);
 
         // SisiStyle thumb path
         var thumb = _attr(chunk, /(?:data-src|src)="([^"]+\/contents\/videos_screenshots\/[^"]+)"/i) ||
                     _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i);
 
         var title = _decodeHtml(
-            _attr(chunk, /<(?:h\d|div)[^>]*class="[^"]*(?:title|name)[^"]*"[^>]*>([^<]+)<\//) ||
             _attr(chunk, /title="([^"]+)"/) ||
+            _attr(chunk, /<strong[^>]*class="[^"]*title[^"]*"[^>]*>\s*([^<]+)/) ||
             _attr(chunk, /alt="([^"]+)"/)
         );
 
@@ -2996,7 +2856,8 @@ SOURCES.push({
 
   _parseCards: function(html) {
     var items = [];
-    var blocks = html.split('<div class="video-item"');
+    var seen = {};
+    var blocks = html.split('<div class="video-thumb"');
     for (var i = 1; i < blocks.length; i++) {
       var block = blocks[i];
       var hrefMatch = block.match(/href="(https?:\/\/hellporno\.com\/videos\/([^"]+))"/);
@@ -3004,18 +2865,25 @@ SOURCES.push({
       var videoUrl = hrefMatch[1];
       var slug = hrefMatch[2].replace(/\/$/, '');
       var id = slug;
+      if (seen[id]) continue;
+      seen[id] = true;
 
-      // Thumbnail: hellcdn CDN
-      var thumbMatch = block.match(/data-src="([^"]+)"/) ||
+      // Thumbnail: poster attribute on video preview, or CDN img
+      var thumbMatch = block.match(/poster="([^"]+\.jpg[^"]*)"/) ||
+                       block.match(/data-src="([^"]+)"/) ||
                        block.match(/src="([^"]+img\d+-hp\.hellcdn[^"]+)"/) ||
                        block.match(/src="([^"]+\.jpg[^"]*)"/);
       var thumb = thumbMatch ? thumbMatch[1] : '';
 
-      var titleMatch = block.match(/<div[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\/div>/) ||
+      // Title: <a class="title">TITLE</a>
+      var titleMatch = block.match(/<a[^>]*class="title"[^>]*>([^<]+)/) ||
+                       block.match(/<div[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\/div>/) ||
                        block.match(/title="([^"]+)"/);
       var title = titleMatch ? stripTags(titleMatch[1]) : slug.replace(/-/g, ' ');
 
-      var durMatch = block.match(/<span[^>]*class="[^"]*duration[^"]*"[^>]*>([^<]+)/) ||
+      // Duration: <span class="time">7:57</span>
+      var durMatch = block.match(/<span[^>]*class="[^"]*time[^"]*"[^>]*>([^<]+)/) ||
+                     block.match(/<span[^>]*class="[^"]*duration[^"]*"[^>]*>([^<]+)/) ||
                      block.match(/([\d]+:[\d]{2})/);
       var duration = durMatch ? parseDur(durMatch[1].trim()) : 0;
 
@@ -3126,112 +2994,6 @@ SOURCES.push({
   }
 });
 
-// ---- Ebalovo ----
-SOURCES.push({
-  id: 'ebalovo',
-  name: 'Ebalovo',
-  host: 'web.epalovo.com',
-
-  _parseCards: function(html) {
-    var items = [];
-    // Cards link to /video/{slug}/
-    var re = /href="(https?:\/\/web\.epalovo\.com\/video\/([^/"]+)\/?)"/g;
-    var seen = {};
-    var m;
-    while ((m = re.exec(html)) !== null) {
-      var videoUrl = m[1];
-      var id = m[2];
-      if (seen[id]) continue;
-      seen[id] = true;
-
-      // Try to grab surrounding context (~500 chars) for thumb/title
-      var start = Math.max(0, m.index - 300);
-      var end = Math.min(html.length, m.index + 400);
-      var ctx = html.slice(start, end);
-
-      var thumbMatch = ctx.match(/src="(https?:\/\/img\.ebacdn\.com\/[^"]+)"/) ||
-                       ctx.match(/src="([^"]+\.jpg[^"]*)"/);
-      var thumb = thumbMatch ? thumbMatch[1] : '';
-
-      var titleMatch = ctx.match(/title="([^"]+)"/) ||
-                       ctx.match(/<[^>]+class="[^"]*title[^"]*"[^>]*>([^<]+)/);
-      var title = titleMatch ? stripTags(titleMatch[1]) : id.replace(/-/g, ' ');
-
-      var durMatch = ctx.match(/([\d]+:[\d]{2}(?::[\d]{2})?)/);
-      var duration = durMatch ? parseDur(durMatch[1]) : 0;
-
-      items.push({
-        id: 'eba-' + id,
-        source: 'ebalovo',
-        title: title,
-        thumb: thumb,
-        url: videoUrl.replace(/\/$/, '') + '/',
-        duration: duration,
-        views: 0
-      });
-    }
-    return items;
-  },
-
-  search: function(query, page) {
-    var self = this;
-    var p = page || 1;
-    var q = encodeURIComponent(query);
-    var url = p > 1
-      ? 'https://web.epalovo.com/search/' + q + '/' + p + '/'
-      : 'https://web.epalovo.com/search/' + q + '/';
-    return cherryFetch(url).then(function(html) {
-      var items = self._parseCards(html);
-      // Pagination: look for highest page number
-      var pgNums = [];
-      var pgRe = /\/search\/[^/]+\/(\d+)\//g;
-      var m;
-      while ((m = pgRe.exec(html)) !== null) {
-        var n = parseInt(m[1], 10);
-        if (!isNaN(n)) pgNums.push(n);
-      }
-      var total = pgNums.length ? Math.max.apply(null, pgNums) : p + 5;
-      return { items: items, total_pages: total };
-    }).catch(function() { return { items: [], total_pages: 0 }; });
-  },
-
-  browse: function(category, page) {
-    var self = this;
-    var p = page || 1;
-    var url = p > 1 ? 'https://web.epalovo.com/' + p + '/' : 'https://web.epalovo.com/';
-    return cherryFetch(url).then(function(html) {
-      var items = self._parseCards(html);
-      var pgNums = [];
-      var pgRe = /href="https?:\/\/web\.epalovo\.com\/(\d+)\/"/g;
-      var m;
-      while ((m = pgRe.exec(html)) !== null) {
-        var n = parseInt(m[1], 10);
-        if (!isNaN(n)) pgNums.push(n);
-      }
-      var total = pgNums.length ? Math.max.apply(null, pgNums) : p + 5;
-      return { items: items, total_pages: total };
-    }).catch(function() { return { items: [], total_pages: 0 }; });
-  },
-
-  getStream: function(video) {
-    return cherryFetch(video.url).then(function(html) {
-      // Lampac-verified: video_url / video_alt_url
-      var re = /(video_alt_url|video_url)\s*[=:]\s*['"]([^'"]+)['"]/g;
-      var primary = '';
-      var alt = '';
-      var m;
-      while ((m = re.exec(html)) !== null) {
-        if (m[1] === 'video_url' && !primary) primary = m[2];
-        if (m[1] === 'video_alt_url' && !alt) alt = m[2];
-      }
-      var quality = {};
-      if (primary) quality['Основное'] = primary;
-      if (alt) quality['Альтернативное'] = alt;
-      return { url: primary || alt || '', quality: quality };
-    }).catch(function() { return { url: '', quality: {} }; });
-  }
-});
-
 // ---- 16. Pornobolt ----
 SOURCES.push({
     id: 'pornobolt',
@@ -3262,20 +3024,9 @@ SOURCES.push({
             var pm = pjRx.exec(html);
             if (pm) {
                 var filePath = pm[1];
+                // /videofile/BASE64 is the direct MP4 stream — return it as-is
                 var fileUrl = filePath.charAt(0) === '/' ? 'https://sex.pornobolt.in' + filePath : filePath;
-                return cherryFetch(fileUrl).then(function (resp) {
-                    try {
-                        var arr = JSON.parse(resp);
-                        if (Array.isArray(arr)) {
-                            var quality = {}, best = '';
-                            arr.forEach(function (item) {
-                                if (item.file) { quality[item.title || 'SD'] = item.file; best = item.file; }
-                            });
-                            if (best) return { url: best, quality: quality };
-                        }
-                    } catch (e) {}
-                    return extractStreams(resp);
-                }).catch(function () { return extractStreams(html); });
+                return { url: fileUrl, quality: {} };
             }
             // pbcdn.tv CDN fallback
             var cdnRx = /['"]?(https?:\/\/pbcdn\.tv\/[^"'\s]+\.(?:mp4|m3u8))['"]/gi;
@@ -3483,71 +3234,7 @@ function _huyambaPages(html) {
     return m ? (parseInt(m[1], 10) || 10) : 10;
 }
 
-// ---- 10. VePorn ----
-SOURCES.push({
-    id: 'veporn',
-    name: 'VePorn',
-    host: 'veporn.net',
-
-    search: function (query, page) {
-        var url = 'https://veporn.net/search/?q=' + encodeURIComponent(query) + '&page=' + page;
-        return cherryFetch(url).then(function (html) {
-            return { items: _vepornCards(html), total_pages: _vepornPages(html) };
-        }).catch(function () { return { items: [], total_pages: 0 }; });
-    },
-
-    browse: function (category, page) {
-        var url = 'https://veporn.net/videos/?page=' + page;
-        return cherryFetch(url).then(function (html) {
-            return { items: _vepornCards(html), total_pages: _vepornPages(html) };
-        }).catch(function () { return { items: [], total_pages: 0 }; });
-    },
-
-    // Proxy sends Referer: https://veporn.net/ automatically (same-origin from target)
-    getStream: function (video) {
-        return cherryFetch(video.url).then(function (html) {
-            return extractStreams(html);
-        }).catch(function () { return { url: '', quality: {} }; });
-    }
-});
-
-function _vepornCards(html) {
-    var items = [];
-    var hrefRx = /href="(https?:\/\/veporn\.net\/video\/[^"]+)"/g;
-    var seen = {};
-    var m;
-    while ((m = hrefRx.exec(html)) !== null) {
-        var videoUrl = m[1];
-        // CDN shared with PornVe: cdn.pornve.com/contents/videos_screenshots/
-        var id = videoUrl.replace(/^https?:\/\/[^/]+\/video\//, '').replace(/[^a-z0-9]/gi, '_');
-        if (!id || seen[id]) continue;
-        seen[id] = true;
-
-        var chunk = html.slice(Math.max(0, m.index - 800), m.index + 600);
-
-        var thumb = _attr(chunk, /(?:data-src|src)="(https?:\/\/cdn\.pornve\.com\/contents\/videos_screenshots\/[^"]+)"/i) ||
-                    _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i);
-
-        var title = _decodeHtml(
-            _attr(chunk, /<(?:h\d|div)[^>]*class="[^"]*(?:title|name)[^"]*"[^>]*>([^<]+)<\//) ||
-            _attr(chunk, /title="([^"]+)"/) ||
-            _attr(chunk, /alt="([^"]+)"/)
-        );
-
-        var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
-        var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
-
-        if (title || thumb) {
-            items.push({ id: id, source: 'veporn', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
-        }
-    }
-    return items;
-}
-
-function _vepornPages(html) {
-    var m = /[?&]page=(\d+)["'][^>]*(?:last|>>)/i.exec(html);
-    return m ? (parseInt(m[1], 10) || 10) : 10;
-}
+// VePorn removed — veporn.net returns 504 (site dead)
 
 // ---- 11. Ebun ----
 SOURCES.push({
@@ -3594,15 +3281,16 @@ function _ebunCards(html) {
         if (seen[id]) continue;
         seen[id] = true;
 
-        var chunk = html.slice(Math.max(0, m.index - 800), m.index + 600);
+        // Look only FORWARD from href — title in alt="" and data-src in img after the href
+        var chunk = html.slice(m.index, m.index + 900);
 
         var thumb = _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i) ||
                     _attr(chunk, /(?:data-src|src)="([^"]+\.(?:webp|png))"/i);
 
         var title = _decodeHtml(
-            _attr(chunk, /<(?:h\d|div)[^>]*class="[^"]*(?:title|name)[^"]*"[^>]*>([^<]+)<\//) ||
-            _attr(chunk, /title="([^"]+)"/) ||
-            _attr(chunk, /alt="([^"]+)"/)
+            _attr(chunk, /<div[^>]*class="[^"]*item-title[^"]*"[^>]*>([^<]+)<\/div>/) ||
+            _attr(chunk, /alt="([^"]+)"/) ||
+            _attr(chunk, /title="([^"]+)"/)
         );
 
         var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
@@ -3751,20 +3439,21 @@ function _rolikaCards(html) {
         if (seen[id]) continue;
         seen[id] = true;
 
-        var chunk = html.slice(Math.max(0, m.index - 800), m.index + 600);
+        // Look FORWARD from href — DLE cards: img inside the <a>, title in <a class="th-title"> after
+        var chunk = html.slice(m.index, m.index + 900);
 
         // DLE thumb: /uploads/posts/{YYYY}-{MM}/...
         var thumb = _attr(chunk, /(?:data-src|src)="([^"]+\/uploads\/posts\/\d{4}-\d{2}\/[^"]+)"/i) ||
                     _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i);
 
         var title = _decodeHtml(
+            _attr(chunk, /<a[^>]*class="[^"]*th-title[^"]*"[^>]*>([^<]+)<\/a>/) ||
             _attr(chunk, /<h2[^>]*>([^<]+)<\/h2>/) ||
-            _attr(chunk, /<h\d[^>]*>([^<]+)<\/h\d>/) ||
             _attr(chunk, /title="([^"]+)"/) ||
             _attr(chunk, /alt="([^"]+)"/)
         );
 
-        var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
+        var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time|th-time)[^"]*"[^>]*>([^<]+)</));
         var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
 
         if (title || thumb) {
