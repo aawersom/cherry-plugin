@@ -116,7 +116,10 @@ async function runSourceTest(page, src) {
   if (streamUrl.startsWith('//')) streamUrl = 'https:' + streamUrl;
 
   // ── Range request via proxy (real browser CORS) ───────────────────────────
-  const proxied = `${PROXY_BASE}/proxy?url=${encodeURIComponent(streamUrl)}&key=${PROXY_KEY}`;
+  // If already proxied (e.g. pre-wrapped with custom referer), use as-is to avoid double-proxy.
+  const proxied = streamUrl.startsWith(PROXY_BASE)
+    ? streamUrl
+    : `${PROXY_BASE}/proxy?url=${encodeURIComponent(streamUrl)}&key=${PROXY_KEY}`;
   try {
     const rangeResult = await page.evaluate(async (url) => {
       try {
@@ -148,7 +151,9 @@ async function runSourceTest(page, src) {
     if (!freshStream.error && freshStream.url) {
       let u = freshStream.url;
       if (u.startsWith('//')) u = 'https:' + u;
-      freshProxied = `${PROXY_BASE}/proxy?url=${encodeURIComponent(u)}&key=${PROXY_KEY}`;
+      freshProxied = u.startsWith(PROXY_BASE)
+        ? u
+        : `${PROXY_BASE}/proxy?url=${encodeURIComponent(u)}&key=${PROXY_KEY}`;
     }
   } catch(e) { /* keep original proxied url */ }
 

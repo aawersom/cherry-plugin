@@ -251,6 +251,7 @@
       function px(u) {
         if (!u) return u;
         if (u.indexOf('blob:') === 0) return u;
+        if (u.indexOf(PROXY_URL) === 0) return u; // already proxied with custom referer — skip
         // Normalize protocol-relative URLs (e.g. YouJizz returns //cdne-mobile.youjizz.com/...)
         if (u.indexOf('//') === 0) u = 'https:' + u;
         return buildProxyUrl(u);
@@ -1871,8 +1872,30 @@ SOURCES.push({
       var embedM = /url:\s*['"]\/blocks\/altplayer\.php\?i=\/\/mydaddy\.cc\/video\/([^'"\/]+)\//i.exec(html);
       if (embedM) {
         return cherryFetch('https://mydaddy.cc/video/' + embedM[1] + '/').then(function(embedHtml) {
-          // mydaddy embeds HTML inside JS strings with escaped quotes — unescape first
-          var result = extractStreams(embedHtml.replace(/\\"/g, '"'));
+          var clean = embedHtml.replace(/\\"/g, '"');
+          // bigcdn.cc serves multi-quality: //sN.bigcdn.cc/pubs/HASH/HEIGHT.mp4
+          // Hash may contain dots (e.g. "6a14af53d51110.31758800") — use [^/\s"']+ instead of hex
+          var bigRe = /(?:https?:)?\/\/(s\d+\.bigcdn\.cc)\/pubs\/([^\/\s"']+)\/(\d{3,4})\.mp4/gi;
+          var hashM = bigRe.exec(clean);
+          if (hashM) {
+            var cdnHost = hashM[1], hash = hashM[2];
+            // Collect all heights present in the HTML to only offer existing qualities
+            bigRe.lastIndex = 0;
+            var seenHeights = {};
+            var hm2;
+            while ((hm2 = bigRe.exec(clean)) !== null) {
+              if (hm2[2] === hash) seenHeights[hm2[3]] = true;
+            }
+            var heights = Object.keys(seenHeights).length ? Object.keys(seenHeights) : [hashM[3]];
+            heights.sort(function(a, b) { return parseInt(a, 10) - parseInt(b, 10); });
+            var quality = {};
+            heights.forEach(function(h) {
+              quality[h + 'p'] = buildProxyUrl('https://' + cdnHost + '/pubs/' + hash + '/' + h + '.mp4', 'https://mydaddy.cc/');
+            });
+            var best = quality[heights[heights.length - 1] + 'p'];
+            return { url: best, quality: quality };
+          }
+          var result = extractStreams(clean);
           return result.url ? result : { url: '', quality: {} };
         }).catch(function() { return { url: '', quality: {} }; });
       }
@@ -2054,7 +2077,22 @@ SOURCES.push({
 
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
-            return extractStreams(html);
+            // Unescape JS-escaped slashes/quotes (WP JSON embed patterns)
+            var clean = html.replace(/\\\//g, '/').replace(/\\"/g, '"');
+            var result = extractStreams(clean);
+            if (result.url) {
+                // Pre-proxy with pornone.com referer so CDN accepts the request
+                var q = {};
+                Object.keys(result.quality).forEach(function(k) {
+                    q[k] = buildProxyUrl(result.quality[k], 'https://pornone.com/');
+                });
+                return { url: buildProxyUrl(result.url, 'https://pornone.com/'), quality: q };
+            }
+            // Pornone-specific: FluidPlayer sources array or plain video URL in script
+            var m = clean.match(/['"](?:file|src|source|video_url|videoUrl)['"][\s:,]+['"]([^'"]+\.(?:mp4|m3u8)[^'"]*)['"]/i) ||
+                    clean.match(/["'](https?:\/\/[^"'\s]+\.mp4[^"'\s]*)['"]/i);
+            if (m) return { url: buildProxyUrl(m[1], 'https://pornone.com/'), quality: {} };
+            return { url: '', quality: {} };
         }).catch(function () { return { url: '', quality: {} }; });
     }
 });
