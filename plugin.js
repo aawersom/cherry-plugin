@@ -248,7 +248,13 @@
       }
 
       // Proxy non-blob stream URLs so that tokens bound to the proxy IP stay valid.
-      function px(u) { return (!u || u.indexOf('blob:') === 0) ? u : buildProxyUrl(u); }
+      function px(u) {
+        if (!u) return u;
+        if (u.indexOf('blob:') === 0) return u;
+        // Normalize protocol-relative URLs (e.g. YouJizz returns //cdne-mobile.youjizz.com/...)
+        if (u.indexOf('//') === 0) u = 'https:' + u;
+        return buildProxyUrl(u);
+      }
       var proxiedQuality = {};
       Object.keys(quality).forEach(function(k) { proxiedQuality[k] = px(quality[k]); });
 
