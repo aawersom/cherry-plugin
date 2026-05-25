@@ -1896,7 +1896,9 @@ SOURCES.push({
       var idMatch = href.match(/(\d+)\.html/);
       var id = idMatch ? idMatch[1] : String(i);
 
-      var thumbMatch = block.match(/data-src="([^"]+)"/) || block.match(/src="([^"]+\.jpg)"/);
+      var thumbMatch = block.match(/data-original="([^"?#]+\.jpe?g)/i) ||
+                       block.match(/data-src="([^"?#]+\.jpe?g)/i) ||
+                       block.match(/src="([^"?#]+\.jpe?g)/i);
       var thumb = thumbMatch ? thumbMatch[1] : '';
 
       var titleMatch = block.match(/<div[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\/div>/);
@@ -2060,21 +2062,32 @@ function _pornoneCards(html) {
     while ((m = hrefRx.exec(html)) !== null) {
         var videoUrl = m[1];
         var slug = m[2];
-        // Skip single-segment navigation URLs like /category/, /page/
-        if (!slug || (slug.indexOf('/') === -1 && /^(?:page|category|tag|search|feed|wp-content)$/i.test(slug))) continue;
-        var id = slug.replace(/[^a-z0-9]/gi, '_');
+        // Skip single-segment nav URLs: reserved words, 2-letter lang codes, bare numbers
+        if (!slug || (slug.indexOf('/') === -1 && /^(?:page|category|tag|search|feed|wp-content|[a-z]{2}|\d+)$/i.test(slug))) continue;
+        // Extract numeric ID from slug (pornone: category/title-slug/ID)
+        var slugParts = slug.split('/');
+        var numId = '';
+        for (var pi = slugParts.length - 1; pi >= 0; pi--) {
+            if (/^\d+$/.test(slugParts[pi])) { numId = slugParts[pi]; break; }
+        }
+        var id = numId || slug.replace(/[^a-z0-9]/gi, '_');
         if (!id || seen[id]) continue;
         seen[id] = true;
+        // Title derived from URL slug (segment before the numeric ID)
+        var titleSlug = slugParts.length >= 2 ? slugParts[slugParts.length - (numId ? 2 : 1)] : slug;
+        var derivedTitle = titleSlug ? titleSlug.replace(/-/g, ' ') : '';
 
-        var chunk = html.slice(Math.max(0, m.index - 800), m.index + 600);
+        // Chunk: pornone img+title appear ~1200+ chars AFTER the href → need 2500 forward
+        var chunk = html.slice(m.index, m.index + 2500);
 
-        var thumb = _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i) ||
-                    _attr(chunk, /(?:data-src|src)="([^"]+\.(?:webp|png))"/i);
+        // Thumb: CDN img at th-eu4.pornone.com/t/{id%100}/{id}/d{n}.jpg
+        var thumb = _attr(chunk, /src="(https:\/\/th-eu4\.pornone\.com\/t\/\d+\/\d+\/d\d+\.jpe?g)"/i) ||
+                    _attr(chunk, /src="(https?:\/\/th-eu4\.pornone\.com\/[^"]+\.jpe?g)"/i);
 
         var title = _decodeHtml(
-            _attr(chunk, /<h\d[^>]*>([^<]+)<\/h\d>/) ||
-            _attr(chunk, /title="([^"]+)"/) ||
-            _attr(chunk, /alt="([^"]+)"/)
+            _attr(chunk, /<div[^>]*class="[^"]*videotitle[^"]*"[^>]*>([^<]+)<\/div>/) ||
+            _attr(chunk, /th-eu4\.pornone\.com\/t\/[^"]+"\s+alt="([^"]{10,})"/) ||
+            derivedTitle
         );
 
         var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
@@ -2156,12 +2169,12 @@ function _porntrexCards(html) {
         if (seen[id]) continue;
         seen[id] = true;
 
-        // Grab the chunk of HTML around this link for thumb/title/duration
-        var startIdx = m.index;
-        var chunk = html.slice(Math.max(0, startIdx - 800), startIdx + 600);
+        // Forward-only chunk: thumb and title appear AFTER the href in KVS markup
+        var chunk = html.slice(m.index, m.index + 800);
 
-        var thumb = _attr(chunk, /(?:data-src|src)="([^"]+(?:porntrex|thumbs)[^"]+\.jpe?g)"/i);
-        if (!thumb) thumb = _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i);
+        // PornTrex uses data-src="//cdntrex.com/...jpg?v=3" — use [^"?#]+ to strip query string
+        var thumb = _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.jpe?g)/i) ||
+                    _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.(?:webp|png))/i);
 
         var title = _decodeHtml(
             _attr(chunk, /title="([^"]+)"/) ||
@@ -2247,12 +2260,11 @@ function _xozillaCards(html) {
         if (seen[id]) continue;
         seen[id] = true;
 
-        // Look only FORWARD from href — title in <strong class="title">, thumb in data-src or vthumb
+        // Look only FORWARD from href — title in <strong class="title">, thumb in data-original/data-src
         var chunk = clean.slice(m.index, m.index + 800);
 
-        var thumb = _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i) ||
-                    _attr(chunk, /(?:data-src|src)="([^"]+\.(?:webp|png))"/i) ||
-                    _attr(chunk, /vthumb="([^"]+\.mp4[^"]*)"/i);
+        var thumb = _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.jpe?g)/i) ||
+                    _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.(?:webp|png))/i);
 
         var title = _decodeHtml(
             _attr(chunk, /<strong[^>]*class="[^"]*title[^"]*"[^>]*>\s*([^<]+)/) ||
@@ -2577,9 +2589,9 @@ function _familypornCards(html) {
         // Look only FORWARD from href — title is in title="" attr on same <a> tag
         var chunk = html.slice(m.index, m.index + 800);
 
-        // SisiStyle thumb path
-        var thumb = _attr(chunk, /(?:data-src|src)="([^"]+\/contents\/videos_screenshots\/[^"]+)"/i) ||
-                    _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i);
+        // SisiStyle thumb path (data-original = KVS lazy-load)
+        var thumb = _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\/contents\/videos_screenshots\/[^"?#]+)/i) ||
+                    _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.jpe?g)/i);
 
         var title = _decodeHtml(
             _attr(chunk, /title="([^"]+)"/) ||
@@ -2651,11 +2663,11 @@ function _porndigCards(html) {
         if (seen[id]) continue;
         seen[id] = true;
 
-        var chunk = html.slice(Math.max(0, m.index - 800), m.index + 600);
+        var chunk = html.slice(m.index, m.index + 900);
 
         // image-cdn.porndig.com/thumbs/YYYY/MM/ID/...
-        var thumb = _attr(chunk, /(?:data-src|src)="(https?:\/\/image-cdn\.porndig\.com\/thumbs\/[^"]+)"/i) ||
-                    _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i);
+        var thumb = _attr(chunk, /(?:data-original|data-src|src)="(https?:\/\/image-cdn\.porndig\.com\/thumbs\/[^"?#]+)/i) ||
+                    _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.jpe?g)/i);
 
         var title = _decodeHtml(
             _attr(chunk, /<div[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)<\/div>/) ||
@@ -2686,6 +2698,7 @@ SOURCES.push({
 
   _parseCards: function(html) {
     var items = [];
+    var seen = {};
     // Find video card links pointing to tizam.org video paths
     // Site uses relative hrefs — match /category/subcategory/slug/ pattern
     var cardRe = /<a\s[^>]*href="((?:https?:\/\/tv4\.tizam\.org)?\/fil_my_dlya_vzroslyh\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
@@ -2698,7 +2711,8 @@ SOURCES.push({
 
       var thumbMatch = cardBody.match(/src="([^"]+\/images\/cms\/thumbs\/[^"]+)"/) ||
                        cardBody.match(/src="([^"]+\.jpg[^"]*)"/);
-      var thumb = thumbMatch ? thumbMatch[1] : '';
+      var rawThumb = thumbMatch ? thumbMatch[1] : '';
+      var thumb = rawThumb && rawThumb.charAt(0) === '/' ? 'https://tv4.tizam.org' + rawThumb : rawThumb;
 
       var titleMatch = cardBody.match(/title="([^"]+)"/) ||
                        cardBody.match(/<[^>]+class="[^"]*title[^"]*"[^>]*>([^<]+)/) ||
@@ -2708,6 +2722,10 @@ SOURCES.push({
       // ID from URL slug (last path segment)
       var slugMatch = cardUrl.match(/\/([^/]+)\/?$/);
       var id = slugMatch ? slugMatch[1] : cardUrl;
+
+      // Each URL appears twice (thumb link + title link) — keep only the first (with thumb)
+      if (seen[id]) continue;
+      seen[id] = true;
 
       if (!title && !thumb) continue;
 
@@ -2822,14 +2840,15 @@ function _perfektCards(html) {
         if (seen[id]) continue;
         seen[id] = true;
 
-        var chunk = html.slice(Math.max(0, m.index - 800), m.index + 600);
+        // Forward-only: PerfektDamen uses data-original="//static.perfektdamen.co/...jpg"
+        var chunk = html.slice(m.index, m.index + 1000);
 
-        var thumb = _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i) ||
-                    _attr(chunk, /(?:data-src|src)="([^"]+\.(?:webp|png))"/i);
+        var thumb = _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.jpe?g)/i) ||
+                    _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.(?:webp|png))/i);
 
         var title = _decodeHtml(
-            _attr(chunk, /<(?:h\d|div)[^>]*class="[^"]*(?:title|name)[^"]*"[^>]*>([^<]+)<\//) ||
             _attr(chunk, /title="([^"]+)"/) ||
+            _attr(chunk, /<(?:h\d|div)[^>]*class="[^"]*(?:title|name)[^"]*"[^>]*>([^<]+)<\//) ||
             _attr(chunk, /alt="([^"]+)"/)
         );
 
@@ -3208,15 +3227,16 @@ function _huyambaCards(html) {
         if (seen[id]) continue;
         seen[id] = true;
 
-        var chunk = html.slice(Math.max(0, m.index - 800), m.index + 600);
+        // Forward-only: title is in title="" on the <a> tag, thumb in data-original
+        var chunk = html.slice(m.index, m.index + 1000);
 
-        var thumb = _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i) ||
-                    _attr(chunk, /(?:data-src|src)="([^"]+\.(?:webp|png))"/i);
+        var thumb = _attr(chunk, /(?:data-original|data-webp|data-src|src)="([^"?#]+\.jpe?g)/i) ||
+                    _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.(?:webp|png))/i);
 
         var title = _decodeHtml(
-            _attr(chunk, /<h\d[^>]*>([^<]+)<\/h\d>/) ||
             _attr(chunk, /title="([^"]+)"/) ||
-            _attr(chunk, /alt="([^"]+)"/)
+            _attr(chunk, /alt="([^"]+)"/) ||
+            _attr(chunk, /<h\d[^>]*>([^<]+)<\/h\d>/)
         );
 
         var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
@@ -3442,9 +3462,10 @@ function _rolikaCards(html) {
         // Look FORWARD from href — DLE cards: img inside the <a>, title in <a class="th-title"> after
         var chunk = html.slice(m.index, m.index + 900);
 
-        // DLE thumb: /uploads/posts/{YYYY}-{MM}/...
-        var thumb = _attr(chunk, /(?:data-src|src)="([^"]+\/uploads\/posts\/\d{4}-\d{2}\/[^"]+)"/i) ||
-                    _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i);
+        // DLE/KVS thumb: relative /uploads/posts/... URLs (may have no extension or .webp)
+        var thumb = _attr(chunk, /(?:data-original|data-src|src)="([^"?#]*\/uploads\/posts\/\d{4}-\d{2}\/[^"?#]+)/i) ||
+                    _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.(?:jpe?g|webp))/i);
+        if (thumb && thumb.charAt(0) === '/') thumb = 'https://w2.huyalkino.com' + thumb;
 
         var title = _decodeHtml(
             _attr(chunk, /<a[^>]*class="[^"]*th-title[^"]*"[^>]*>([^<]+)<\/a>/) ||
@@ -3528,16 +3549,16 @@ function _jopaCards(html) {
         if (seen[id]) continue;
         seen[id] = true;
 
-        var chunk = html.slice(Math.max(0, m.index - 800), m.index + 600);
+        var chunk = html.slice(m.index, m.index + 900);
 
-        var thumb = _attr(chunk, /(?:data-src|src)="([^"]+\/uploads\/posts\/\d{4}-\d{2}\/[^"]+)"/i) ||
-                    _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i);
+        var thumb = _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\/uploads\/posts\/\d{4}-\d{2}\/[^"?#]+)/i) ||
+                    _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.jpe?g)/i);
 
         var title = _decodeHtml(
-            _attr(chunk, /<h2[^>]*>([^<]+)<\/h2>/) ||
-            _attr(chunk, /<h\d[^>]*>([^<]+)<\/h\d>/) ||
             _attr(chunk, /title="([^"]+)"/) ||
-            _attr(chunk, /alt="([^"]+)"/)
+            _attr(chunk, /alt="([^"]+)"/) ||
+            _attr(chunk, /<h2[^>]*>\s*([^<]+)/) ||
+            _attr(chunk, /<h\d[^>]*>\s*([^<]+)/)
         );
 
         var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
