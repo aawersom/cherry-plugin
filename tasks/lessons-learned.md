@@ -1,5 +1,33 @@
 # Lessons Learned — Cherry Plugin
 
+## e2e-test-hardening · Phase 2+3 Code Review Batch · 2026-05-26
+
+**Mode:** full (arch + tech + security reviewers in parallel)
+**Phase:** Phase 2 — E2E hardening (smoke, timeupdate, seek, search, labels) + Phase 3 — baseline v2
+
+### Findings applied (5)
+
+- **Arch+Tech MEDIUM → onSeeked removeEventListener**: `seekSource` success path was missing `v.removeEventListener('seeked', onSeeked)` — only the timeout path removed it. Added as first statement inside `onSeeked`. Named-handler invariant now symmetric across all exit paths.
+- **Tech LOW → searchSource outer catch returns null**: Changed from `{ searchOk: false }` to `{ searchOk: null }` when `page.evaluate()` throws (infrastructure failure vs actual search failure). Consistent with `seekSource` and `rangeAndVideoSource` pattern.
+- **Tech NIT → stale JSDoc**: File header still said `loadedmetadata checks` after REQ-3 switch. Updated to `video playback checks (timeupdate > 2s)`.
+- **Arch LOW → seek loop comment**: Comment said "avoid parallel video load" (wrong — pages are isolated contexts). Changed to "avoid CF proxy saturation" (the actual reason for sequential execution).
+- **Arch LOW → readBaseline cardsCount validation**: Check 12 now uses `Number.isFinite(...)` guard instead of bare `?.cardsCount`. Prevents `Infinity` or `NaN` injection from a malformed baseline.json from silently enabling the regression check.
+
+### Findings parked (5)
+
+- **Security MEDIUM — eval() of full plugin.js**: Pre-existing pattern (unchanged in this PR). Architectural decision for IIFE injection. The smoke assertions at module load partially mitigate by detecting transform failures early. Logged in backlog.
+- **Security LOW — PROXY_KEY plaintext in git**: Pre-existing. Key rotation + `process.env` fallback is the fix. Backlog.
+- **Arch MEDIUM — anonymous error handler**: `rangeAndVideoSource` error listener is an anonymous arrow (can't be `removeEventListener`'d). Element is destroyed immediately after, so no practical leak. Stated invariant is slightly over-specified for this case. Park.
+- **Arch LOW — bootstrap page / batch isolation**: Bootstrap page opens, extracts `sources.length`, then closes before batch. Each batch opens fresh pages. Reviewers flagged it; it is intentional and correct per single-page lifecycle invariant. Not a finding.
+- **Arch NIT — `{0,100}` regex span in transform 1**: Transform smoke assertion catches any regex miss immediately as `process.exit(2)`. No silent failure possible. Park.
+
+### Patterns noted
+
+- **Named-handler asymmetry**: Both arch and tech reviewers independently flagged `onSeeked` missing removal on the success path. The pattern "remove listener as first statement in its own handler" (vs "remove from the other path's handler") is more robust — always teardown your own handler before side effects.
+- **null vs false semantics**: In all test phases, `null` means "not attempted / infrastructure N/A" and `false` means "attempted and failed." The original outer catch was collapsing these two semantics into `false`. Both reviewers caught this — it suggests the distinction should be documented as a code convention.
+
+---
+
 ## e2e-test-hardening · Phase 1 Code Review Batch · 2026-05-26
 
 **Mode:** full (arch + tech + security reviewers in parallel)

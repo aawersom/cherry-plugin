@@ -2,7 +2,7 @@
  * Cherry Plugin — End-to-End test in REAL Lampa (http://lampa.mx/)
  *
  * Tests all 26 source adapters across browse, getStream × 5, Range-206, and
- * video loadedmetadata checks. Writes a regression baseline on PASS.
+ * video playback checks (timeupdate > 2s). Writes a regression baseline on PASS.
  *
  * Exit codes: 0 = PASS, 1 = FAIL (content), 2 = infrastructure failure
  * Spec: tasks/cherry-e2e-verify.spec.md
@@ -25,7 +25,7 @@ const LAMPA_URL        = 'http://lampa.mx/';
 const PLUGIN_URL       = 'https://aawersom.github.io/cherry-plugin/plugin.js';
 const PROXY_KEY        = '1206';
 const PROXY_BASE       = 'https://cherry-proxy.aawersom.workers.dev';
-const VIDEO_TIMEOUT_MS = 14000;
+const VIDEO_TIMEOUT_MS = 35000;
 const CONCURRENCY      = 3;
 
 // ── Tier classification ───────────────────────────────────────────────────────
@@ -75,16 +75,25 @@ function validateFields(items, count) {
 function readBaseline() {
   try {
     if (!existsSync(BASELINE_PATH)) return null;
-    return JSON.parse(readFileSync(BASELINE_PATH, 'utf-8'));
+    const data = JSON.parse(readFileSync(BASELINE_PATH, 'utf-8'));
+    // Normalize v1 ({ sources: { id: number } }) to v2 ({ version: 2, sources: { id: { cardsCount: number } } })
+    if (!data.version || data.version !== 2) {
+      const normalized = {};
+      for (const [id, val] of Object.entries(data.sources || {})) {
+        normalized[id] = typeof val === 'number' ? { cardsCount: val } : val;
+      }
+      return { version: 2, updated: data.updated || '', sources: normalized };
+    }
+    return data;
   } catch { return null; }
 }
 
 function writeBaseline(tierAResults) {
   const sources = {};
-  tierAResults.forEach(r => { sources[r.id] = r.cardsCount; });
+  tierAResults.forEach(r => { sources[r.id] = { cardsCount: r.cardsCount }; });
   writeFileSync(
     BASELINE_PATH,
-    JSON.stringify({ updated: new Date().toISOString().slice(0, 10), sources }, null, 2),
+    JSON.stringify({ version: 2, updated: new Date().toISOString().slice(0, 10), sources }, null, 2),
     'utf-8'
   );
 }
@@ -94,13 +103,30 @@ function writeBaseline(tierAResults) {
 // 1. Replace the double-load guard with a __CHERRY_SOURCES guard
 // 2. Expose SOURCES to window so tests can access it
 // 3. Stub startPlugin to no-op so re-eval doesn't crash on Lampa re-registration
-const reinjectionScript = readFileSync(PLUGIN_PATH, 'utf-8')
-  .replace(
-    /if\s*\(\s*window\.plugin_cherry_ready\s*\)\s*return\s*;[\s\S]{0,100}window\.plugin_cherry_ready\s*=\s*true\s*;/,
-    'if (window.__CHERRY_SOURCES) return;'
-  )
-  .replace(/var SOURCES\s*=\s*\[/, 'var SOURCES = window.__CHERRY_SOURCES = [')
-  .replace('function startPlugin() {', 'function startPlugin() { return;');
+const _pluginSource = readFileSync(PLUGIN_PATH, 'utf-8');
+
+const _t1 = _pluginSource.replace(
+  /if\s*\(\s*window\.plugin_cherry_ready\s*\)\s*return\s*;[\s\S]{0,100}window\.plugin_cherry_ready\s*=\s*true\s*;/,
+  'if (window.__CHERRY_SOURCES) return;'
+);
+if (_t1 === _pluginSource) {
+  console.error('[FATAL] reinjectionScript transform 1 (IIFE guard swap) produced no change — check plugin.js format');
+  process.exit(2);
+}
+
+const _t2 = _t1.replace(/var SOURCES\s*=\s*\[/, 'var SOURCES = window.__CHERRY_SOURCES = [');
+if (_t2 === _t1) {
+  console.error('[FATAL] reinjectionScript transform 2 (SOURCES exposure) produced no change — check plugin.js format');
+  process.exit(2);
+}
+
+const _t3 = _t2.replace('function startPlugin() {', 'function startPlugin() { return;');
+if (_t3 === _t2) {
+  console.error('[FATAL] reinjectionScript transform 3 (startPlugin stub) produced no change — check plugin.js format');
+  process.exit(2);
+}
+
+const reinjectionScript = _t3;
 
 // ── Module-level 206 intercept accumulator ────────────────────────────────────
 const intercepted206 = new Map();
@@ -168,6 +194,13 @@ async function makeTestPage() {
     await page.close();
     await ctx.close();
     return null;
+  }
+
+  const proxyKeyInPage = await page.evaluate(() =>
+    Lampa.Storage.get('cherry_proxy_key', '')
+  );
+  if (!proxyKeyInPage) {
+    console.warn('  [WARN] cherry_proxy_key is empty inside page — proxy calls will use default');
   }
 
   return { page, ctx };
@@ -321,34 +354,39 @@ async function rangeAndVideoSource(page, browseRecord, streamRecord) {
     } catch { /* keep original */ }
   }
 
-  // Video loadedmetadata
+  // Video playback — timeupdate + currentTime > 2 confirms real data flow (not just headers)
   const vr = await page.evaluate(async ({ url, timeout }) => {
     return new Promise(resolve => {
       const v = document.createElement('video');
-      v.preload = 'metadata';
+      v.preload = 'auto';
       v.muted   = true;
       document.body.appendChild(v);
       v.src = url;
       const t = setTimeout(() => {
+        v.removeEventListener('timeupdate', onTU);
         const rs = v.readyState, ns = v.networkState;
         v.src = ''; try { document.body.removeChild(v); } catch(e) {}
         resolve({ ok: false, reason: 'timeout', rs, ns });
       }, timeout);
-      v.addEventListener('loadedmetadata', () => {
-        clearTimeout(t);
-        const dur = v.duration;
-        v.src = ''; try { document.body.removeChild(v); } catch(e) {}
-        resolve({ ok: true, dur });
-      });
+      function onTU() {
+        if (v.currentTime > 2) {
+          v.removeEventListener('timeupdate', onTU);
+          clearTimeout(t);
+          const dur = v.duration;
+          v.src = ''; try { document.body.removeChild(v); } catch(e) {}
+          resolve({ ok: true, dur });
+        }
+      }
+      v.addEventListener('timeupdate', onTU);
       v.addEventListener('error', () => {
         clearTimeout(t);
+        v.removeEventListener('timeupdate', onTU);
         const code = v.error ? v.error.code : 0;
         const msg  = v.error ? v.error.message : '';
         const rs = v.readyState, ns = v.networkState;
         v.src = ''; try { document.body.removeChild(v); } catch(e) {}
         resolve({ ok: false, reason: 'error', code, msg, rs, ns });
       });
-      v.load();
     });
   }, { url: freshProxied, timeout: VIDEO_TIMEOUT_MS });
 
@@ -362,6 +400,118 @@ async function rangeAndVideoSource(page, browseRecord, streamRecord) {
     videoReadyState:    vr.ok ? null : (vr.rs  ?? null),
     videoNetworkState:  vr.ok ? null : (vr.ns  ?? null),
   };
+}
+
+// ── Phase 4b: Seek test (Tier A, duration > 120s, non-blob) ──────────────────
+async function seekSource(page, browseRecord, rangeVideoResult, streamRecord) {
+  const base = { id: browseRecord.id, seekOk: null };
+  if (browseRecord.tier !== 'A') return base;
+  if (rangeVideoResult.videoOk !== true) return base;
+  if (!rangeVideoResult.videoDuration || rangeVideoResult.videoDuration <= 120) return base;
+
+  // Find a non-blob, non-HLS stream URL
+  let streamUrl = '';
+  let cardIdx = -1;
+  if (streamRecord && streamRecord.streamUrls) {
+    for (let i = 0; i < streamRecord.streamUrls.length; i++) {
+      const u = streamRecord.streamUrls[i];
+      if (u && !u.startsWith('blob:') && !u.endsWith('.m3u8')) {
+        streamUrl = u; cardIdx = i; break;
+      }
+    }
+  }
+  if (!streamUrl) return base;
+
+  // Fresh token for seek
+  const card = browseRecord.cards[cardIdx] || browseRecord.cards[0];
+  let freshProxied = buildProxyUrl(streamUrl);
+  if (card) {
+    try {
+      const fr = await page.evaluate(async ({ id, card }) => {
+        const s = window.__CHERRY_SOURCES.find(x => x.id === id);
+        const stream = await s.getStream(card);
+        return { url: stream && stream.url ? stream.url : '' };
+      }, { id: browseRecord.id, card });
+      if (fr.url && !fr.url.startsWith('blob:') && !fr.url.endsWith('.m3u8')) {
+        freshProxied = buildProxyUrl(fr.url);
+      }
+    } catch { /* keep original */ }
+  }
+
+  const seekResult = await page.evaluate(async ({ streamUrl, videoTimeout, seekTimeout }) => {
+    return new Promise(resolve => {
+      const v = document.createElement('video');
+      v.muted = true;
+      v.preload = 'auto';
+      document.body.appendChild(v);
+      v.src = streamUrl;
+
+      function cleanup() {
+        v.src = '';
+        try { document.body.removeChild(v); } catch(e) {}
+      }
+
+      const playT = setTimeout(() => {
+        v.removeEventListener('timeupdate', onTU);
+        cleanup();
+        resolve({ seekOk: false });
+      }, videoTimeout);
+
+      function onTU() {
+        if (v.currentTime > 2) {
+          v.removeEventListener('timeupdate', onTU);
+          clearTimeout(playT);
+          v.currentTime = v.duration * 0.5;
+
+          const seekT = setTimeout(() => {
+            v.removeEventListener('seeked', onSeeked);
+            cleanup();
+            resolve({ seekOk: false });
+          }, seekTimeout);
+
+          function onSeeked() {
+            v.removeEventListener('seeked', onSeeked);
+            clearTimeout(seekT);
+            cleanup();
+            resolve({ seekOk: true });
+          }
+          v.addEventListener('seeked', onSeeked);
+        }
+      }
+      v.addEventListener('timeupdate', onTU);
+      v.addEventListener('error', () => {
+        clearTimeout(playT);
+        v.removeEventListener('timeupdate', onTU);
+        cleanup();
+        resolve({ seekOk: false });
+      });
+    });
+  }, { streamUrl: freshProxied, videoTimeout: VIDEO_TIMEOUT_MS, seekTimeout: 10000 });
+
+  return { id: browseRecord.id, seekOk: seekResult.seekOk };
+}
+
+// ── Phase 4c: Search test (non-D sources, same page session) ─────────────────
+async function searchSource(page, browseRecord) {
+  const base = { id: browseRecord.id, searchOk: null };
+  if (browseRecord.tier === 'D') return base;
+
+  try {
+    const res = await page.evaluate(async ({ id }) => {
+      const s = window.__CHERRY_SOURCES.find(x => x.id === id);
+      if (!s) return { error: 'source not found' };
+      try {
+        const r = await s.search('teen', 1);
+        const items = r && r.items ? r.items : [];
+        return { count: items.length };
+      } catch(e) { return { error: e.message }; }
+    }, { id: browseRecord.id });
+
+    if (res.error) return { id: browseRecord.id, searchOk: false };
+    return { id: browseRecord.id, searchOk: res.count >= 1 };
+  } catch {
+    return { id: browseRecord.id, searchOk: null };
+  }
 }
 
 // ── Phase 5: Verdict ──────────────────────────────────────────────────────────
@@ -411,7 +561,7 @@ function evaluateVerdict(sourcesLength, browseResults, streamResults, rangeVideo
   const videoFailIds = tierARange.filter(id => { const rv = rangeVideoResults.find(x => x.id === id); return !rv || rv.videoOk === false; });
 
   if (tierARange.length - rangeFailIds.length < 9) fail(8, `Tier A Range-206: ${tierARange.length - rangeFailIds.length}/${tierARange.length}, need >= 9. Fail: ${rangeFailIds.join(', ')}`);
-  if (tierARange.length - videoFailIds.length < 9) fail(9, `Tier A Video meta: ${tierARange.length - videoFailIds.length}/${tierARange.length}, need >= 9. Fail: ${videoFailIds.join(', ')}`);
+  if (tierARange.length - videoFailIds.length < 9) fail(9, `Tier A Video play: ${tierARange.length - videoFailIds.length}/${tierARange.length}, need >= 9. Fail: ${videoFailIds.join(', ')}`);
 
   // Check 10: Tier B browse >= 8/9
   // Spec §3 says ">=9/10" but Tier B has 9 sources — interpret as allow 1 failure (>=8/9)
@@ -422,10 +572,10 @@ function evaluateVerdict(sourcesLength, browseResults, streamResults, rangeVideo
   const tierBStreamFail = TIERS.B.filter(id => { const sr = streamResults.find(x => x.id === id); return !sr || sr.urlPresentCount < 4; });
   if (TIERS.B.length - tierBStreamFail.length < 7) fail(11, `Tier B stream: ${TIERS.B.length - tierBStreamFail.length}/9 OK, need >= 7. Fail: ${tierBStreamFail.join(', ')}`);
 
-  // Check 12: Tier A regression vs baseline
+  // Check 12: Tier A regression vs baseline (baseline always v2-shaped after readBaseline())
   if (baseline && baseline.sources) {
     for (const id of TIERS.A) {
-      const prev = baseline.sources[id];
+      const prev = Number.isFinite(baseline.sources[id]?.cardsCount) ? baseline.sources[id].cardsCount : undefined;
       const cur  = browseResults.find(x => x.id === id);
       if (prev >= 5 && cur && cur.cardsCount === 0) fail(12, `Regression: ${id} had ${prev} cards in baseline, now 0`);
       else if (prev >= 5 && cur && cur.cardsCount < prev * 0.5) warnings.push(`WARN: ${id} dropped to ${cur.cardsCount} cards (was ${prev}, < 50% of baseline)`);
@@ -436,9 +586,11 @@ function evaluateVerdict(sourcesLength, browseResults, streamResults, rangeVideo
 }
 
 // ── Print per-source line ─────────────────────────────────────────────────────
-function printLine(br, sr, rv) {
-  const rangeCol = !rv || rv.rangeOk === null ? 'N/A' : rv.rangeOk === true ? '206' : '---';
-  const videoCol = !rv || rv.videoOk === null ? 'N/A ' : rv.videoOk === true ? 'meta' : '--- ';
+function printLine(br, sr, rv, seekRes = null, searchRes = null) {
+  const rangeCol  = !rv || rv.rangeOk === null  ? 'N/A' : rv.rangeOk === true  ? '206' : '---';
+  const videoCol  = !rv || rv.videoOk === null  ? 'N/A ' : rv.videoOk === true  ? 'play' : '--- ';
+  const seekCol   = seekRes == null || seekRes.seekOk === null ? 'N/A' : seekRes.seekOk ? 'ok ' : 'ERR';
+  const searchCol = searchRes == null || searchRes.searchOk === null ? 'N/A' : searchRes.searchOk ? 'ok ' : 'ERR';
 
   const dur = rv && rv.videoDuration
     ? `${Math.floor(rv.videoDuration / 60)}:${String(Math.floor(rv.videoDuration % 60)).padStart(2, '0')}`
@@ -448,13 +600,13 @@ function printLine(br, sr, rv) {
 
   // Determine PASS/FAIL per tier
   let passed;
-  if (br.tier === 'D')      passed = br.cardsCount === 0;  // 0 cards = expected pass
-  else if (br.tier === 'C') passed = br.browseOk;          // video fail is expected/ok
-  else if (br.tier === 'B') passed = br.browseOk && (!sr || sr.urlPresentCount >= 4); // range/video N/A for KVS
+  if (br.tier === 'D')      passed = br.cardsCount === 0;
+  else if (br.tier === 'C') passed = br.browseOk;
+  else if (br.tier === 'B') passed = br.browseOk && (!sr || sr.urlPresentCount >= 4);
   else passed = br.browseOk && rv && rv.rangeOk !== false && rv.videoOk !== false;
 
   const verdict = passed ? 'PASS' : 'FAIL';
-  const line = `${verdict}  ${rangeCol.padEnd(3)}  ${videoCol.padEnd(4)}  [${br.id.padEnd(18)}]  cards:${br.cardsCount}  dur:${dur}  ${truncate(firstUrl, 52)}`;
+  const line = `${verdict}  ${rangeCol.padEnd(3)}  ${videoCol.padEnd(4)}  seek:${seekCol.padEnd(3)}  srch:${searchCol.padEnd(3)}  [${br.id.padEnd(18)}]  cards:${br.cardsCount}  dur:${dur}  ${truncate(firstUrl, 40)}`;
   console.log(line);
   if (br.browseError) console.log(`     ERR: ${br.browseError}`);
   if (rv && rv.videoOk === false && br.tier !== 'C') {
@@ -492,7 +644,7 @@ function printSummary(sourcesLength, browseResults, streamResults, rangeVideoRes
   console.log(`  Tier B      : ${sB}/9   (threshold: >=7/9)`);
   console.log(`Range-206     : ${rA}/${tierARange.length}  (excl. pornhub+xvideos)`);
   console.log(`  Tier A      : ${rA}/${tierARange.length}  (threshold: >=9/${tierARange.length})`);
-  console.log(`Video meta    : ${vA}/${tierARange.length}  (excl. pornhub+xvideos)`);
+  console.log(`Video play    : ${vA}/${tierARange.length}  (excl. pornhub+xvideos)`);
   console.log(`  Tier A      : ${vA}/${tierARange.length}  (threshold: >=9/${tierARange.length})`);
   console.log(`Playwright 206 intercepts: ${intercepted206.size} URLs`);
   console.log();
@@ -544,12 +696,14 @@ console.log('═'.repeat(72));
 console.log('CHERRY E2E IN REAL LAMPA  (browse + stream × 5 + range + video)');
 console.log('═'.repeat(72));
 
-const baseline    = readBaseline();
-const allBrowse   = [];
-const allStream   = [];
+const baseline      = readBaseline();
+const allBrowse     = [];
+const allStream     = [];
 const allRangeVideo = [];
+const allSeek       = [];
+const allSearch     = [];
 
-// ── Unified batch loop: browse → stream → rangeVideo → close (pages kept open) ─
+// ── Unified batch loop: browse → stream → rangeVideo → seek → search → close ─
 for (let i = 0; i < sources.length; i += CONCURRENCY) {
   const batch = sources.slice(i, i + CONCURRENCY);
 
@@ -577,7 +731,19 @@ for (let i = 0; i < sources.length; i += CONCURRENCY) {
     browseRecs.map((br, idx) => rangeAndVideoSource(batchPages[idx].page, br, streamRecs[idx]))
   );
 
-  // 5. Close pages — only after all three phases complete
+  // 4b. Seek test (Tier A only, duration > 120s, non-blob) — sequential per batch to avoid CF proxy saturation
+  const seekRecs = [];
+  for (let j = 0; j < browseRecs.length; j++) {
+    seekRecs.push(await seekSource(batchPages[j].page, browseRecs[j], rvRecs[j], streamRecs[j]));
+  }
+
+  // 4c. Search test (non-D sources) — sequential within each page
+  const searchRecs = [];
+  for (let j = 0; j < browseRecs.length; j++) {
+    searchRecs.push(await searchSource(batchPages[j].page, browseRecs[j]));
+  }
+
+  // 5. Close pages — only after all phases complete
   await Promise.all(batchPages.map(({ page, ctx }) => page.close().then(() => ctx.close())));
 
   // 6. Collect + print
@@ -585,7 +751,9 @@ for (let i = 0; i < sources.length; i += CONCURRENCY) {
     allBrowse.push(br);
     allStream.push(streamRecs[idx]);
     allRangeVideo.push(rvRecs[idx]);
-    printLine(br, streamRecs[idx], rvRecs[idx]);
+    allSeek.push(seekRecs[idx]);
+    allSearch.push(searchRecs[idx]);
+    printLine(br, streamRecs[idx], rvRecs[idx], seekRecs[idx], searchRecs[idx]);
   });
 }
 
