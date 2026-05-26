@@ -1,17 +1,18 @@
 {
+  "version": 2,
   "updated": "2026-05-26",
   "sources": {
-    "pornhub": 30,
-    "xvideos": 42,
-    "youjizz": 24,
-    "xozilla": 100,
-    "analdin": 100,
-    "porndig": 36,
-    "tizam": 25,
-    "hellporno": 60,
-    "pornobolt": 42,
-    "crocotube": 69,
-    "24rolika": 34,
-    "jopaonline": 24
+    "pornhub": { "cardsCount": 30 },
+    "xvideos": { "cardsCount": 42 },
+    "youjizz": { "cardsCount": 24 },
+    "xozilla": { "cardsCount": 100 },
+    "analdin": { "cardsCount": 100 },
+    "porndig": { "cardsCount": 36 },
+    "tizam": { "cardsCount": 25 },
+    "hellporno": { "cardsCount": 60 },
+    "pornobolt": { "cardsCount": 42 },
+    "crocotube": { "cardsCount": 69 },
+    "24rolika": { "cardsCount": 32 },
+    "jopaonline": { "cardsCount": 24 }
   }
 }
