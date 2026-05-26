@@ -204,7 +204,7 @@ Fetches an HLS master/media playlist via the proxy, rewrites every non-comment l
 
 ---
 
-## Source Status (as of 2026-05-25)
+## Source Status (as of 2026-05-26)
 
 Results from `node test/cherry-browser-test.mjs` — Playwright/Chromium with real CORS enforcement.
 
@@ -222,7 +222,7 @@ Results from `node test/cherry-browser-test.mjs` — Playwright/Chromium with re
 | `hellporno` | 60 | KVS get_file, consistent |
 | `pornobolt` | 42 | KVS pbcdn.tv, consistent |
 | `crocotube` | 69 | KVS alphaxcdn.com, consistent |
-| `24rolika` | 34 | DLE + JWPlayer MP4 |
+| `24rolika` | 32 | DLE + JWPlayer MP4 |
 | `jopaonline` | 24 | DLE + JWPlayer MP4 |
 
 ### Browse works, video intermittent (KVS get_file with signed tokens)

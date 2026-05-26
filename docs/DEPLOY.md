@@ -102,7 +102,7 @@ npx wrangler dev
 ```powershell
 cd d:\Works\Lampa
 npx vitest run
-# Ожидаем: 47 тестов, все зелёные
+# Ожидаем: 51 тестов, все зелёные
 ```
 
 ---
@@ -111,7 +111,7 @@ npx vitest run
 
 ```
 1. Правка  →  d:\Works\Lampa\plugin.js
-2. Тесты   →  npx vitest run  (47 должны быть green)
+2. Тесты   →  npx vitest run  (51 должны быть green)
 3. Синк    →  cp plugin.js plugin-release\plugin.js
 4. Пуш     →  cd plugin-release && git add . && git commit -m "..." && git push
 5. Если менялся воркер:
