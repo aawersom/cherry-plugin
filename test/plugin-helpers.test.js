@@ -149,6 +149,26 @@ describe('bestQualityUrl', () => {
     const q = { '720': 'url-720', '1080': 'url-1080' };
     expect(bestQualityUrl(q)).toBe('url-1080');
   });
+
+  it('treats 4k as integer prefix 4 via parseInt — 1080p wins', () => {
+    const q = { '720p': 'url-720', '4k': 'url-4k', '1080p': 'url-1080' };
+    expect(bestQualityUrl(q)).toBe('url-1080');
+  });
+
+  it('parses integer prefix of keys with p-suffix', () => {
+    const q = { '1080p': 'url-1080', '720p': 'url-720' };
+    expect(bestQualityUrl(q)).toBe('url-1080');
+  });
+
+  it('falls back to first key for single non-numeric label', () => {
+    const q = { 'hd': 'url-hd' };
+    expect(bestQualityUrl(q)).toBe('url-hd');
+  });
+
+  it('picks numeric key over non-numeric label in mixed map', () => {
+    const q = { 'hd': 'url-hd', '720': 'url-720' };
+    expect(bestQualityUrl(q)).toBe('url-720');
+  });
 });
 
 describe('extractStreams', () => {

@@ -45,16 +45,14 @@ const SOURCE_TIER = Object.fromEntries(
 function truncate(s, n) { return s && s.length > n ? s.slice(0, n) + '…' : (s || ''); }
 
 function bestQualityUrl(quality) {
-  const keys = Object.keys(quality);
+  const keys = Object.keys(quality || {});
   if (!keys.length) return '';
-  const best = keys.reduce((a, b) => {
-    const na = parseInt(a, 10), nb = parseInt(b, 10);
-    if (!isNaN(na) && !isNaN(nb)) return na >= nb ? a : b;
-    if (!isNaN(na)) return a;
-    if (!isNaN(nb)) return b;
-    return a >= b ? a : b;
+  let best = 0, bestUrl = '';
+  keys.forEach(k => {
+    const n = parseInt(k, 10) || 0;
+    if (n > best) { best = n; bestUrl = quality[k]; }
   });
-  return quality[best];
+  return bestUrl || quality[keys[0]];
 }
 
 function buildProxyUrl(streamUrl) {
