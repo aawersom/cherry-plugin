@@ -1,5 +1,24 @@
 # Lessons Learned — Cherry Plugin
 
+## e2e-test-hardening · E2E Run + v.play() Gap · 2026-05-26
+
+**Mode:** full — E2E run debugging
+**Finding:** Spec gap — `preload='auto'` alone does not cause `timeupdate` to fire.
+
+### Gap found during E2E run
+
+REQ-3 spec said: "Set `v.preload = 'auto'` so the browser fetches data, not just headers." This implies `timeupdate` would fire once data is fetched. **It does not.** The HTML spec defines `timeupdate` to fire as the *current playback position* changes — which only happens when the video is *playing*. `preload='auto'` fetches data into the buffer, but `currentTime` stays at 0 until `play()` is called.
+
+Fix applied: added `v.play().catch(() => {})` after event listeners are attached in both `rangeAndVideoSource` and `seekSource`'s `page.evaluate` blocks. The `.catch(() => {})` suppresses the "play() was interrupted" DOMException that fires when the element is cleaned up before playback starts.
+
+### Pattern noted
+
+The transition from `loadedmetadata` → `timeupdate + currentTime > 2` requires understanding two things: (1) `preload='auto'` loads bytes but does not play, (2) `--autoplay-policy=no-user-gesture-required` + `muted=true` permits play() to succeed. Both conditions must hold AND `play()` must be called. The spec and plan reviewers missed this gap because they reasoned about `preload` behavior but not about whether `currentTime` would advance without an active play() call.
+
+**Rule for future:** whenever switching from a "fetch-event" (`loadedmetadata`, `canplay`) to a "playback-event" (`timeupdate`, `playing`), verify `play()` is called or `autoplay` attribute is set. These event families are in different parts of the media element lifecycle.
+
+---
+
 ## e2e-test-hardening · Phase 2+3 Code Review Batch · 2026-05-26
 
 **Mode:** full (arch + tech + security reviewers in parallel)

@@ -387,6 +387,7 @@ async function rangeAndVideoSource(page, browseRecord, streamRecord) {
         v.src = ''; try { document.body.removeChild(v); } catch(e) {}
         resolve({ ok: false, reason: 'error', code, msg, rs, ns });
       });
+      v.play().catch(() => {});
     });
   }, { url: freshProxied, timeout: VIDEO_TIMEOUT_MS });
 
@@ -485,6 +486,7 @@ async function seekSource(page, browseRecord, rangeVideoResult, streamRecord) {
         cleanup();
         resolve({ seekOk: false });
       });
+      v.play().catch(() => {});
     });
   }, { streamUrl: freshProxied, videoTimeout: VIDEO_TIMEOUT_MS, seekTimeout: 10000 });
 
