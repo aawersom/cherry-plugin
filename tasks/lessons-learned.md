@@ -354,3 +354,26 @@ Phase 4 describe block: EHH regex against fixture, hash computation properties, 
 ### Pattern noted
 
 Hash-in-page + XHR + sources: whenever a site uses AJAX authentication, extractStreams is useless (no direct mp4 URLs). Pattern: extract auth token, transform it, call API. Common in adult video platforms that prevent direct URL scraping.
+
+
+---
+
+## multi-source-video-fix - Phase 6 - validateStreamReachable + deploy - 2026-05-28
+
+**Mode:** full
+**Phase:** Phase 6 - E2E hardening + deploy
+
+### Changes
+
+- cherry-lampa-e2e.mjs: added PROXY_URL_2_HOSTS mirror (17 hosts), wrapLikePxHelper (PROXY_URL_2_HOSTS routing), validateStreamReachable (HEAD + ranged GET fallback + retry on 5xx/fetch-error), reachabilitySource, wired into batch loop after page close.
+- printLine now shows rch:contentType or rch:!(reason) per source. reachFail downgrades per-source verdict to FAIL for tier A/B/C.
+- Sync-check test in plugin-helpers.test.js: asserts PROXY_URL_2_HOSTS host sets are identical between plugin.js and cherry-lampa-e2e.mjs (fails loudly if one map diverges from the other).
+- plugin-release/plugin.js synced and pushed to GitHub Pages.
+
+### Tests: +8, total 90
+
+7 validateStreamReachable unit tests + 1 PROXY_URL_2_HOSTS sync-check.
+
+### Pattern noted
+
+Sync-check via regex: when a config constant is intentionally duplicated across files (plugin.js PROXY_URL_2_HOSTS and E2E test mirror), extract both via regex and assertEqual in a unit test. This costs one test but prevents silent divergence without requiring a shared module or import.
