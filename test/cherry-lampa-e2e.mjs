@@ -25,6 +25,16 @@ const LAMPA_URL        = 'http://lampa.mx/';
 const PLUGIN_URL       = 'https://aawersom.github.io/cherry-plugin/plugin.js';
 const PROXY_KEY        = '1206';
 const PROXY_BASE       = 'https://cherry-proxy.aawersom.workers.dev';
+const PROXY_BASE_2     = 'https://cherry-proxy.aawersom.deno.net';
+// Mirror of plugin.js PROXY_URL_2_HOSTS — sync-check assertion in plugin-helpers.test.js enforces parity.
+const PROXY_URL_2_HOSTS = {
+  'xnxx.com': 1, 'www.xnxx.com': 1,
+  'spankbang.com': 1, 'www.spankbang.com': 1,
+  's1.bigcdn.cc': 1, 's4.bigcdn.cc': 1, 's16.bigcdn.cc': 1, 's25.bigcdn.cc': 1,
+  's30.bigcdn.cc': 1, 's33.bigcdn.cc': 1, 's38.bigcdn.cc': 1, 's39.bigcdn.cc': 1,
+  's41.bigcdn.cc': 1, 's43.bigcdn.cc': 1, 's47.bigcdn.cc': 1, 's50.bigcdn.cc': 1,
+  's61.bigcdn.cc': 1,
+};
 const VIDEO_TIMEOUT_MS = 35000;
 const CONCURRENCY      = 3;
 
@@ -60,6 +70,74 @@ function buildProxyUrl(streamUrl) {
   if (streamUrl.startsWith(PROXY_BASE)) return streamUrl;
   const u = streamUrl.startsWith('//') ? 'https:' + streamUrl : streamUrl;
   return `${PROXY_BASE}/proxy?url=${encodeURIComponent(u)}&key=${PROXY_KEY}`;
+}
+
+// Mirrors plugin.js buildProxyUrl including PROXY_URL_2_HOSTS routing.
+// Used by validateStreamReachable — must stay in sync with plugin.js px() helper.
+function wrapLikePxHelper(streamUrl) {
+  if (!streamUrl) return '';
+  if (streamUrl.startsWith('blob:')) return streamUrl;
+  if (streamUrl.startsWith(PROXY_BASE)) return streamUrl;
+  if (streamUrl.startsWith(PROXY_BASE_2)) return streamUrl;
+  const u = streamUrl.startsWith('//') ? 'https:' + streamUrl : streamUrl;
+  try {
+    const host = new URL(u).hostname;
+    const base = PROXY_URL_2_HOSTS[host] ? PROXY_BASE_2 : PROXY_BASE;
+    return `${base}/proxy?url=${encodeURIComponent(u)}&key=${PROXY_KEY}`;
+  } catch { return `${PROXY_BASE}/proxy?url=${encodeURIComponent(u)}&key=${PROXY_KEY}`; }
+}
+
+function isVideoContentType(ct) {
+  if (!ct) return false;
+  return ct.startsWith('video/') || ct.startsWith('audio/') ||
+         ct.includes('mpegurl') || ct.includes('octet-stream');
+}
+
+// Cache reachability results within a single E2E run to avoid duplicate HEAD requests.
+const _reachCache = new Map();
+
+async function _tryReachOnce(proxied) {
+  let r;
+  try {
+    r = await fetch(proxied, { method: 'HEAD', signal: AbortSignal.timeout(8000) });
+  } catch(e) {
+    return { ok: false, reason: `fetch-error:${e.message}`, contentType: null, status: null, retryable: true };
+  }
+  if (r.status >= 500) {
+    return { ok: false, reason: `http-${r.status}`, contentType: r.headers.get('content-type') || '', status: r.status, retryable: true };
+  }
+  if (r.status === 405 || r.status === 501) {
+    try {
+      const g = await fetch(proxied, { headers: { 'Range': 'bytes=0-1023' }, signal: AbortSignal.timeout(8000) });
+      const ct = g.headers.get('content-type') || '';
+      if (g.status >= 500) return { ok: false, reason: `http-${g.status}`, contentType: ct, status: g.status, retryable: true };
+      if (g.status !== 200 && g.status !== 206) return { ok: false, reason: `http-${g.status}`, contentType: ct, status: g.status, retryable: false };
+      const ctOk = isVideoContentType(ct);
+      return { ok: ctOk, contentType: ct, status: g.status, reason: ctOk ? null : `content-type:${ct}`, retryable: false };
+    } catch(e) {
+      return { ok: false, reason: `fetch-error:${e.message}`, contentType: null, status: null, retryable: true };
+    }
+  }
+  const ct = r.headers.get('content-type') || '';
+  if (r.status !== 200 && r.status !== 206) return { ok: false, reason: `http-${r.status}`, contentType: ct, status: r.status, retryable: false };
+  const ctOk = isVideoContentType(ct);
+  return { ok: ctOk, contentType: ct, status: r.status, reason: ctOk ? null : `content-type:${ct}`, retryable: false };
+}
+
+async function validateStreamReachable(streamResult) {
+  const url = streamResult && (streamResult.url || bestQualityUrl(streamResult.quality || {}));
+  if (!url) return { ok: false, reason: 'empty-url', contentType: null, status: null };
+  if (url.startsWith('blob:')) return { ok: true, reason: null, contentType: 'blob', status: null };
+  const proxied = wrapLikePxHelper(url);
+  if (_reachCache.has(proxied)) return _reachCache.get(proxied);
+  let result = await _tryReachOnce(proxied);
+  if (result.retryable) {
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    result = await _tryReachOnce(proxied);
+  }
+  const { retryable: _, ...final } = result;
+  _reachCache.set(proxied, final);
+  return final;
 }
 
 function validateFields(items, count) {
@@ -516,8 +594,24 @@ async function searchSource(page, browseRecord) {
   }
 }
 
+// ── Phase 4d: Reachability check (all tiers except D) ────────────────────────
+async function reachabilitySource(browseRecord, streamRecord) {
+  const id = browseRecord.id;
+  const base = { id, reachOk: null, contentType: null, status: null, reason: null };
+  if (browseRecord.tier === 'D') return base;
+  const urls = streamRecord ? (streamRecord.streamUrls || []) : [];
+  const url = urls.find(u => u && u.length > 0) || '';
+  if (!url) return { ...base, reason: 'no-stream-url' };
+  try {
+    const r = await validateStreamReachable({ url, quality: {} });
+    return { id, reachOk: r.ok, contentType: r.contentType, status: r.status, reason: r.reason };
+  } catch(e) {
+    return { id, reachOk: false, contentType: null, status: null, reason: `exception:${e.message}` };
+  }
+}
+
 // ── Phase 5: Verdict ──────────────────────────────────────────────────────────
-function evaluateVerdict(sourcesLength, browseResults, streamResults, rangeVideoResults, baseline) {
+function evaluateVerdict(sourcesLength, browseResults, streamResults, rangeVideoResults, baseline, reachResults = []) {
   const warnings  = [];
   let failCheck   = null;
   let failMessage = null;
@@ -588,11 +682,14 @@ function evaluateVerdict(sourcesLength, browseResults, streamResults, rangeVideo
 }
 
 // ── Print per-source line ─────────────────────────────────────────────────────
-function printLine(br, sr, rv, seekRes = null, searchRes = null) {
+function printLine(br, sr, rv, seekRes = null, searchRes = null, reachRes = null) {
   const rangeCol  = !rv || rv.rangeOk === null  ? 'N/A' : rv.rangeOk === true  ? '206' : '---';
   const videoCol  = !rv || rv.videoOk === null  ? 'N/A ' : rv.videoOk === true  ? 'play' : '--- ';
   const seekCol   = seekRes == null || seekRes.seekOk === null ? 'N/A' : seekRes.seekOk ? 'ok ' : 'ERR';
   const searchCol = searchRes == null || searchRes.searchOk === null ? 'N/A' : searchRes.searchOk ? 'ok ' : 'ERR';
+  const reachCol  = !reachRes || reachRes.reachOk === null ? 'N/A'
+                  : reachRes.reachOk ? (reachRes.contentType ? reachRes.contentType.slice(0, 10) : 'ok')
+                  : `!(${(reachRes.reason || '').slice(0, 12)})`;
 
   const dur = rv && rv.videoDuration
     ? `${Math.floor(rv.videoDuration / 60)}:${String(Math.floor(rv.videoDuration % 60)).padStart(2, '0')}`
@@ -601,18 +698,22 @@ function printLine(br, sr, rv, seekRes = null, searchRes = null) {
   const firstUrl = sr && sr.streamUrls && sr.streamUrls[0] ? sr.streamUrls[0] : '';
 
   // Determine PASS/FAIL per tier
+  const reachFail = reachRes && reachRes.reachOk === false && br.tier !== 'D';
   let passed;
   if (br.tier === 'D')      passed = br.cardsCount === 0;
   else if (br.tier === 'C') passed = br.browseOk;
-  else if (br.tier === 'B') passed = br.browseOk && (!sr || sr.urlPresentCount >= 4);
-  else passed = br.browseOk && rv && rv.rangeOk !== false && rv.videoOk !== false;
+  else if (br.tier === 'B') passed = br.browseOk && (!sr || sr.urlPresentCount >= 4) && !reachFail;
+  else passed = br.browseOk && rv && rv.rangeOk !== false && rv.videoOk !== false && !reachFail;
 
   const verdict = passed ? 'PASS' : 'FAIL';
-  const line = `${verdict}  ${rangeCol.padEnd(3)}  ${videoCol.padEnd(4)}  seek:${seekCol.padEnd(3)}  srch:${searchCol.padEnd(3)}  [${br.id.padEnd(18)}]  cards:${br.cardsCount}  dur:${dur}  ${truncate(firstUrl, 40)}`;
+  const line = `${verdict}  ${rangeCol.padEnd(3)}  ${videoCol.padEnd(4)}  seek:${seekCol.padEnd(3)}  srch:${searchCol.padEnd(3)}  rch:${reachCol.padEnd(12)}  [${br.id.padEnd(18)}]  cards:${br.cardsCount}  dur:${dur}  ${truncate(firstUrl, 40)}`;
   console.log(line);
   if (br.browseError) console.log(`     ERR: ${br.browseError}`);
   if (rv && rv.videoOk === false && br.tier !== 'C') {
     console.log(`     VIDEO FAIL: rs=${rv.videoReadyState}, ns=${rv.videoNetworkState}`);
+  }
+  if (reachFail) {
+    console.log(`     REACH FAIL: ${reachRes.reason || 'unknown'} (status:${reachRes.status}, ct:${reachRes.contentType})`);
   }
 }
 
@@ -704,6 +805,7 @@ const allStream     = [];
 const allRangeVideo = [];
 const allSeek       = [];
 const allSearch     = [];
+const allReach      = [];
 
 // ── Unified batch loop: browse → stream → rangeVideo → seek → search → close ─
 for (let i = 0; i < sources.length; i += CONCURRENCY) {
@@ -748,6 +850,11 @@ for (let i = 0; i < sources.length; i += CONCURRENCY) {
   // 5. Close pages — only after all phases complete
   await Promise.all(batchPages.map(({ page, ctx }) => page.close().then(() => ctx.close())));
 
+  // 4d. Reachability check (Node.js HTTP HEAD, after pages are closed)
+  const reachRecs = await Promise.all(
+    browseRecs.map((br, idx) => reachabilitySource(br, streamRecs[idx]))
+  );
+
   // 6. Collect + print
   browseRecs.forEach((br, idx) => {
     allBrowse.push(br);
@@ -755,12 +862,13 @@ for (let i = 0; i < sources.length; i += CONCURRENCY) {
     allRangeVideo.push(rvRecs[idx]);
     allSeek.push(seekRecs[idx]);
     allSearch.push(searchRecs[idx]);
-    printLine(br, streamRecs[idx], rvRecs[idx], seekRecs[idx], searchRecs[idx]);
+    allReach.push(reachRecs[idx]);
+    printLine(br, streamRecs[idx], rvRecs[idx], seekRecs[idx], searchRecs[idx], reachRecs[idx]);
   });
 }
 
 // ── Verdict + Summary ─────────────────────────────────────────────────────────
-const verdict = evaluateVerdict(sourcesLength, allBrowse, allStream, allRangeVideo, baseline);
+const verdict = evaluateVerdict(sourcesLength, allBrowse, allStream, allRangeVideo, baseline, allReach);
 printSummary(sourcesLength, allBrowse, allStream, allRangeVideo, verdict);
 
 if (verdict.pass) {

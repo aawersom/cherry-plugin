@@ -619,6 +619,123 @@ function lenpornoParseFixed(pjStr) {
   return { url: bestQualityUrl(quality) || best, quality: quality };
 }
 
+// ---- validateStreamReachable (inline mirror with injectable fetch) ----------
+function makeValidateStream(fetchFn) {
+  function isVideoContentType(ct) {
+    if (!ct) return false;
+    return ct.startsWith('video/') || ct.startsWith('audio/') ||
+           ct.includes('mpegurl') || ct.includes('octet-stream');
+  }
+  async function tryOnce(proxied) {
+    let r;
+    try {
+      r = await fetchFn(proxied, { method: 'HEAD' });
+    } catch(e) {
+      return { ok: false, reason: `fetch-error:${e.message}`, contentType: null, status: null, retryable: true };
+    }
+    if (r.status >= 500) return { ok: false, reason: `http-${r.status}`, contentType: '', status: r.status, retryable: true };
+    if (r.status === 405 || r.status === 501) {
+      try {
+        const g = await fetchFn(proxied, { headers: { 'Range': 'bytes=0-1023' } });
+        const ct = g.headers.get('content-type') || '';
+        if (g.status !== 200 && g.status !== 206) return { ok: false, reason: `http-${g.status}`, contentType: ct, status: g.status, retryable: false };
+        const ctOk = isVideoContentType(ct);
+        return { ok: ctOk, contentType: ct, status: g.status, reason: ctOk ? null : `content-type:${ct}`, retryable: false };
+      } catch(e) {
+        return { ok: false, reason: `fetch-error:${e.message}`, contentType: null, status: null, retryable: true };
+      }
+    }
+    const ct = r.headers.get('content-type') || '';
+    if (r.status !== 200 && r.status !== 206) return { ok: false, reason: `http-${r.status}`, contentType: ct, status: r.status, retryable: false };
+    const ctOk = isVideoContentType(ct);
+    return { ok: ctOk, contentType: ct, status: r.status, reason: ctOk ? null : `content-type:${ct}`, retryable: false };
+  }
+  return async function validateStreamReachable(streamResult) {
+    const url = streamResult && (streamResult.url || '');
+    if (!url) return { ok: false, reason: 'empty-url', contentType: null, status: null };
+    if (url.startsWith('blob:')) return { ok: true, reason: null, contentType: 'blob', status: null };
+    const result = await tryOnce(url);
+    const { retryable: _, ...final } = result;
+    return final;
+  };
+}
+
+function mockFetch(status, contentType, method2Override) {
+  return async (url, opts) => {
+    const isGet = opts && opts.headers && opts.headers['Range'];
+    const effectiveStatus = (isGet && method2Override) ? method2Override.status : status;
+    const effectiveCt = (isGet && method2Override) ? method2Override.contentType : contentType;
+    return { status: effectiveStatus, headers: { get: (h) => h === 'content-type' ? effectiveCt : null } };
+  };
+}
+
+describe('Phase 6 — validateStreamReachable unit tests', () => {
+  it('200 + video/mp4 → ok:true', async () => {
+    const validate = makeValidateStream(mockFetch(200, 'video/mp4'));
+    const r = await validate({ url: 'https://cdn.example.com/video.mp4' });
+    expect(r.ok).toBe(true);
+    expect(r.status).toBe(200);
+    expect(r.contentType).toBe('video/mp4');
+  });
+
+  it('200 + text/html → ok:false, reason content-type:text/html', async () => {
+    const validate = makeValidateStream(mockFetch(200, 'text/html'));
+    const r = await validate({ url: 'https://cdn.example.com/video.mp4' });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('content-type:text/html');
+  });
+
+  it('403 → ok:false, reason http-403', async () => {
+    const validate = makeValidateStream(mockFetch(403, ''));
+    const r = await validate({ url: 'https://cdn.example.com/video.mp4' });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('http-403');
+  });
+
+  it('206 + video/mp4 → ok:true', async () => {
+    const validate = makeValidateStream(mockFetch(206, 'video/mp4'));
+    const r = await validate({ url: 'https://cdn.example.com/video.mp4' });
+    expect(r.ok).toBe(true);
+    expect(r.status).toBe(206);
+  });
+
+  it('405 → ranged GET → 200 + application/vnd.apple.mpegurl → ok:true', async () => {
+    const validate = makeValidateStream(mockFetch(405, '', { status: 200, contentType: 'application/vnd.apple.mpegurl' }));
+    const r = await validate({ url: 'https://cdn.example.com/master.m3u8' });
+    expect(r.ok).toBe(true);
+    expect(r.contentType).toBe('application/vnd.apple.mpegurl');
+  });
+
+  it('network error → ok:false, reason starts with fetch-error:', async () => {
+    const errFetch = async () => { throw new Error('connection reset'); };
+    const validate = makeValidateStream(errFetch);
+    const r = await validate({ url: 'https://cdn.example.com/video.mp4' });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/^fetch-error:/);
+  });
+
+  it('empty url → ok:false, reason empty-url', async () => {
+    const validate = makeValidateStream(mockFetch(200, 'video/mp4'));
+    const r = await validate({ url: '' });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('empty-url');
+  });
+
+  it('PROXY_URL_2_HOSTS: plugin.js and E2E test have identical host sets', () => {
+    const pluginSrc = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+    const pluginM = pluginSrc.match(/PROXY_URL_2_HOSTS\s*=\s*\{([^}]+)\}/);
+    expect(pluginM).toBeTruthy();
+    const pluginHosts = new Set([...pluginM[1].matchAll(/['"]([^'"]+)['"]\s*:/g)].map(x => x[1]));
+
+    const e2eSrc = readFileSync(join(__dirname, 'cherry-lampa-e2e.mjs'), 'utf8');
+    const e2eM = e2eSrc.match(/PROXY_URL_2_HOSTS\s*=\s*\{([^}]+)\}/);
+    expect(e2eM).toBeTruthy();
+    const e2eHosts = new Set([...e2eM[1].matchAll(/['"]([^'"]+)['"]\s*:/g)].map(x => x[1]));
+
+    expect(e2eHosts).toEqual(pluginHosts);
+  });
+});
+
 // ---- epornerHashComputed (pure helper) -------------------------------------
 function epornerHashComputed(raw) {
   return [raw.slice(0,8), raw.slice(8,16), raw.slice(16,24), raw.slice(24,32)]
