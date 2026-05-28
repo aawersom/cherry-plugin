@@ -8,6 +8,9 @@
   // CONFIG — user sets these after deploying their proxy
   // ============================================================
   var PROXY_URL = 'https://cherry-proxy.aawersom.workers.dev';
+  // Secondary proxy on Deno Deploy — used for sites that block Cloudflare datacenter IPs (xnxx, spankbang)
+  var PROXY_URL_2 = 'https://cherry-proxy.aawersom.deno.net';
+  var PROXY_URL_2_HOSTS = { 'xnxx.com': 1, 'www.xnxx.com': 1, 'spankbang.com': 1, 'www.spankbang.com': 1 };
 
   function getProxyKey() {
     return Lampa.Storage.get('cherry_proxy_key', '1206');
@@ -20,7 +23,11 @@
   /** @param {string} url @param {string=} referer @returns {string} */
   function buildProxyUrl(url, referer) {
     var key = getProxyKey();
-    var p = PROXY_URL + '/proxy?url=' + encodeURIComponent(url);
+    var base = PROXY_URL;
+    if (PROXY_URL_2) {
+      try { if (PROXY_URL_2_HOSTS[new URL(url).hostname]) base = PROXY_URL_2; } catch (e) {}
+    }
+    var p = base + '/proxy?url=' + encodeURIComponent(url);
     if (key)     p += '&key=' + encodeURIComponent(key);
     if (referer) p += '&referer=' + encodeURIComponent(referer);
     return p;
@@ -1575,7 +1582,7 @@ SOURCES.push({
   browse: function(category, page) {
     var self = this;
     var p = page || 1;
-    var url = 'https://www.xnxx.com/new/' + (p - 1);
+    var url = 'https://www.xnxx.com/?k=new&p=' + (p - 1);
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html);
       return { items: items, total_pages: p + 10 };
