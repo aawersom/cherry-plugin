@@ -1609,45 +1609,45 @@ SOURCES.push({
   name: 'Eporner',
   host: 'eporner.com',
 
+  _apiFetch: function(url) {
+    // eporner API supports Access-Control-Allow-Origin: * — direct fetch bypasses CF datacenter IP block
+    return fetch(url).then(function(r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.text();
+    });
+  },
+
+  _mapVideo: function(v) {
+    return {
+      id: String(v.id),
+      source: 'eporner',
+      title: v.title || '',
+      thumb: (v.default_thumb && v.default_thumb.src) ? v.default_thumb.src : '',
+      url: v.url || ('https://www.eporner.com/hd-porn/' + v.id + '/'),
+      duration: parseInt(v.length_sec, 10) || 0,
+      views: parseInt(v.views, 10) || 0
+    };
+  },
+
   search: function(query, page) {
+    var self = this;
     var p = page || 1;
     var url = 'https://www.eporner.com/api/v2/video/search/?query=' + encodeURIComponent(query) +
       '&per_page=30&page=' + p + '&thumbsize=medium&order=most-popular&gay=0&format=json';
-    return cherryFetch(url).then(function(text) {
+    return self._apiFetch(url).then(function(text) {
       var data = JSON.parse(text);
-      var items = (data.videos || []).map(function(v) {
-        return {
-          id: String(v.id),
-          source: 'eporner',
-          title: v.title || '',
-          thumb: (v.default_thumb && v.default_thumb.src) ? v.default_thumb.src : '',
-          url: v.url || ('https://www.eporner.com/hd-porn/' + v.id + '/'),
-          duration: parseInt(v.length_sec, 10) || 0,
-          views: parseInt(v.views, 10) || 0
-        };
-      });
-      return { items: items, total_pages: parseInt(data.total_pages, 10) || 1 };
+      return { items: (data.videos || []).map(self._mapVideo), total_pages: parseInt(data.total_pages, 10) || 1 };
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
   browse: function(category, page) {
+    var self = this;
     var p = page || 1;
     var url = 'https://www.eporner.com/api/v2/video/search/?query=&per_page=30&page=' + p +
       '&thumbsize=medium&order=most-popular&gay=0&format=json';
-    return cherryFetch(url).then(function(text) {
+    return self._apiFetch(url).then(function(text) {
       var data = JSON.parse(text);
-      var items = (data.videos || []).map(function(v) {
-        return {
-          id: String(v.id),
-          source: 'eporner',
-          title: v.title || '',
-          thumb: (v.default_thumb && v.default_thumb.src) ? v.default_thumb.src : '',
-          url: v.url || ('https://www.eporner.com/hd-porn/' + v.id + '/'),
-          duration: parseInt(v.length_sec, 10) || 0,
-          views: parseInt(v.views, 10) || 0
-        };
-      });
-      return { items: items, total_pages: parseInt(data.total_pages, 10) || 1 };
+      return { items: (data.videos || []).map(self._mapVideo), total_pages: parseInt(data.total_pages, 10) || 1 };
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
@@ -2216,9 +2216,11 @@ function _porntrexCards(html) {
         // Forward-only chunk: thumb and title appear AFTER the href in KVS markup
         var chunk = html.slice(m.index, m.index + 800);
 
-        // PornTrex uses data-src="//cdntrex.com/...jpg?v=3" — use [^"?#]+ to strip query string
+        // PornTrex uses data-src="//ptx.cdntrex.com/...jpg?v=3" — strip query string, force https:
+        // http://ptx.cdntrex.com redirects to porntrex.com homepage; TV browsers resolve // as http://
         var thumb = _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.jpe?g)/i) ||
                     _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.(?:webp|png))/i);
+        if (thumb && thumb.charAt(0) === '/' && thumb.charAt(1) === '/') thumb = 'https:' + thumb;
 
         var title = _decodeHtml(
             _attr(chunk, /title="([^"]+)"/) ||
