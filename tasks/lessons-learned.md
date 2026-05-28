@@ -327,3 +327,30 @@ Phase 3 describe block: tizam quality map + best-quality selection; huyamba v-ac
 **`extractStreams` as canonical KVS handler**: three of four KVS-based adapters (perfektdamen, huyamba, tizam after fix) now reduce to `return extractStreams(html)`. Any adapter whose site uses KVS get_file URLs should use `extractStreams` directly — the KVS branch already handles full absolute URLs with query params. Custom per-adapter gfRx patterns are a source of token-stripping bugs.
 
 **Reviewer (self):** zero confirmed findings — both changes are mechanical substitutions with fixtures proving correctness before the code change was written.
+
+
+---
+
+## multi-source-video-fix - Phase 4+5 - eporner XHR API + bigcdn.cc routing - 2026-05-28
+
+**Mode:** full
+**Phase:** Phase 4 - eporner getStream rewrite; Phase 5 - PROXY_URL_2_HOSTS CDN extension
+
+### Phase 4 - eporner XHR API
+
+- Root cause of broken eporner: page HTML has zero direct mp4 URLs. Must use XHR API endpoint (/xhr/video/{id}?hash={computed}) with a hash derived from a 32-char hex value (var EHH = "...") embedded in the page. Hash computation: split hex into 4x8-char chunks, parseInt(chunk,16).toString(36), join.
+- Implementation: replaced page-scrape + extractStreams (always returned empty) with two-step _apiFetch: (1) fetch page, extract EHH via /(?:EHH|hash)\s*[=:]\s*['"]([0-9a-f]{32})['"]/i, compute, (2) XHR fetch, parse sources.mp4 into quality map.
+- Why _apiFetch not cherryFetch: eporner blocks CF datacenter IPs. _apiFetch uses raw fetch() - Lampa TV users have their own IPs, not blocked. Same reason search/browse already work.
+
+### Phase 5 - bigcdn.cc routing
+
+- Added 13 confirmed bigcdn.cc subdomains (s1, s4, s16, s25, s30, s33, s38, s39, s41, s43, s47, s50, s61) to PROXY_URL_2_HOSTS. LeaseWeb NL CDN - Deno proxy may have better routing than CF Worker.
+- No test added for PROXY_URL_2_HOSTS: pure data constant change, verification by inspection sufficient.
+
+### Tests added (4, all green, total 82)
+
+Phase 4 describe block: EHH regex against fixture, hash computation properties, sources.mp4 quality parsing, null sources => empty result.
+
+### Pattern noted
+
+Hash-in-page + XHR + sources: whenever a site uses AJAX authentication, extractStreams is useless (no direct mp4 URLs). Pattern: extract auth token, transform it, call API. Common in adult video platforms that prevent direct URL scraping.

@@ -619,6 +619,68 @@ function lenpornoParseFixed(pjStr) {
   return { url: bestQualityUrl(quality) || best, quality: quality };
 }
 
+// ---- epornerHashComputed (pure helper) -------------------------------------
+function epornerHashComputed(raw) {
+  return [raw.slice(0,8), raw.slice(8,16), raw.slice(16,24), raw.slice(24,32)]
+    .map(function(c) { return parseInt(c, 16).toString(36); }).join('');
+}
+
+// ---- epornerParseSources (pure helper) -------------------------------------
+function epornerParseSources(sourcesObj) {
+  var mp4 = sourcesObj && sourcesObj.mp4;
+  if (!mp4) return { url: '', quality: {} };
+  var quality = {};
+  Object.keys(mp4).forEach(function(lbl) {
+    if (mp4[lbl] && mp4[lbl].src) quality[lbl] = mp4[lbl].src;
+  });
+  return { url: bestQualityUrl(quality), quality: quality };
+}
+
+describe('Phase 4 — eporner XHR API', () => {
+  const HASH_RE = /(?:EHH|hash)\s*[=:]\s*['"]([0-9a-f]{32})['"]/i;
+
+  it('fixture: EHH variable extracted by regex', () => {
+    const html = readFileSync(join(__dirname, 'fixtures', 'eporner-page.html'), 'utf8');
+    const m = HASH_RE.exec(html);
+    expect(m).toBeTruthy();
+    expect(m[1]).toBe('a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6');
+  });
+
+  it('hash computation: 4 chunks each parseInt(hex,16).toString(36)', () => {
+    const raw = 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6';
+    const computed = epornerHashComputed(raw);
+    // Non-empty, lowercase alphanumeric base-36 result
+    expect(computed).toBeTruthy();
+    expect(computed).not.toBe(raw);
+    expect(/^[0-9a-z]+$/.test(computed)).toBe(true);
+    // Deterministic: same input always produces same output
+    expect(computed).toBe(epornerHashComputed(raw));
+    // First chunk: a1b2c3d4 (hex) → base36
+    const firstChunk = parseInt('a1b2c3d4', 16).toString(36);
+    expect(computed.startsWith(firstChunk)).toBe(true);
+  });
+
+  it('sources.mp4 parsing: builds quality map and picks best', () => {
+    const sources = {
+      mp4: {
+        '1080p': { src: 'https://ep.cdn.com/1080.mp4', type: 'video/mp4', default: false },
+        '720p':  { src: 'https://ep.cdn.com/720.mp4',  type: 'video/mp4', default: true  },
+        '480p':  { src: 'https://ep.cdn.com/480.mp4',  type: 'video/mp4', default: false }
+      }
+    };
+    const r = epornerParseSources(sources);
+    expect(r.quality['1080p']).toBe('https://ep.cdn.com/1080.mp4');
+    expect(r.quality['720p']).toBe('https://ep.cdn.com/720.mp4');
+    expect(r.url).toBe('https://ep.cdn.com/1080.mp4');
+  });
+
+  it('sources.mp4 parsing: missing sources → empty result', () => {
+    const r = epornerParseSources(null);
+    expect(r.url).toBe('');
+    expect(Object.keys(r.quality).length).toBe(0);
+  });
+});
+
 describe('Phase 3 — tizam / huyamba / perfektdamen / 24rolika parser fixes', () => {
   it('tizam: extractStreams finds data-res quality map and picks 720p', () => {
     const html = readFileSync(join(__dirname, 'fixtures', 'tizam-page.html'), 'utf8');

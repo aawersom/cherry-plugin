@@ -10,7 +10,15 @@
   var PROXY_URL = 'https://cherry-proxy.aawersom.workers.dev';
   // Secondary proxy on Deno Deploy — used for sites that block Cloudflare datacenter IPs (xnxx, spankbang)
   var PROXY_URL_2 = 'https://cherry-proxy.aawersom.deno.net';
-  var PROXY_URL_2_HOSTS = { 'xnxx.com': 1, 'www.xnxx.com': 1, 'spankbang.com': 1, 'www.spankbang.com': 1 };
+  var PROXY_URL_2_HOSTS = {
+    'xnxx.com': 1, 'www.xnxx.com': 1,
+    'spankbang.com': 1, 'www.spankbang.com': 1,
+    // bigcdn.cc — LeaseWeb NL CDN used by KVS-based sites; 13 confirmed subdomains
+    's1.bigcdn.cc': 1, 's4.bigcdn.cc': 1, 's16.bigcdn.cc': 1, 's25.bigcdn.cc': 1,
+    's30.bigcdn.cc': 1, 's33.bigcdn.cc': 1, 's38.bigcdn.cc': 1, 's39.bigcdn.cc': 1,
+    's41.bigcdn.cc': 1, 's43.bigcdn.cc': 1, 's47.bigcdn.cc': 1, 's50.bigcdn.cc': 1,
+    's61.bigcdn.cc': 1
+  };
 
   function getProxyKey() {
     return Lampa.Storage.get('cherry_proxy_key', '1206');
@@ -1706,13 +1714,29 @@ SOURCES.push({
   },
 
   getStream: function(video) {
-    var pageUrl = 'https://www.eporner.com/hd-porn/' + video.id + '/';
-    return cherryFetch(pageUrl).then(function(html) {
-      var result = extractStreams(html);
-      if (result.url) return result;
-      return { url: 'https://www.eporner.com/embed/' + video.id + '/', quality: {} };
+    var self = this;
+    var id = video.id;
+    var pageUrl = 'https://www.eporner.com/hd-porn/' + id + '/';
+    return self._apiFetch(pageUrl).then(function(html) {
+      var hashM = html.match(/(?:EHH|hash)\s*[=:]\s*['"]([0-9a-f]{32})['"]/i);
+      if (!hashM) throw new Error('eporner: hash not found');
+      var raw = hashM[1];
+      var computed = [raw.slice(0,8), raw.slice(8,16), raw.slice(16,24), raw.slice(24,32)]
+        .map(function(c) { return parseInt(c, 16).toString(36); }).join('');
+      var xhrUrl = 'https://www.eporner.com/xhr/video/' + id +
+        '?hash=' + computed + '&device=generic&domain=www.eporner.com&fallback=false';
+      return self._apiFetch(xhrUrl);
+    }).then(function(text) {
+      var data = JSON.parse(text);
+      var mp4 = data.sources && data.sources.mp4;
+      if (!mp4) return { url: '', quality: {} };
+      var quality = {};
+      Object.keys(mp4).forEach(function(lbl) {
+        if (mp4[lbl] && mp4[lbl].src) quality[lbl] = mp4[lbl].src;
+      });
+      return { url: bestQualityUrl(quality), quality: quality };
     }).catch(function() {
-      return { url: 'https://www.eporner.com/embed/' + video.id + '/', quality: {} };
+      return { url: '', quality: {} };
     });
   }
 });
