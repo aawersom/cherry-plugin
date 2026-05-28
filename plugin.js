@@ -2889,17 +2889,8 @@ SOURCES.push({
 
   getStream: function(video) {
     return cherryFetch(video.url).then(function(html) {
-      // Lampac-verified: src="https://...mp4" type="video/mp4"
-      var m = html.match(/src="(https?:\/\/[^"]+\.mp4)"\s+type="video\/mp4"/);
-      if (m) return { url: m[1], quality: {} };
-
-      // Fallback: tizam.cc CDN (video1/video2/.../videoN)
-      var m2 = html.match(/src="(https?:\/\/video\d*\.tizam\.cc\/[^"]+)"/);
-      if (m2) return { url: m2[1], quality: {} };
-
-      // Last resort
-      var fb = extractStreams(html);
-      return fb.url ? fb : { url: '', quality: {} };
+      var res = extractStreams(html);
+      return res.url ? res : { url: '', quality: {} };
     }).catch(function() { return { url: '', quality: {} }; });
   }
 });
@@ -3306,16 +3297,6 @@ SOURCES.push({
 
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
-            // KVS get_file pattern
-            var gfRx = /get_file\/(\d+\/[^"'\s<>]+\.(?:mp4|m3u8))/g;
-            var found = [];
-            var m;
-            while ((m = gfRx.exec(html)) !== null) {
-                var full = 'https://fuq.huyamba.mobi/get_file/' + m[1];
-                if (found.indexOf(full) === -1) found.push(full);
-            }
-            if (found.length) return _kvsPickBest(found);
-
             return extractStreams(html);
         }).catch(function () { return { url: '', quality: {} }; });
     }

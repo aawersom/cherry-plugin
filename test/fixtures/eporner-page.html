@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head><title>Test Video - Eporner</title></head>
+<body>
+<div id="video-player"></div>
+<script>
+// Eporner embeds a hash used for XHR authentication — no direct mp4 URLs in page HTML.
+// The hash is split into 4×8-char chunks; each chunk is parseInt(chunk,16).toString(36).
+// Endpoint: /xhr/video/{id}?hash={computed}&device=generic&domain=www.eporner.com&fallback=false
+var config = {
+  hash: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+  id: "ABCD1234efg",
+  title: "Test Eporner Video"
+};
+</script>
+</body>
+</html>

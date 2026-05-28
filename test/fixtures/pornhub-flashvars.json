@@ -1,0 +1,9 @@
+{
+  "mediaDefinitions": [
+    {"quality":"1080","videoUrl":"https://ev-h.phncdn.com/videos/202501/01/vid_8675309/1080P_4000K_8675309.mp4?validfrom=1700000000&validto=1700086400&rate=50&burst=200&ip=1.2.3.4&hash=AbCdEfGhIjKlMnOp"},
+    {"quality":"720","videoUrl":"https://ev-h.phncdn.com/videos/202501/01/vid_8675309/720P_2500K_8675309.mp4?validfrom=1700000000&validto=1700086400&rate=50&burst=200&ip=1.2.3.4&hash=QrStUvWxYzAbCdEf"},
+    {"quality":"480","videoUrl":"https://ev-h.phncdn.com/videos/202501/01/vid_8675309/480P_1500K_8675309.mp4?validfrom=1700000000&validto=1700086400&rate=50&burst=200&ip=1.2.3.4&hash=MnOpQrStUvWxYzAb"},
+    {"quality":"240","videoUrl":"https://ev-h.phncdn.com/videos/202501/01/vid_8675309/240P_400K_8675309.mp4?validfrom=1700000000&validto=1700086400&rate=50&burst=200&ip=1.2.3.4&hash=CdEfGhIjKlMnOpQr"},
+    {"quality":"hls","videoUrl":"https://ev-h.phncdn.com/hls/videos/202501/01/vid_8675309/,1080P_4000K,720P_2500K,480P_1500K,_8675309.mp4.urlset/master.m3u8?validfrom=1700000000&validto=1700086400&ip=1.2.3.4&hash=StUvWxYzAbCdEfGh","defaultQuality":1}
+  ]
+}

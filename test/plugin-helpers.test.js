@@ -619,6 +619,58 @@ function lenpornoParseFixed(pjStr) {
   return { url: bestQualityUrl(quality) || best, quality: quality };
 }
 
+describe('Phase 3 — tizam / huyamba / perfektdamen / 24rolika parser fixes', () => {
+  it('tizam: extractStreams finds data-res quality map and picks 720p', () => {
+    const html = readFileSync(join(__dirname, 'fixtures', 'tizam-page.html'), 'utf8');
+    const r = extractStreams(html);
+    expect(r.quality['720']).toMatch(/video\d*\.tizam\.cc.*\.mp4/);
+    expect(r.quality['480']).toMatch(/video\d*\.tizam\.cc.*\.mp4/);
+    expect(bestQualityUrl(r.quality)).toBe(r.quality['720']);
+  });
+
+  it('tizam: extractStreams url is non-empty', () => {
+    const html = readFileSync(join(__dirname, 'fixtures', 'tizam-page.html'), 'utf8');
+    const r = extractStreams(html);
+    expect(r.url).toBeTruthy();
+    expect(r.url).toMatch(/\.mp4$/);
+  });
+
+  it('huyamba: extractStreams preserves ?v-acctoken= in URL (KVS branch)', () => {
+    const html = readFileSync(join(__dirname, 'fixtures', 'huyamba-page.html'), 'utf8');
+    const r = extractStreams(html);
+    expect(r.url).toBeTruthy();
+    expect(r.url).toContain('get_file');
+    expect(r.url).toContain('v-acctoken=');
+  });
+
+  it('huyamba: extractStreams url starts with https://fuq.huyamba.mobi/', () => {
+    const html = readFileSync(join(__dirname, 'fixtures', 'huyamba-page.html'), 'utf8');
+    const r = extractStreams(html);
+    expect(r.url).toMatch(/^https:\/\/fuq\.huyamba\.mobi\//);
+  });
+
+  it('perfektdamen: extractStreams returns 720p as best quality', () => {
+    const html = readFileSync(join(__dirname, 'fixtures', 'perfektdamen-page.html'), 'utf8');
+    const r = extractStreams(html);
+    expect(r.quality['720p']).toMatch(/get_file.*720p/);
+    expect(bestQualityUrl(r.quality)).toBe(r.quality['720p']);
+  });
+
+  it('perfektdamen: quality map has numeric keys (360p, 720p)', () => {
+    const html = readFileSync(join(__dirname, 'fixtures', 'perfektdamen-page.html'), 'utf8');
+    const r = extractStreams(html);
+    expect(r.quality['360p']).toBeDefined();
+    expect(r.quality['720p']).toBeDefined();
+  });
+
+  it('24rolika: extractStreams finds PlayerJS file URL via jwRe', () => {
+    const html = readFileSync(join(__dirname, 'fixtures', '24rolika-page.html'), 'utf8');
+    const r = extractStreams(html);
+    expect(r.url).toBeTruthy();
+    expect(r.url).toMatch(/\.mp4$/);
+  });
+});
+
 describe('Phase 1 — quality map fixes', () => {
   it('porndig: 3-quality iframe → url is highest quality', () => {
     const html = readFileSync(join(__dirname, 'fixtures', 'porndig-iframe.html'), 'utf8');

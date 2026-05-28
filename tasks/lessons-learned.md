@@ -298,3 +298,32 @@ All three reviewers independently flagged the **copy-proliferation / drift risk*
 
 - **Fixture files must be exercised by at least one test that reads them from disk**: adding a fixture as "documentation" without a test that reads it creates orphaned assets. The code-test-writer should default to reading every fixture file in at least one test path — not just using hardcoded string equivalents.
 - **Approve verdict + single nit = one apply pass before commit**: the nit was a genuine test coverage gap, not cosmetic. Even low-severity fixture gaps hide real behavior — a fixture that simulates the real adapter regex chain is more valuable than an inline string copy.
+
+---
+
+## multi-source-video-fix · Phase 2 Fixtures + Phase 3 Parser Fixes · 2026-05-28
+
+**Mode:** full  
+**Phase:** Phase 2 — fixture collection + investigation; Phase 3 — tizam/huyamba getStream simplification
+
+### Phase 2 findings (no code changes — investigation only)
+
+- **Tizam**: real HTML has `<source src="..." type="video/mp4" data-res="480/720">`. `extractStreams` via `srcRe2` already captures `data-res` as quality key (regex matches `res=` as substring of `data-res=`). The current Pattern1 path returns `{url, quality:{}}` — correct URL but loses quality data.
+- **PerfektDamen**: `extractStreams(html)` already called. Works: returns `{360p, mp4, 720p, Auto}` quality map, `bestQualityUrl` picks 720p. No fix needed.
+- **Huyamba** (confirmed bug): `gfRx` captures only path-relative portion of KVS URL, strips `?v-acctoken=...`, then prepends hardcoded domain. Token is lost → 403. `extractStreams` KVS branch (`/https?:\/\/[^"'\s]+get_file[^"'\s]+\.mp4[^"'\s]*/g`) captures full absolute URL including query string — clean fix.
+- **24Rolika**: uses `new Playerjs({file:"URL"})` not `jwplayer(...).setup(...)`. Custom `jwRx` doesn't match, but `extractStreams` fallback `jwRe` catches it correctly. No fix needed.
+
+### Phase 3 code changes applied
+
+- **Tizam getStream**: removed Pattern1+Pattern2 manual branches; replaced with `return extractStreams(html)`. Gains multi-quality map (480+720) instead of single-URL-no-quality return.
+- **Huyamba getStream**: removed gfRx block (13 lines) that stripped `?v-acctoken=`; replaced with `return extractStreams(html)`. Token preserved; stream now returns 200 instead of 403.
+
+### Tests added (7, all green, total 78)
+
+Phase 3 describe block: tizam quality map + best-quality selection; huyamba v-acctoken preservation + domain prefix; perfektdamen 720p selection; 24rolika PlayerJS URL extraction.
+
+### Pattern noted
+
+**`extractStreams` as canonical KVS handler**: three of four KVS-based adapters (perfektdamen, huyamba, tizam after fix) now reduce to `return extractStreams(html)`. Any adapter whose site uses KVS get_file URLs should use `extractStreams` directly — the KVS branch already handles full absolute URLs with query params. Custom per-adapter gfRx patterns are a source of token-stripping bugs.
+
+**Reviewer (self):** zero confirmed findings — both changes are mechanical substitutions with fixtures proving correctness before the code change was written.
