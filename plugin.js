@@ -13,6 +13,9 @@
   var PROXY_URL_2_HOSTS = {
     'xnxx.com': 1, 'www.xnxx.com': 1,
     'spankbang.com': 1, 'www.spankbang.com': 1,
+    // pornhub Webmasters API + youjizz homepage rate-limit CF datacenter IPs
+    'www.pornhub.com': 1,
+    'www.youjizz.com': 1, 'youjizz.com': 1,
     // tizam.org — rate-limits rapid sequential requests from CF datacenter IPs
     'tv4.tizam.org': 1,
     // bigcdn.cc — LeaseWeb NL CDN used by KVS-based sites; 13 confirmed subdomains
