@@ -277,3 +277,24 @@ All three reviewers independently flagged the **copy-proliferation / drift risk*
 - **jwRe + sources-array interaction**: after sources-array populates `quality`, the jwRe loop below still fires and sets `url` to the first sources-array file value. This is spec-acceptable but must be documented in a test. Callers expecting `url` to come from `bestQualityUrl(quality)` will be surprised.
 - **Three-way convergence on findMatchingBracket mixed-bracket design**: all three reviewers independently flagged the same structural concern. High signal. When a design choice is non-obvious enough to confuse three reviewers, it needs a comment — not a fix.
 - **Arch docs need updating on same commit as code**: docs/CHERRY.md adapter count and status table went stale on the same commit that deleted gayporntube. The arch reviewer caught it; the code-writer missed it. Checklist item: whenever an adapter is added/removed, update docs/CHERRY.md in the same commit.
+
+---
+
+### multi-source-video-fix — Phase 1 Code Review Batch (2026-05-28)
+
+**Task:** Fix video playback for 8 broken sources, quality selection for 3, remove gayporntube, harden E2E.
+**Mode:** full
+**Stage:** Phase 1 — Quality map fixes for porndig, ebun, lenporno (3 adapters; 1 reviewer: tech; verdict: approve with one nit)
+
+**Key findings applied:**
+
+| # | Severity | Reviewer | Finding | Fix |
+|---|---|---|---|---|
+| 1 | Nit | tech | lenporno fixture file (`test/fixtures/lenporno-player.html`) was never read by any Phase 1 test — orphaned fixture | Added 5th lenporno test: reads fixture via `readFileSync`, runs `fileM` regex (same as real adapter), validates `lenpornoParseFixed` output: `quality['720p']` correct, no `mp4` key |
+
+**Findings parked:** none.
+
+**Pattern notes for future tasks:**
+
+- **Fixture files must be exercised by at least one test that reads them from disk**: adding a fixture as "documentation" without a test that reads it creates orphaned assets. The code-test-writer should default to reading every fixture file in at least one test path — not just using hardcoded string equivalents.
+- **Approve verdict + single nit = one apply pass before commit**: the nit was a genuine test coverage gap, not cosmetic. Even low-severity fixture gaps hide real behavior — a fixture that simulates the real adapter regex chain is more valuable than an inline string copy.

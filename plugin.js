@@ -2744,7 +2744,12 @@ SOURCES.push({
             if (m) {
                 return cherryFetch(m[1]).then(function (ihtml) {
                     var result = extractStreams(ihtml);
-                    return result.url ? result : extractStreams(html);
+                    if (result.url || Object.keys(result.quality).length) {
+                        var qKeys = Object.keys(result.quality);
+                        var best  = qKeys.length ? bestQualityUrl(result.quality) : result.url;
+                        return { url: best, quality: result.quality };
+                    }
+                    return extractStreams(html);
                 }).catch(function () { return extractStreams(html); });
             }
             return extractStreams(html);
@@ -3382,7 +3387,12 @@ SOURCES.push({
             if (iframeM) {
                 return cherryFetch(iframeM[1]).then(function (ihtml) {
                     var result = extractStreams(ihtml);
-                    return result.url ? result : { url: '', quality: {} };
+                    if (result.url || Object.keys(result.quality).length) {
+                        var qKeys = Object.keys(result.quality);
+                        var best  = qKeys.length ? bestQualityUrl(result.quality) : result.url;
+                        return { url: best, quality: result.quality };
+                    }
+                    return { url: '', quality: {} };
                 }).catch(function () { return { url: '', quality: {} }; });
             }
             return extractStreams(html);
@@ -3463,9 +3473,13 @@ SOURCES.push({
                 var pjRe = /(?:\[([^\]]+)\])?(https?:\/\/[^,\[\]<>\s"']+\.mp4)/gi;
                 var m;
                 while ((m = pjRe.exec(pjStr)) !== null) {
-                    var lbl = m[1] || (/[_-](\d+p)/i.exec(m[2]) || ['', 'mp4'])[1];
-                    quality[lbl] = m[2];
-                    if (!best) best = m[2];
+                    var lbl = m[1] ? m[1].trim() : null;
+                    if (lbl && /^\d{3,4}p?$/i.test(lbl)) {
+                        quality[lbl] = m[2];
+                        if (!best) best = m[2];
+                    } else {
+                        if (!best) best = m[2];
+                    }
                 }
                 if (best) return { url: bestQualityUrl(quality) || best, quality: quality };
             }

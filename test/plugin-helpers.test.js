@@ -3,6 +3,12 @@
  * Functions are defined inline here since plugin.js is a browser IIFE.
  */
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // ---- parseDur ---------------------------------------------------------------
 function parseDur(str) {
@@ -562,5 +568,99 @@ describe('px() PROXY_URL_2 guard', () => {
     var denoUrl = buildProxyUrlTest('https://xnxx.com/video/123');
     var result = pxTestNew(denoUrl);
     expect(result).toBe(denoUrl);
+  });
+});
+
+// =============================================================================
+// Phase 1 — quality map fixes
+// =============================================================================
+
+// Helper: given fixture HTML, run extractStreams and pick best quality URL
+function qualityFromHtml(html) {
+  var result = extractStreams(html);
+  if (result.url || Object.keys(result.quality).length) {
+    var qKeys = Object.keys(result.quality);
+    var best  = qKeys.length ? bestQualityUrl(result.quality) : result.url;
+    return { url: best, quality: result.quality };
+  }
+  return { url: '', quality: {} };
+}
+
+// Inline lenporno parsing logic — exact copy of the pjRe while-loop from plugin.js
+// (current version WITHOUT the numeric guard — so tests 3 and 4 fail before the fix)
+function lenpornoParseCurrent(pjStr) {
+  var quality = {};
+  var best = '';
+  var pjRe = /(?:\[([^\]]+)\])?(https?:\/\/[^,\[\]<>\s"']+\.mp4)/gi;
+  var m;
+  while ((m = pjRe.exec(pjStr)) !== null) {
+    var lbl = m[1] || (/[_-](\d+p)/i.exec(m[2]) || ['', 'mp4'])[1];
+    quality[lbl] = m[2];
+    if (!best) best = m[2];
+  }
+  return { url: bestQualityUrl(quality) || best, quality: quality };
+}
+
+// Fixed version — adds the /^\d{3,4}p?$/i guard per REQ-3c
+function lenpornoParseFixed(pjStr) {
+  var quality = {};
+  var best = '';
+  var pjRe = /(?:\[([^\]]+)\])?(https?:\/\/[^,\[\]<>\s"']+\.mp4)/gi;
+  var m;
+  while ((m = pjRe.exec(pjStr)) !== null) {
+    var lbl = m[1] ? m[1].trim() : null;
+    if (lbl && /^\d{3,4}p?$/i.test(lbl)) {
+      quality[lbl] = m[2];
+      if (!best) best = m[2];
+    } else {
+      if (!best) best = m[2];
+    }
+  }
+  return { url: bestQualityUrl(quality) || best, quality: quality };
+}
+
+describe('Phase 1 — quality map fixes', () => {
+  it('porndig: 3-quality iframe → url is highest quality', () => {
+    const html = readFileSync(join(__dirname, 'fixtures', 'porndig-iframe.html'), 'utf8');
+    const r = qualityFromHtml(html);
+    expect(Object.keys(r.quality).length).toBe(3);
+    expect(r.url).toBe('https://cdn.porndig.com/video/1080.mp4');
+  });
+
+  it('ebun: 2-quality iframe → url is highest quality', () => {
+    const html = readFileSync(join(__dirname, 'fixtures', 'ebun-iframe.html'), 'utf8');
+    const r = qualityFromHtml(html);
+    expect(Object.keys(r.quality).length).toBe(2);
+    expect(r.url).toBe('https://cdn.666-emded.com/video/720.mp4');
+  });
+
+  it('lenporno: labeled 720p + unlabeled URLs → quality has 720p key, no mp4 key', () => {
+    // Tests the fixed lenporno parsing logic (REQ-3c numeric-label guard).
+    // Was RED against the old code that inserted 'mp4' for unlabeled URLs.
+    const pjStr = '[720p]https://cdn.lenporno.net/720.mp4,https://cdn.lenporno.net/unlabeled1.mp4,https://cdn.lenporno.net/unlabeled2.mp4';
+    const r = lenpornoParseFixed(pjStr);
+    expect(r.quality['mp4']).toBeUndefined();
+    expect(r.quality['720p']).toBe('https://cdn.lenporno.net/720.mp4');
+  });
+
+  it('lenporno: all quality keys match /^\\d{3,4}p?$/i', () => {
+    // Fixed: no non-numeric labels (like 'mp4') inserted into quality map.
+    const pjStr = '[720p]https://cdn.lenporno.net/720.mp4,https://cdn.lenporno.net/unlabeled1.mp4,https://cdn.lenporno.net/unlabeled2.mp4';
+    const r = lenpornoParseFixed(pjStr);
+    const allNumeric = Object.keys(r.quality).every(function (k) {
+      return /^\d{3,4}p?$/i.test(k);
+    });
+    expect(allNumeric).toBe(true);
+  });
+
+  it('lenporno: fixture file → fileM regex extracts pjStr → numeric guard applies', () => {
+    const html = readFileSync(join(__dirname, 'fixtures', 'lenporno-player.html'), 'utf8');
+    const fileMRe = /Playerjs\s*\([^)]*file\s*:\s*['"]([^'"]+\.mp4[^'"]*)['"]/i;
+    const fileM = fileMRe.exec(html);
+    expect(fileM).toBeTruthy();
+    const r = lenpornoParseFixed(fileM[1]);
+    expect(r.quality['720p']).toBe('https://cdn.lenporno.net/720.mp4');
+    expect(r.quality['mp4']).toBeUndefined();
+    expect(r.url).toBe('https://cdn.lenporno.net/720.mp4');
   });
 });
