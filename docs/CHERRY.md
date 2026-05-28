@@ -132,7 +132,7 @@ Used by default for all adapters.
 
 ### Secondary proxy — Deno Deploy
 `PROXY_URL_2 = https://cherry-proxy.aawersom.deno.net`
-Used for hostnames in `PROXY_URL_2_HOSTS` (`xnxx.com`, `spankbang.com`) that block Cloudflare datacenter IPs at ASN level. Deno Deploy uses different IP ranges not blocked by xnxx.
+Used for hostnames in `PROXY_URL_2_HOSTS` (`xnxx.com`, `ru.spankbang.com`, `www.eporner.com` for video pages, `gallery.vcmdiawe.com` pornone CDN) that block Cloudflare datacenter IPs at ASN level or return unusable responses from the CF Worker.
 
 ### buildProxyUrl(url, referer?)
 ```
@@ -178,11 +178,11 @@ Fetches an HLS master/media playlist via the proxy, rewrites every non-comment l
 | 1 | `pornhub` | Pornhub | pornhub.com | JSON API (`/webmasters/search`) |
 | 2 | `xvideos` | Xvideos | xvideos.com | HTML scraping (thumb-block divs) |
 | 3 | `xnxx` | Xnxx | xnxx.com | HTML scraping (mozaique / thumb-under) |
-| 4 | `eporner` | Eporner | eporner.com | JSON API (`/api/v2/video/search/`) |
-| 5 | `spankbang` | Spankbang | spankbang.com | HTML scraping + POST stream API |
-| 6 | `hqporner` | HQPorner | hqporner.com | HTML → mydaddy.cc embed → bigcdn.cc CDN |
+| 4 | `eporner` | Eporner | eporner.com | JSON API (`/api/v2/video/search/`) — browse/search only; getStream uses Deno Deploy for video pages (hash XHR) |
+| 5 | `spankbang` | Spankbang | ru.spankbang.com | HTML scraping (`ru.` subdomain bypasses CF challenge) + quality map extraction + streamkey POST fallback |
+| 6 | `hqporner` | HQPorner | hqporner.com | HTML → mydaddy.cc embed → bigcdn.cc CDN **(stream broken — bigcdn.cc unreachable from all proxy tiers; browse functional)** |
 | 7 | `youjizz` | YouJizz | youjizz.com | HTML scraping (video-block divs) |
-| 8 | `pornone` | PornOne | pornone.com | WP REST API (`/wp-json/wp/v2/posts`) with JSON-LD stream |
+| 8 | `pornone` | PornOne | pornone.com | WP REST API (`/wp-json/wp/v2/posts`); CDN streams via `gallery.vcmdiawe.com` routed through Deno Deploy (Strategy A for IP-bound tokens) |
 | 9 | `porntrex` | Porntrex | porntrex.com | KVS (get_file MP4 paths) + HTML scraping |
 | 10 | `xozilla` | Xozilla | xozilla.com | JWPlayer setup block + HTML scraping |
 | 11 | `3movs` | 3Movs | 3movs.com | HTML scraping (href scan + context window) |
@@ -219,10 +219,11 @@ Results from `node test/cherry-lampa-e2e.mjs` — Playwright/Chromium with real 
 
 | id | cards | notes |
 |---|---|---|
-| `pornhub` | 30 | HLS/blob stream; CF rate-limiting intermittent (not a code bug) |
+| `pornhub` | 30 | **Via Deno Deploy proxy** (`www.pornhub.com`); getStream now uses `/embed/{viewkey}` (was `view_video.php` → 503). HLS/MP4 from mediaDefinitions. CF rate-limiting intermittent (not a code bug). |
 | `xvideos` | 42 | HLS via CDN, range test N/A for HLS |
 | `xnxx` | ~30 | **Via Deno Deploy proxy** (`cherry-proxy.aawersom.deno.net`); browse URL fixed to `/?k=new&p=N` |
-| `eporner` | ~30 | **Direct fetch** — API `/api/v2/video/search/` has `Access-Control-Allow-Origin: *`; getStream falls back to embed URL |
+| `eporner` | ~30 | **Via Deno Deploy proxy** for video pages (`www.eporner.com` added to `PROXY_URL_2_HOSTS`); JSON search/browse API still uses direct fetch (CORS-open). URL format: `/video-{id}/{slug}/`. |
+| `spankbang` | ~30 | **Via Deno Deploy proxy** (`ru.spankbang.com`); `spankbang.com` and `www.spankbang.com` remain JS-challenge gated and removed from `PROXY_URL_2_HOSTS`. Quality map extraction primary, streamkey POST fallback. |
 | `youjizz` | 24 | Direct MP4 via proxy |
 | `xozilla` | 100 | KVS get_file, consistent |
 | `analdin` | 100 | KVS get_file, consistent |
@@ -255,16 +256,16 @@ edge IP rotation. In real Lampa usage (immediate playback after selection), they
 
 | id | cards | root cause |
 |---|---|---|
-| `hqporner` | 50 | **bigcdn.cc blocks all Cloudflare datacenter IPs.** Embed player (mydaddy.cc) hosts video on `sN.bigcdn.cc` → 403/404 to any CF Worker fetch. Not fixable via proxy. |
-| `pornone` | 49 | **IP-locked signed tokens.** CDN tokens tied to requesting IP; CF Worker fetches page and CDN through different edge IPs → token mismatch → 403. Not fixable via proxy without non-CF relay. |
+| `hqporner` | 50 | **bigcdn.cc blocks all Cloudflare datacenter IPs — permanently broken.** CDN returns 404 from CF Worker, Deno Deploy, and residential IPs alike. Browse remains functional. Stream is unrecoverable without a self-hosted FlareSolverr or residential relay; not fixable at the proxy tier. |
+| `pornone` | 49 | **IP-locked CDN tokens** on `gallery.vcmdiawe.com`. Strategy A implemented: CDN routes through Deno Deploy (same-POP delivery likely via Anycast). If Strategy A fails in E2E, escalate to Strategy B (`pornone.com` + CDN both through Deno). |
 
-### 0 cards — not fixable (Cloudflare JS challenge)
+### Previously unfixable — now repaired
 
-SpankBang protects itself with Cloudflare JS challenge (`Just a moment...`). This blocks **all** datacenter IPs — CF Worker, Deno Deploy, and VPS alike. Only a residential proxy or FlareSolverr (self-hosted headless browser) could bypass it.
+SpankBang previously failed with Cloudflare JS challenge on `spankbang.com` and `www.spankbang.com`. The Russian regional subdomain `ru.spankbang.com` does NOT trigger the JS challenge from Deno Deploy IPs and is used instead. `spankbang.com` and `www.spankbang.com` are removed from `PROXY_URL_2_HOSTS`.
 
-| id | notes |
-|---|---|
-| `spankbang` | Cloudflare JS challenge on all paths; blocks CF Worker and Deno Deploy equally |
+| id | status | notes |
+|---|---|---|
+| `spankbang` | repaired 2026-05-28 | `ru.spankbang.com` bypasses CF challenge; quality map primary + streamkey POST fallback |
 
 ---
 

@@ -29,10 +29,12 @@ const PROXY_BASE_2     = 'https://cherry-proxy.aawersom.deno.net';
 // Mirror of plugin.js PROXY_URL_2_HOSTS — sync-check assertion in plugin-helpers.test.js enforces parity.
 const PROXY_URL_2_HOSTS = {
   'xnxx.com': 1, 'www.xnxx.com': 1,
-  'spankbang.com': 1, 'www.spankbang.com': 1,
+  'ru.spankbang.com': 1,
   'www.pornhub.com': 1,
   'www.youjizz.com': 1, 'youjizz.com': 1,
   'tv4.tizam.org': 1,
+  'www.eporner.com': 1,
+  'gallery.vcmdiawe.com': 1, 'galleryn2.vcmdiawe.com': 1,
   's1.bigcdn.cc': 1, 's4.bigcdn.cc': 1, 's16.bigcdn.cc': 1, 's25.bigcdn.cc': 1,
   's30.bigcdn.cc': 1, 's33.bigcdn.cc': 1, 's38.bigcdn.cc': 1, 's39.bigcdn.cc': 1,
   's41.bigcdn.cc': 1, 's43.bigcdn.cc': 1, 's47.bigcdn.cc': 1, 's50.bigcdn.cc': 1,
@@ -647,10 +649,10 @@ function evaluateVerdict(sourcesLength, browseResults, streamResults, rangeVideo
 
   // Check 2: idempotency — verified at bootstrap (re-injection returned same count)
 
-  // Check 3: Tier D returns 0 cards (warn if > 0, do not fail)
+  // Check 3: Tier D — warn if cards > 0 (positive improvement), do not fail
   for (const id of TIERS.D) {
     const r = browseResults.find(x => x.id === id);
-    if (r && r.cardsCount > 0) warnings.push(`WARN: ${id} (Tier D) returned ${r.cardsCount} cards — expected 0`);
+    if (r && r.cardsCount > 0) warnings.push(`WARN: ${id} (Tier D) returned ${r.cardsCount} cards — positive improvement`);
   }
 
   // Check 4: Tier C browse >= 1
@@ -805,9 +807,9 @@ function printSummary(sourcesLength, browseResults, streamResults, rangeVideoRes
 
   console.log('\n[KNOWN LIMITATION] hqporner: bigcdn.cc blocks all CF datacenter IPs — video fail expected');
   console.log('[KNOWN LIMITATION] pornone: IP-locked CDN tokens (edge IP rotation) — video fail expected');
-  console.log('[KNOWN LIMITATION] xnxx: CF IP bot-block — 0 cards expected');
-  console.log('[KNOWN LIMITATION] eporner: CF IP bot-block — 0 cards expected');
-  console.log('[KNOWN LIMITATION] spankbang: CF IP bot-block — 0 cards expected');
+  console.log('[KNOWN LIMITATION] xnxx: routed via Deno (xnxx.com in PROXY_URL_2_HOSTS) — cards expected');
+  console.log('[KNOWN LIMITATION] eporner: routed via Deno (eporner.com in PROXY_URL_2_HOSTS) — cards expected');
+  console.log('[KNOWN LIMITATION] spankbang: ru.spankbang.com via Deno — cards expected');
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────

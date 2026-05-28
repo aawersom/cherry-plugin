@@ -8,16 +8,21 @@
   // CONFIG — user sets these after deploying their proxy
   // ============================================================
   var PROXY_URL = 'https://cherry-proxy.aawersom.workers.dev';
-  // Secondary proxy on Deno Deploy — used for sites that block Cloudflare datacenter IPs (xnxx, spankbang)
+  // Secondary proxy on Deno Deploy — used for sites that block Cloudflare datacenter IPs (xnxx, ru.spankbang.com, eporner video pages)
   var PROXY_URL_2 = 'https://cherry-proxy.aawersom.deno.net';
   var PROXY_URL_2_HOSTS = {
     'xnxx.com': 1, 'www.xnxx.com': 1,
-    'spankbang.com': 1, 'www.spankbang.com': 1,
+    // ru.spankbang.com has lower CF security level than www — may break if site enables Bot Fight Mode
+    'ru.spankbang.com': 1,
     // pornhub Webmasters API + youjizz homepage rate-limit CF datacenter IPs
     'www.pornhub.com': 1,
     'www.youjizz.com': 1, 'youjizz.com': 1,
     // tizam.org — rate-limits rapid sequential requests from CF datacenter IPs
     'tv4.tizam.org': 1,
+    // eporner.com — CF Worker returns 369B obfuscated JS redirect for video pages; Deno returns real page
+    'www.eporner.com': 1,
+    // pornone CDN IP-bound tokens — routes via Deno; same-POP delivery is likely (Anycast) but not guaranteed
+    'gallery.vcmdiawe.com': 1, 'galleryn2.vcmdiawe.com': 1,
     // bigcdn.cc — LeaseWeb NL CDN used by KVS-based sites; 13 confirmed subdomains
     's1.bigcdn.cc': 1, 's4.bigcdn.cc': 1, 's16.bigcdn.cc': 1, 's25.bigcdn.cc': 1,
     's30.bigcdn.cc': 1, 's33.bigcdn.cc': 1, 's38.bigcdn.cc': 1, 's39.bigcdn.cc': 1,
@@ -1436,22 +1441,23 @@ SOURCES.push({
   },
 
   getStream: function(video) {
-    return cherryFetch(video.url).then(function(html) {
-      var fvMatch = html.match(/var\s+flashvars_\d+\s*=\s*(\{[\s\S]+?\});\s*\n/) ||
-                   html.match(/var\s+flashvars_\d+\s*=\s*(\{[\s\S]+?\});/);
+    var pageUrl = video.url;
+    if (!pageUrl) return Promise.resolve({ url: '', quality: {} });
+
+    return cherryFetch(pageUrl).then(function(html) {
+      var fvMatch = html.match(/var\s+flashvars_\d+\s*=\s*(\{[\s\S]+?\});\s*\n/);
       if (!fvMatch) return { url: '', quality: {} };
 
       var flashvars;
       try { flashvars = JSON.parse(fvMatch[1]); } catch (e) { return { url: '', quality: {} }; }
 
       var defs = flashvars.mediaDefinitions || [];
-      var hlsUrls = {};   // { "1080p": "https://...m3u8" }
-      var mp4Urls = {};   // { "1080p": "https://...mp4"  }
+      var hlsUrls = {};
+      var mp4Urls = {};
 
       defs.forEach(function(def) {
         var qNum = parseInt(def.quality, 10) || 0;
         if (!qNum) return;
-        // Clean escaped slashes that Pornhub embeds in JSON strings
         var vUrl = (def.videoUrl || '').replace(/\\\//g, '/').replace(/\/\/\//g, '//');
         if (!vUrl) return;
         var label = def.quality + 'p';
@@ -1459,12 +1465,10 @@ SOURCES.push({
         else if (def.format === 'mp4') mp4Urls[label] = vUrl;
       });
 
-      // Prefer MP4 (no CORS issue with HLS segments).
       if (Object.keys(mp4Urls).length) {
         return { url: bestQualityUrl(mp4Urls), quality: mp4Urls };
       }
 
-      // HLS only: proxy-rewrite each quality m3u8 to bypass CDN CORS.
       if (Object.keys(hlsUrls).length) {
         var labels = Object.keys(hlsUrls);
         return Promise.all(labels.map(function(lbl) {
@@ -1677,7 +1681,8 @@ SOURCES.push({
   host: 'eporner.com',
 
   _apiFetch: function(url) {
-    // eporner API supports Access-Control-Allow-Origin: * — direct fetch bypasses CF datacenter IP block
+    // eporner JSON search/browse API has Access-Control-Allow-Origin: * — direct fetch is safe here.
+    // Do NOT use for HTML page fetches (video pages, XHR endpoint) — use cherryFetch() for those.
     return fetch(url).then(function(r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.text();
@@ -1690,7 +1695,7 @@ SOURCES.push({
       source: 'eporner',
       title: v.title || '',
       thumb: (v.default_thumb && v.default_thumb.src) ? v.default_thumb.src : '',
-      url: v.url || ('https://www.eporner.com/hd-porn/' + v.id + '/'),
+      url: v.url || ('https://www.eporner.com/video-' + v.id + '/'),
       duration: parseInt(v.length_sec, 10) || 0,
       views: parseInt(v.views, 10) || 0
     };
@@ -1719,18 +1724,17 @@ SOURCES.push({
   },
 
   getStream: function(video) {
-    var self = this;
-    var id = video.id;
-    var pageUrl = 'https://www.eporner.com/hd-porn/' + id + '/';
-    return self._apiFetch(pageUrl).then(function(html) {
+    var pageUrl = video.url;
+    if (!pageUrl) return Promise.resolve({ url: '', quality: {} });
+    return cherryFetch(pageUrl).then(function(html) {
       var hashM = html.match(/(?:EHH|hash)\s*[=:]\s*['"]([0-9a-f]{32})['"]/i);
       if (!hashM) throw new Error('eporner: hash not found');
       var raw = hashM[1];
       var computed = [raw.slice(0,8), raw.slice(8,16), raw.slice(16,24), raw.slice(24,32)]
         .map(function(c) { return parseInt(c, 16).toString(36); }).join('');
-      var xhrUrl = 'https://www.eporner.com/xhr/video/' + id +
+      var xhrUrl = 'https://www.eporner.com/xhr/video/' + video.id +
         '?hash=' + computed + '&device=generic&domain=www.eporner.com&fallback=false';
-      return self._apiFetch(xhrUrl);
+      return cherryFetch(xhrUrl);
     }).then(function(text) {
       var data = JSON.parse(text);
       var mp4 = data.sources && data.sources.mp4;
@@ -1750,20 +1754,22 @@ SOURCES.push({
 SOURCES.push({
   id: 'spankbang',
   name: 'Spankbang',
-  host: 'spankbang.com',
+  host: 'ru.spankbang.com',
 
   _parseCards: function(html) {
     var items = [];
-    var blocks = html.split(/<div[^>]+class="[^"]*video[_-]item[^"]*"/);
+    var blocks = html.split(/<div[^>]+class="[^"]*video-item[^"]*"/);
     for (var i = 1; i < blocks.length; i++) {
       var block = blocks[i];
       // href pattern: /{id}/video/
       var hrefMatch = block.match(/href="\/([\w-]+)\/video\//);
       if (!hrefMatch) continue;
       var id = hrefMatch[1];
-      var videoUrl = 'https://spankbang.com/' + id + '/video/';
+      var videoUrl = 'https://ru.spankbang.com/' + id + '/video/';
 
-      var thumbMatch = block.match(/data-src="([^"]+)"/) || block.match(/src="([^"]+\.jpg[^"]*)"/);
+      var thumbMatch = block.match(/data-src="([^"]+)"/) ||
+                       block.match(/src="(https:\/\/tbi\.sb-cd\.com\/[^"]+)"/) ||
+                       block.match(/src="([^"]+\.(?:jpg|webp|jpeg)[^"]*)"/);
       var thumb = thumbMatch ? thumbMatch[1] : '';
 
       // Title: class with "n" or similar label
@@ -1807,7 +1813,7 @@ SOURCES.push({
     var self = this;
     var p = page || 1;
     var q = encodeURIComponent(query);
-    var url = 'https://spankbang.com/s/' + q + '/' + p + '/';
+    var url = 'https://ru.spankbang.com/s/' + q + '/' + p + '/';
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html);
       var total = self._parseTotalPages(html);
@@ -1818,7 +1824,7 @@ SOURCES.push({
   browse: function(category, page) {
     var self = this;
     var p = page || 1;
-    var url = 'https://spankbang.com/new/' + p + '/';
+    var url = 'https://ru.spankbang.com/new/' + p + '/';
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html);
       var total = self._parseTotalPages(html);
@@ -1828,25 +1834,38 @@ SOURCES.push({
 
   getStream: function(video) {
     return cherryFetch(video.url).then(function(html) {
-      // Phase 1: try streamkey → POST API
+      // Phase 1 (PRIMARY): quality map JS literal
+      var qMap = {};
+      var qRe = /'([0-9]+(?:p|k))'\s*:\s*\['(https?:\/\/[^']+)'/gi;
+      var qm;
+      while ((qm = qRe.exec(html)) !== null) {
+        qMap[qm[1]] = qm[2];
+      }
+      if (Object.keys(qMap).length) {
+        return { url: bestQualityUrl(qMap), quality: qMap };
+      }
+
+      // Phase 2 (FALLBACK): streamkey POST
       var skMatch = html.match(/data-streamkey="([^"]+)"/);
       if (skMatch) {
         var streamkey = skMatch[1];
         return cherryPost(
-          'https://spankbang.com/api/videos/stream',
+          'https://ru.spankbang.com/api/videos/stream',
           'id=' + streamkey + '&data=0'
         ).then(function(text) {
           var data;
-          try { data = JSON.parse(text); } catch (e) { return { url: '', quality: {} }; }
+          try { data = JSON.parse(text); } catch (e) { return extractStreams(html); }
           var q = {};
           Object.keys(data).forEach(function(k) {
             if (typeof data[k] === 'string' && data[k].indexOf('http') === 0) q[k] = data[k];
           });
-          var best = q['1080p'] || q['720p'] || q[Object.keys(q)[0]] || '';
-          return { url: best, quality: q };
+          var best = bestQualityUrl(q);
+          if (best) return { url: best, quality: q };
+          return extractStreams(html);
         }).catch(function() { return extractStreams(html); });
       }
-      // Phase 2: fallback extractStreams
+
+      // Phase 3: generic extractStreams
       return extractStreams(html);
     }).catch(function() { return { url: '', quality: {} }; });
   }
