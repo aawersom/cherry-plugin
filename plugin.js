@@ -259,6 +259,7 @@
         if (!u) return u;
         if (u.indexOf('blob:') === 0) return u;
         if (u.indexOf(PROXY_URL) === 0) return u; // already proxied with custom referer — skip
+        if (PROXY_URL_2 && u.indexOf(PROXY_URL_2) === 0) return u; // also skip Deno-proxied URLs
         // Normalize protocol-relative URLs (e.g. YouJizz returns //cdne-mobile.youjizz.com/...)
         if (u.indexOf('//') === 0) u = 'https:' + u;
         return buildProxyUrl(u);
@@ -1223,6 +1224,52 @@ function extractStreams(html) {
   while ((m = srcRe.exec(html)) !== null) quality[m[2]] = m[1];
   var srcRe2 = /<source\s[^>]*(?:res|label|title)="([^"]+)"[^>]*src="([^"]+)"/gi;
   while ((m = srcRe2.exec(html)) !== null) quality[m[1]] = m[2];
+  // JWPlayer sources:[...] array multi-quality branch
+  function findMatchingBracket(str, openIdx, openCh, closeCh) {
+    var depth = 0, inStr = false, strCh = '';
+    for (var i = openIdx; i < str.length; i++) {
+      var c = str[i];
+      if (inStr) {
+        if (c === strCh) {
+          var bs = 0;
+          for (var j = i - 1; j >= 0 && str[j] === '\\'; j--) bs++;
+          if (bs % 2 === 0) inStr = false;
+        }
+        continue;
+      }
+      if (c === '"' || c === "'") { inStr = true; strCh = c; continue; }
+      // Track depth for both bracket types — handles mixed [{...}, {...}] nesting
+      if (c === '{' || c === '[') { depth++; continue; }
+      if (c === closeCh || c === '}' || c === ']') {
+        if (--depth === 0) return i;
+      }
+    }
+    return -1;
+  }
+  var srcArrayM = /sources\s*:\s*\[/i.exec(html);
+  if (srcArrayM) {
+    var arrOpen = html.indexOf('[', srcArrayM.index + srcArrayM[0].length - 1);
+    if (arrOpen !== -1) {
+      var arrClose = findMatchingBracket(html, arrOpen, '[', ']');
+      if (arrClose !== -1) {
+        var block = html.slice(arrOpen + 1, arrClose);
+        var fileRe2  = /['"]file['"]\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))['"]/i;
+        var labelRe2 = /['"]label['"]\s*:\s*['"]([^'"]+)['"]/i;
+        var bi = 0;
+        while (bi < block.length) {
+          var objStart = block.indexOf('{', bi);
+          if (objStart === -1) break;
+          var objEnd = findMatchingBracket(block, objStart, '{', '}');
+          if (objEnd === -1) break;
+          var obj = block.slice(objStart, objEnd + 1);
+          var fm2 = fileRe2.exec(obj);
+          var lm2 = labelRe2.exec(obj);
+          if (fm2 && lm2 && !quality[lm2[1]]) quality[lm2[1]] = fm2[1];
+          bi = objEnd + 1;
+        }
+      }
+    }
+  }
   // JWPlayer / generic file
   var jwRe = /['"]file['"]\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))['"]/g;
   while ((m = jwRe.exec(html)) !== null) { if (!url) url = m[1]; }
@@ -3628,83 +3675,6 @@ function _jopaPages(html) {
     var m = /href="https?:\/\/jopaonline\.mobi\/(\d+)"[^>]*(?:last|>>)/i.exec(html) ||
             /["']\/(\d+)["'][^>]*(?:last|>>)/i.exec(html);
     return m ? (parseInt(m[1], 10) || 10) : 10;
-}
-
-// ---- 18. GayPornTube ----
-SOURCES.push({
-    id: 'gayporntube',
-    name: 'GayPornTube',
-    host: 'www.gayporntube.com',
-
-    search: function (query, page) {
-        var url = 'https://www.gayporntube.com/search/videos/' +
-                  encodeURIComponent(query) + '/most-relevant/page' + page + '.html';
-        return cherryFetch(url).then(function (html) {
-            return { items: _gayptCards(html), total_pages: _gayptPages(html) };
-        }).catch(function () { return { items: [], total_pages: 0 }; });
-    },
-
-    browse: function (category, page) {
-        var url = page > 1
-            ? 'https://www.gayporntube.com/page' + page + '.html'
-            : 'https://www.gayporntube.com/';
-        return cherryFetch(url).then(function (html) {
-            return { items: _gayptCards(html), total_pages: _gayptPages(html) };
-        }).catch(function () { return { items: [], total_pages: 0 }; });
-    },
-
-    getStream: function (video) {
-        return cherryFetch(video.url).then(function (html) {
-            return extractStreams(html);
-        }).catch(function () { return { url: '', quality: {} }; });
-    }
-});
-
-function _gayptCards(html) {
-    var items = [];
-    // ⚠️ Video URLs have NO trailing slash: /video/{id}/{slug}
-    var hrefRx = /href="(https?:\/\/www\.gayporntube\.com\/video\/(\d+)\/[^"]+)"/g;
-    var seen = {};
-    var m;
-    while ((m = hrefRx.exec(html)) !== null) {
-        var videoUrl = m[1];
-        var id = m[2];
-        if (seen[id]) continue;
-        seen[id] = true;
-
-        var chunk = html.slice(Math.max(0, m.index - 800), m.index + 600);
-
-        // data-src preferred (lazy load); cdn.gayporntube.com likely CDN
-        var thumb = _attr(chunk, /data-src="([^"]+\.jpe?g)"/i) ||
-                    _attr(chunk, /src="(https?:\/\/cdn\.gayporntube\.com\/[^"]+\.jpe?g)"/i) ||
-                    _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i);
-
-        var title = _decodeHtml(
-            _attr(chunk, /<div[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)<\/div>/) ||
-            _attr(chunk, /title="([^"]+)"/) ||
-            _attr(chunk, /alt="([^"]+)"/)
-        );
-
-        var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
-        var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
-
-        if (title || thumb) {
-            items.push({ id: id, source: 'gayporntube', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
-        }
-    }
-    return items;
-}
-
-function _gayptPages(html) {
-    // URLs: /page{N}.html — find last numbered page link
-    var lastPage = 1;
-    var pageRx = /\/page(\d+)\.html["'][^>]*(?:last|>>|&raquo;)/gi;
-    var m;
-    while ((m = pageRx.exec(html)) !== null) {
-        var n = parseInt(m[1], 10);
-        if (n > lastPage) lastPage = n;
-    }
-    return lastPage > 1 ? lastPage : 10;
 }
 
 })();

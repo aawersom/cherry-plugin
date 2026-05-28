@@ -40,22 +40,76 @@ function bestQualityUrl(quality) {
 function extractStreams(html) {
   var quality = {};
   var url = '';
+  var m;
+  // KVS get_file pattern
   var kvs = html.match(/https?:\/\/[^"'\s]+get_file[^"'\s]+\.mp4[^"'\s]*/g);
   if (kvs) kvs.forEach(function(u) { var q = (u.match(/(\d{3,4}p)/i) || ['', 'mp4'])[1]; quality[q] = u; });
-  var srcRe = /<source\s[^>]*src="([^"]+)"[^>]*(?:res|label)="([^"]+)"/gi;
-  var m;
+  // Source tags with res/label/title attribute (both orders)
+  var srcRe = /<source\s[^>]*src="([^"]+)"[^>]*(?:res|label|title)="([^"]+)"/gi;
   while ((m = srcRe.exec(html)) !== null) quality[m[2]] = m[1];
-  var srcRe2 = /<source\s[^>]*(?:res|label)="([^"]+)"[^>]*src="([^"]+)"/gi;
+  var srcRe2 = /<source\s[^>]*(?:res|label|title)="([^"]+)"[^>]*src="([^"]+)"/gi;
   while ((m = srcRe2.exec(html)) !== null) quality[m[1]] = m[2];
+  // JWPlayer sources:[...] array multi-quality branch
+  function findMatchingBracket(str, openIdx, openCh, closeCh) {
+    var depth = 0, inStr = false, strCh = '';
+    for (var i = openIdx; i < str.length; i++) {
+      var c = str[i];
+      if (inStr) {
+        if (c === strCh) {
+          var bs = 0;
+          for (var j = i - 1; j >= 0 && str[j] === '\\'; j--) bs++;
+          if (bs % 2 === 0) inStr = false;
+        }
+        continue;
+      }
+      if (c === '"' || c === "'") { inStr = true; strCh = c; continue; }
+      if (c === openCh || c === '{' || c === '[') { depth++; continue; }
+      if (c === closeCh || c === '}' || c === ']') {
+        if (--depth === 0) return i;
+      }
+    }
+    return -1;
+  }
+  var srcArrayM = /sources\s*:\s*\[/i.exec(html);
+  if (srcArrayM) {
+    var arrOpen = html.indexOf('[', srcArrayM.index + srcArrayM[0].length - 1);
+    if (arrOpen !== -1) {
+      var arrClose = findMatchingBracket(html, arrOpen, '[', ']');
+      if (arrClose !== -1) {
+        var block = html.slice(arrOpen + 1, arrClose);
+        var fileRe2  = /['"]file['"]\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))['"]/i;
+        var labelRe2 = /['"]label['"]\s*:\s*['"]([^'"]+)['"]/i;
+        var bi = 0;
+        while (bi < block.length) {
+          var objStart = block.indexOf('{', bi);
+          if (objStart === -1) break;
+          var objEnd = findMatchingBracket(block, objStart, '{', '}');
+          if (objEnd === -1) break;
+          var obj = block.slice(objStart, objEnd + 1);
+          var fm2 = fileRe2.exec(obj);
+          var lm2 = labelRe2.exec(obj);
+          if (fm2 && lm2 && !quality[lm2[1]]) quality[lm2[1]] = fm2[1];
+          bi = objEnd + 1;
+        }
+      }
+    }
+  }
+  // JWPlayer / generic file
   var jwRe = /['"]file['"]\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))['"]/g;
   while ((m = jwRe.exec(html)) !== null) { if (!url) url = m[1]; }
+  // Plain source tags
   var plainRe = /<source\s[^>]*src="([^"]+\.(?:mp4|m3u8)[^"']*)"/gi;
   while ((m = plainRe.exec(html)) !== null) { if (!url) url = m[1]; }
+  // Fallback: find any mp4 URL (http/https or protocol-relative)
   if (!url && !Object.keys(quality).length) {
-    var any = html.match(/https?:\/\/[^"'\s]+\.mp4[^"'\s]*/);
+    var any = html.match(/(?:https?:)?\/\/[^"'\s]+\.mp4[^"'\s]*/);
     if (any) url = any[0];
   }
   if (!url && Object.keys(quality).length) url = quality[Object.keys(quality)[0]];
+  // Normalize protocol-relative URLs to https://
+  function fixProto(u) { return (u && u.slice(0, 2) === '//') ? 'https:' + u : u; }
+  url = fixProto(url);
+  Object.keys(quality).forEach(function(k) { quality[k] = fixProto(quality[k]); });
   return { url: url, quality: quality };
 }
 
@@ -247,5 +301,266 @@ describe('_kvsPickBest', () => {
     const urls = ['https://cdn.example.com/video_720P.mp4'];
     const r = _kvsPickBest(urls);
     expect(r.quality['720p']).toBeDefined();
+  });
+});
+
+// =============================================================================
+// Group A — extractStreams sources-array branch
+// =============================================================================
+
+describe('extractStreams — sources array branch', () => {
+  it('sources array: file-then-label, 3 qualities', () => {
+    const html = `
+      jwplayer('p').setup({
+        sources: [
+          {"file":"https://cdn.example.com/1080.mp4","label":"1080p"},
+          {"file":"https://cdn.example.com/720.mp4","label":"720p"},
+          {"file":"https://cdn.example.com/480.mp4","label":"480p"}
+        ]
+      });
+    `;
+    const r = extractStreams(html);
+    expect(Object.keys(r.quality).length).toBe(3);
+    expect(r.quality['1080p']).toBe('https://cdn.example.com/1080.mp4');
+    expect(r.quality['720p']).toBe('https://cdn.example.com/720.mp4');
+    expect(r.quality['480p']).toBe('https://cdn.example.com/480.mp4');
+  });
+
+  it('sources array: label-then-file, 2 qualities', () => {
+    const html = `
+      jwplayer('p').setup({
+        sources: [
+          {"label":"1080p","file":"https://cdn.example.com/1080.mp4"},
+          {"label":"720p","file":"https://cdn.example.com/720.mp4"}
+        ]
+      });
+    `;
+    const r = extractStreams(html);
+    expect(Object.keys(r.quality).length).toBe(2);
+    expect(r.quality['1080p']).toBe('https://cdn.example.com/1080.mp4');
+    expect(r.quality['720p']).toBe('https://cdn.example.com/720.mp4');
+  });
+
+  it('sources array: legacy single file no array — back-compat jwRe branch fires', () => {
+    // HTML has "file": "video.mp4" but NO sources array — existing jwRe branch handles it
+    const html = `jwplayer('p').setup({"file":"http://cdn.example.com/video.mp4"})`;
+    const r = extractStreams(html);
+    expect(r.quality).toEqual({});
+    expect(r.url).toBe('http://cdn.example.com/video.mp4');
+  });
+
+  it('sources array: mixed sources array and standalone source tag', () => {
+    // Both a sources array AND a <source src="..."> tag are present.
+    // The sources-array branch should populate quality from the array.
+    const html = `
+      <source src="https://cdn.example.com/fallback.mp4">
+      var cfg = {
+        sources: [
+          {"file":"https://cdn.example.com/1080.mp4","label":"1080p"},
+          {"file":"https://cdn.example.com/720.mp4","label":"720p"}
+        ]
+      };
+    `;
+    const r = extractStreams(html);
+    expect(Object.keys(r.quality).length).toBeGreaterThanOrEqual(2);
+    expect(r.quality['1080p']).toBe('https://cdn.example.com/1080.mp4');
+    expect(r.quality['720p']).toBe('https://cdn.example.com/720.mp4');
+  });
+
+  it('sources array: source object with nested drm:{}', () => {
+    // A source object has a nested drm:{} sub-object; the bracket scanner
+    // must not be confused by the nested braces.
+    const html = `
+      var cfg = {
+        sources: [
+          {"file":"https://cdn.example.com/1080.mp4","label":"1080p","drm":{}},
+          {"file":"https://cdn.example.com/720.mp4","label":"720p","drm":{}}
+        ]
+      };
+    `;
+    const r = extractStreams(html);
+    expect(Object.keys(r.quality).length).toBe(2);
+    expect(r.quality['1080p']).toBe('https://cdn.example.com/1080.mp4');
+    expect(r.quality['720p']).toBe('https://cdn.example.com/720.mp4');
+  });
+
+  it('sources array: duplicate label — first wins', () => {
+    // Two objects share label "720p"; only the first URL should appear.
+    const html = `
+      var cfg = {
+        sources: [
+          {"file":"https://cdn.example.com/first-720.mp4","label":"720p"},
+          {"file":"https://cdn.example.com/second-720.mp4","label":"720p"}
+        ]
+      };
+    `;
+    const r = extractStreams(html);
+    expect(r.quality['720p']).toBe('https://cdn.example.com/first-720.mp4');
+  });
+
+  it('sources array: source object missing label — not added to quality map', () => {
+    // Object has file but no label — must not appear in quality.
+    const html = `
+      var cfg = {
+        sources: [
+          {"file":"https://cdn.example.com/video.mp4"}
+        ]
+      };
+    `;
+    const r = extractStreams(html);
+    // quality must be empty (no label → no entry)
+    expect(Object.keys(r.quality).length).toBe(0);
+  });
+
+  it('sources array: escaped backslashes in file value', () => {
+    // The file value uses JSON-style forward-slash escaping: "https:\\/\\/cdn..."
+    // The closing quote after \\/ must NOT be treated as an escaped quote.
+    // The extracted URL should be "https://cdn.example.com/video.mp4" (slashes normalised
+    // or verbatim as captured by the regex — either way the quality key exists).
+    const html = `
+      var cfg = {
+        sources: [
+          {"file":"https:\\/\\/cdn.example.com\\/video.mp4","label":"720p"}
+        ]
+      };
+    `;
+    const r = extractStreams(html);
+    // The file regex captures the value between the quotes; the label must be found.
+    // Even if the URL contains the literal \\/ sequences, quality['720p'] must be set.
+    expect(r.quality['720p']).toBeDefined();
+  });
+
+  it('url is set to first file from sources array even when quality map is populated', () => {
+    const html = `<script>
+jwplayer("player").setup({
+  sources: [
+    {"file":"https://cdn.example.com/1080.mp4","label":"1080p"},
+    {"file":"https://cdn.example.com/720.mp4","label":"720p"}
+  ]
+});
+</script>`;
+    const r = extractStreams(html);
+    // quality map is populated from sources-array branch
+    expect(Object.keys(r.quality).length).toBe(2);
+    // url is set by the jwRe loop (first file from the sources array)
+    // This is spec-acceptable: callers should use bestQualityUrl(r.quality) for best quality
+    expect(r.url).toBe('https://cdn.example.com/1080.mp4');
+  });
+});
+
+// =============================================================================
+// Group B — findMatchingBracket (RED tests — local copy for isolated testing)
+// The production findMatchingBracket is LOCAL inside extractStreams.
+// We declare an identical copy here for isolation testing.
+// =============================================================================
+
+describe('findMatchingBracket', () => {
+  // Inline copy of findMatchingBracket — matches the implementation in phase-0 plan.
+  // This function DOES NOT yet exist in the test's extractStreams copy, so the
+  // extractStreams-sourced tests above are already RED.
+  // This standalone copy lets us test the bracket scanner in isolation.
+  function findMatchingBracket(str, openIdx, openCh, closeCh) {
+    var depth = 0, inStr = false, strCh = '';
+    for (var i = openIdx; i < str.length; i++) {
+      var c = str[i];
+      if (inStr) {
+        if (c === strCh) {
+          var bs = 0;
+          for (var j = i - 1; j >= 0 && str[j] === '\\'; j--) bs++;
+          if (bs % 2 === 0) inStr = false;
+        }
+        continue;
+      }
+      if (c === '"' || c === "'") { inStr = true; strCh = c; continue; }
+      if (c === openCh || c === '{' || c === '[') { depth++; continue; }
+      if (c === closeCh || c === '}' || c === ']') {
+        if (--depth === 0) return i;
+      }
+    }
+    return -1;
+  }
+
+  it('empty array []', () => {
+    // openIdx=0, openCh='[', closeCh=']' → returns index of closing ']' = 1
+    const result = findMatchingBracket('[]', 0, '[', ']');
+    expect(result).toBe(1);
+  });
+
+  it('nested array [[]]', () => {
+    // outer '[' at 0, inner '[' at 1, inner ']' at 2, outer ']' at 3 → returns 3
+    const result = findMatchingBracket('[[]]', 0, '[', ']');
+    expect(result).toBe(3);
+  });
+
+  it('object with nested drm {drm:{}}', () => {
+    // outer '{' at 0, depth hits 0 at closing '}' at index 7
+    const result = findMatchingBracket('{drm:{}}', 0, '{', '}');
+    expect(result).toBe(7);
+  });
+
+  it('closing char inside string is not treated as bracket', () => {
+    // '{"k":"]"}' — the ']' is inside a string, must not close anything.
+    // Character positions (0-based):
+    //  0  1  2  3  4  5  6  7  8
+    //  {  "  k  "  :  "  ]  "  }
+    // The outer '}' is at index 8; the ']' at index 6 is inside the string
+    // and must be ignored. The scanner must track string state to pass this.
+    const str = '{"k":"]"}';
+    const result = findMatchingBracket(str, 0, '{', '}');
+    expect(result).toBe(8);
+  });
+});
+
+// =============================================================================
+// Group C — px() PROXY_URL_2 guard
+// Note: tests guard logic in isolation using synthetic copies. Production px() is a closure
+// inside playVideo() and cannot be imported directly.
+// =============================================================================
+
+describe('px() PROXY_URL_2 guard', () => {
+  var PROXY_URL_TEST = 'https://cherry-proxy.example.workers.dev';
+  var PROXY_URL_2_TEST = 'https://cherry-proxy.example.deno.net';
+  var PROXY_URL_2_HOSTS_TEST = { 'xnxx.com': 1 };
+
+  function buildProxyUrlTest(url) {
+    try {
+      if (PROXY_URL_2_HOSTS_TEST[new URL(url).hostname]) {
+        return PROXY_URL_2_TEST + '/proxy?url=' + encodeURIComponent(url);
+      }
+    } catch(e) {}
+    return PROXY_URL_TEST + '/proxy?url=' + encodeURIComponent(url);
+  }
+
+  // Synthetic px WITHOUT the PROXY_URL_2 guard — documents the pre-fix bug
+  function pxTestOld(u) {
+    if (!u) return u;
+    if (u.indexOf('blob:') === 0) return u;
+    if (u.indexOf(PROXY_URL_TEST) === 0) return u;
+    if (u.indexOf('//') === 0) u = 'https:' + u;
+    return buildProxyUrlTest(u);
+  }
+
+  // Synthetic px WITH the PROXY_URL_2 guard — the correct production version
+  function pxTestNew(u) {
+    if (!u) return u;
+    if (u.indexOf('blob:') === 0) return u;
+    if (u.indexOf(PROXY_URL_TEST) === 0) return u;
+    if (PROXY_URL_2_TEST && u.indexOf(PROXY_URL_2_TEST) === 0) return u;
+    if (u.indexOf('//') === 0) u = 'https:' + u;
+    return buildProxyUrlTest(u);
+  }
+
+  it('without guard: Deno URL is double-wrapped (documents the bug)', () => {
+    var denoUrl = buildProxyUrlTest('https://xnxx.com/video/123');
+    var result = pxTestOld(denoUrl);
+    // Without the guard, pxTestOld re-wraps the already-proxied URL
+    expect(result.includes('proxy?url=')).toBe(true);
+    expect(result).not.toBe(denoUrl);
+  });
+
+  it('with guard: Deno URL returned unchanged (guard works)', () => {
+    var denoUrl = buildProxyUrlTest('https://xnxx.com/video/123');
+    var result = pxTestNew(denoUrl);
+    expect(result).toBe(denoUrl);
   });
 });

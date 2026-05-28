@@ -197,3 +197,83 @@ All three reviewers independently flagged the **copy-proliferation / drift risk*
 - **Anonymous vs named event handlers:** `addEventListener` с функцией, которую нужно убрать — всегда named (`function onXxx() {}`), никогда стрелка. Anonymous listener = guaranteed memory leak / multiple-fire bug
 - **Module-scope accumulator timing:** `allStream`, `allBrowse` и др. заполняются в конце batch loop. Функции, которые нужны внутри batch loop (до collect step), НЕ ДОЛЖНЫ читать эти массивы — передавать текущие записи как параметры
 - **Loose vs strict null in optional columns:** параметры со значением по умолчанию `null` должны использовать `== null` (не `=== null`) для гвардов — при не передаче значения получают `undefined`, не `null`
+
+---
+
+### multi-source-video-fix — Spec review batch (2026-05-28)
+
+**Task:** Fix video playback for 8 broken sources, quality selection for 3, remove gayporntube, harden E2E.
+**Mode:** full
+**Stage:** Spec (2 reviewers, parallel)
+
+**Key findings applied:**
+- `px()` double-proxy bug: adapters pre-proxying CDN URLs via `buildProxyUrl()` produce URLs starting with `PROXY_URL_2`, but `px()` only skipped `PROXY_URL` (CF Worker prefix). Would have created double-proxied URLs. Fix: added a guard clause for `PROXY_URL_2` in `px()` — caught by both
+- REQ-8 fetch context mismatch: spec prose said "Playwright's `request.fetch()` running in page context" but code used bare Node `fetch()`. Different CORS/cookie behavior. Fix: aligned prose to Node fetch, updated to fetch the proxy-wrapped URL (what Lampa actually plays), not the raw CDN URL — caught by both
+- `jwArrRe` regex brittleness: single-regex using `[^{}]` fails on nested braces (drm config, `httpSourceOptions`); also had false positive risk outside JWPlayer context. Fix: replaced with two-step approach — bracket-depth scan to delimit sources array, then two independent simple regexes per object — caught by tech only
+- eporner `src2` backtracking: proximity pattern `[\s\S]{0,2000}?` on 500KB HTML causes catastrophic backtracking and false pairings; CDN URL template also unknown at spec time. Fix: removed `src2` entirely, deferred to Open Question Q2 — caught by tech only
+- lenporno "720p" fallback collision: two unlabeled URLs both falling back to `"720p"` key silently overwrite each other. Fix: unlabeled URLs captured as `url` candidate only, never inserted into quality map — caught by both
+
+**Pattern notes for future tasks:**
+- **Double-proxy blind spot in px()-style helpers:** whenever a new proxy prefix (e.g. `PROXY_URL_2`) is introduced, audit every URL-skipping helper that only guards against the original prefix. A guard list, not a single string comparison, is the correct pattern.
+- **"Uses Playwright fetch" vs "uses Node fetch" is a meaningful distinction** — CORS origin, cookies, and TLS fingerprint differ. Spec must be explicit about fetch context; a prose error here is a CRITICAL behavioral mismatch.
+- **`[^{}]` in regex is unsafe for nested-brace structures** (JWPlayer sources, JSON-like configs). Prefer bracket-depth scanners for structure delimiting, then flat regexes on the extracted flat segment.
+- **Proximity patterns on large HTML (`[\s\S]{0,N}?`) are catastrophic on 500KB+ pages** — profile page size before using them; if page > ~100KB, use a two-pass approach (locate section anchor, then extract).
+- **Two unlabeled quality URLs → silent map key collision** — whenever building a quality map with a fallback key, assert that the fallback is used at most once, or switch to an array accumulator and pick max at the end.
+
+---
+
+### multi-source-video-fix — Plan review batch (2026-05-28)
+
+**Task:** Fix video playback for 8 broken sources, quality selection for 3, remove gayporntube, harden E2E.
+**Mode:** full
+**Stage:** Plan (2 reviewers, parallel)
+
+**Key findings applied:**
+- Bracket-depth escape check broken: `html[i-1] !== '\\'` fails for double-escaped `\\"` in JWPlayer sources-array scanner — count consecutive backslashes via parity instead — caught by tech only
+- px() guard test in wrong phase: guard implemented in Phase 0 but test deferred to Phase 5, violating "each phase independently shippable" — moved test to Phase 0 — caught by both
+- Pornhub fallback regex removal unauthorized: plan deleted existing fallback regex after adding simplified primary, but spec never authorized deletion — both regexes coexist pending fixture confirmation — caught by both
+- Ebun outer fallback implicit preservation: plan didn't explicitly protect `return extractStreams(html)` on line 3341; an implementer could accidentally delete it — explicit preservation note added — caught by tech only
+- Generic iframe regex fires on analytics/ads: perfektdamen pattern `/src="...(player|embed).../` matches googletagmanager/doubleclick iframes before the video — marked as PLACEHOLDER, gated behind Phase 2 fixture with anti-ad assertion — caught by tech only
+
+**Pattern notes for future tasks:**
+- **Escape-char parity in hand-rolled scanners:** `prev_char !== '\\'` is not a reliable escape check — the preceding char may itself be escaped. Correct pattern: count consecutive trailing backslashes, treat quote as escaped only if count is odd.
+- **Test-phase discipline for guards added in earlier phases:** if a utility function (like `px()`) is added in Phase N, its unit test must ship in Phase N — not deferred to a later phase. Deferred tests violate the "independently shippable phase" invariant and are reliably missed in implementation.
+- **Plan must not delete existing fallback without explicit spec authorization:** "simplify" is not the same as "remove". When a plan proposes deletion of existing production code that the spec doesn't mention, treat it as unauthorized — flag and park until fixture confirms the old code is truly dead.
+- **Implicit preservation is not protection:** if a line of code (fallback, guard, return) is not mentioned in the plan, an implementer following the plan literally may delete it. Critical fall-through paths must be explicitly called out with "preserve as-is" notes.
+- **Broad structural regexes need anti-false-positive fixtures:** a pattern like `(player|embed)` in an iframe src attribute can match ad/analytics frames. Any "generic" extraction regex must ship with a fixture that asserts it does NOT fire on known non-video iframes (googletagmanager, doubleclick, etc.).
+
+---
+
+### multi-source-video-fix — Phase 0 Code Review Batch (2026-05-28)
+
+**Task:** Fix video playback for 8 broken sources, quality selection for 3, remove gayporntube, harden E2E.
+**Mode:** full
+**Stage:** Phase 0 — Foundations (3 reviewers: arch, tech, security; parallel)
+
+**Key findings applied:**
+
+| # | Severity | Reviewer | Finding | Fix |
+|---|---|---|---|---|
+| 1 | HIGH | tech+arch | pxTest in Group C had guard already present — test never catches regression in production px() | Rewrote Group C with two synthetic variants: `pxTestOld` (no guard, shows double-wrap) + `pxTestNew` (with guard, shows correct behavior); added note that production px() is a private closure |
+| 2 | Medium | arch+tech | Stale RED-state comments in Group A+C describe blocks contradicted the GREEN implementation | Removed "RED tests — require REQ-2 impl" and "guard intentionally absent" comments |
+| 3 | Medium | tech | jwRe sets `url` to first sources-array file even when quality map is populated — undocumented interaction | Added test case documenting that `url` comes from jwRe (first file), quality comes from sources-array branch; callers must use `bestQualityUrl()` |
+| 4 | Low | arch | docs/CHERRY.md retained four stale '26' references and gayporntube rows | Updated to '25', removed gayporntube from adapter list and status table |
+| 5 | Low | arch | E2E header comment still said '26 source adapters' | Changed to '25' |
+| 6 | Low | tech | Group B test comment said "index 8" for `{drm:{}}` test but expected index 7 | Fixed comment |
+| 7 | Nit | arch+tech+sec | findMatchingBracket: mixed bracket depth-tracking design (treats `{` and `[` symmetrically) not documented | Added comment: "Track depth for both bracket types — handles mixed [{...}, {...}] nesting" |
+| 8 | Nit | tech | findMatchingBracket: `c === openCh` redundant in OR when openCh is always `[` or `{` | Simplified to `if (c === '{' \|\| c === '[')` |
+
+**Findings parked:**
+
+- **Security Medium — fileRe2 SSRF via compromised proxy response**: `[^'"]+` captures any URL content including `javascript:` or path-traversal sequences. Pre-existing across all extractStreams regex branches. Fix requires px() scheme validation (broader scope, touches frozen helper). Bugs backlog.
+- **Security Medium — PROXY_KEY '1206' in E2E test**: Pre-existing, already public in plugin.js line 16 as default fallback. Low marginal risk. Bugs backlog.
+- **Security Low — PROXY_URL guard prefix-spoofing**: Adding `/` suffix to PROXY_URL guard would create inconsistency with pre-existing PROXY_URL guard (frozen code). Fixing both requires touching frozen playVideo — out of scope.
+- **Tech Nit — No m3u8 test in sources-array group**: Deferred to Phase 3 where .m3u8 handling is being fixed.
+
+**Pattern notes for future tasks:**
+
+- **Synthetic test copies can't catch regressions in their source**: a test that inlines a function and then verifies the copy's behavior does not protect the production function. Document this explicitly in the test comment. The real regression protection is the E2E test against the live plugin. For private closures (like `px()` inside `playVideo()`), the best unit-test strategy is: TWO copies — one without the fix (shows the bug), one with (shows the fix) — plus an E2E assertion.
+- **Code-test-writer comment hygiene**: test-writer writes tests in RED state with comments like "guard intentionally absent". Code-writer applies the fix and turns tests GREEN — but must REMOVE the RED-state comments. If not cleaned up, the next reader will be confused about whether the tests are expected to pass.
+- **jwRe + sources-array interaction**: after sources-array populates `quality`, the jwRe loop below still fires and sets `url` to the first sources-array file value. This is spec-acceptable but must be documented in a test. Callers expecting `url` to come from `bestQualityUrl(quality)` will be surprised.
+- **Three-way convergence on findMatchingBracket mixed-bracket design**: all three reviewers independently flagged the same structural concern. High signal. When a design choice is non-obvious enough to confuse three reviewers, it needs a comment — not a fix.
+- **Arch docs need updating on same commit as code**: docs/CHERRY.md adapter count and status table went stale on the same commit that deleted gayporntube. The arch reviewer caught it; the code-writer missed it. Checklist item: whenever an adapter is added/removed, update docs/CHERRY.md in the same commit.

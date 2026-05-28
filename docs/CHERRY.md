@@ -4,7 +4,7 @@
 
 Cherry is a Lampa plugin that adds a self-contained adult video aggregator. It registers two
 Lampa components (`cherry_main`, `cherry_grid`), routes all external HTTP through a single
-Cloudflare Worker proxy, and exposes a uniform `SourceAdapter` interface over 26 heterogeneous
+Cloudflare Worker proxy, and exposes a uniform `SourceAdapter` interface over 25 heterogeneous
 backends.
 
 Entry file: `plugin.js` (single-file, ~3700 lines)
@@ -27,7 +27,7 @@ plugin.js
 ├── CSS                   lines 757-1060  — inline styles injected into document.head
 ├── LANG                  lines 1065-1079 — Lampa.Lang.add() — ru/en strings
 ├── INIT (startPlugin)    lines 1084-1128 — wires everything, handles app:ready race
-└── SOURCE ADAPTERS       lines 1130-3700 — 26 adapters in two tiers + shared helpers
+└── SOURCE ADAPTERS       lines 1130-3700 — 25 adapters in two tiers + shared helpers
 ```
 
 ---
@@ -171,7 +171,7 @@ Fetches an HLS master/media playlist via the proxy, rewrites every non-comment l
 
 ---
 
-## Source Adapters — Full List (26 adapters)
+## Source Adapters — Full List (25 adapters)
 
 | # | id | name | host | Protocol type |
 |---|---|---|---|---|
@@ -200,7 +200,6 @@ Fetches an HLS master/media playlist via the proxy, rewrites every non-comment l
 | 23 | `lenporno` | LenPorno | my.lenporno.live | Custom upload path reconstruction |
 | 24 | `24rolika` | 24Rolika | w2.huyalkino.com | DLE + JWPlayer |
 | 25 | `jopaonline` | JopaOnline | jopaonline.mobi | DLE + JWPlayer |
-| 26 | `gayporntube` | GayPornTube | www.gayporntube.com | HTML scraping (SisiStyle-like) |
 
 **Adapter type legend:**
 - **JSON API** — adapter parses structured JSON from official or semi-official API endpoint
@@ -251,7 +250,6 @@ edge IP rotation. In real Lampa usage (immediate playback after selection), they
 | `lenporno` | 24 | Custom CDN, occasionally slow |
 | `perfektdamen` | 60 | KVS signed-token, get_file CDN |
 | `huyamba` | 20 | KVS get_file CDN |
-| `gayporntube` | 39 | Slow CDN, may timeout in tests |
 
 ### Browse works, video broken (CDN architecture limitation)
 

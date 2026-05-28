@@ -1,7 +1,7 @@
 /**
  * Cherry Plugin — End-to-End test in REAL Lampa (http://lampa.mx/)
  *
- * Tests all 26 source adapters across browse, getStream × 5, Range-206, and
+ * Tests all 25 source adapters across browse, getStream × 5, Range-206, and
  * video playback checks (timeupdate > 2s). Writes a regression baseline on PASS.
  *
  * Exit codes: 0 = PASS, 1 = FAIL (content), 2 = infrastructure failure
@@ -33,7 +33,7 @@ const TIERS = {
   A: ['pornhub','xvideos','youjizz','xozilla','analdin','porndig','tizam',
       'hellporno','pornobolt','crocotube','24rolika','jopaonline'],
   B: ['porntrex','3movs','pornve','familyporn','ebun','perfektdamen',
-      'huyamba','lenporno','gayporntube'],
+      'huyamba','lenporno'],
   C: ['hqporner','pornone'],
   D: ['xnxx','eporner','spankbang'],
 };
@@ -524,9 +524,9 @@ function evaluateVerdict(sourcesLength, browseResults, streamResults, rangeVideo
 
   function fail(n, msg) { if (!failCheck) { failCheck = n; failMessage = msg; } }
 
-  // Check 1: 26 sources loaded
-  if (sourcesLength !== 26) {
-    return { pass: false, failCheck: 1, failMessage: `Sources loaded: ${sourcesLength}, expected 26`, warnings };
+  // Check 1: 25 sources loaded
+  if (sourcesLength !== 25) {
+    return { pass: false, failCheck: 1, failMessage: `Sources loaded: ${sourcesLength}, expected 25`, warnings };
   }
 
   // Check 2: idempotency — verified at bootstrap (re-injection returned same count)
@@ -636,7 +636,7 @@ function printSummary(sourcesLength, browseResults, streamResults, rangeVideoRes
   console.log('=== CHERRY E2E SUMMARY ===');
   console.log('═'.repeat(72));
   console.log(`Total sources : ${sourcesLength}`);
-  console.log(`Browse OK     : ${bAll}/26`);
+  console.log(`Browse OK     : ${bAll}/25`);
   console.log(`  Tier A      : ${bA}/12  (threshold: 12/12)`);
   console.log(`  Tier B      : ${bB}/9   (threshold: >=8/9)`);
   console.log(`  Tier C      : ${bC}/2   (threshold: 2/2)`);
@@ -688,8 +688,8 @@ await bootstrapCtx.close();
 
 console.log(`✅ Cherry plugin loaded in real Lampa — ${sourcesLength} sources\n`);
 
-if (sourcesLength !== 26) {
-  console.error(`❌ Expected 26 sources, got ${sourcesLength} (exit 2 = infrastructure failure)`);
+if (sourcesLength !== 25) {
+  console.error(`❌ Expected 25 sources, got ${sourcesLength} (exit 2 = infrastructure failure)`);
   await browser.close();
   process.exit(2);
 }
