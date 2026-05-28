@@ -13,6 +13,8 @@
   var PROXY_URL_2_HOSTS = {
     'xnxx.com': 1, 'www.xnxx.com': 1,
     'spankbang.com': 1, 'www.spankbang.com': 1,
+    // tizam.org — rate-limits rapid sequential requests from CF datacenter IPs
+    'tv4.tizam.org': 1,
     // bigcdn.cc — LeaseWeb NL CDN used by KVS-based sites; 13 confirmed subdomains
     's1.bigcdn.cc': 1, 's4.bigcdn.cc': 1, 's16.bigcdn.cc': 1, 's25.bigcdn.cc': 1,
     's30.bigcdn.cc': 1, 's33.bigcdn.cc': 1, 's38.bigcdn.cc': 1, 's39.bigcdn.cc': 1,
