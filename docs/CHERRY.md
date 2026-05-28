@@ -219,7 +219,7 @@ Results from `node test/cherry-lampa-e2e.mjs` — Playwright/Chromium with real 
 
 | id | cards | notes |
 |---|---|---|
-| `pornhub` | 30 | **Via Deno Deploy proxy** (`www.pornhub.com`); getStream now uses `/embed/{viewkey}` (was `view_video.php` → 503). HLS/MP4 from mediaDefinitions. CF rate-limiting intermittent (not a code bug). |
+| `pornhub` | 30 | getStream uses `video.url` directly (`rt.pornhub.com/view_video.php?viewkey=...` → CF Worker). `flashvars_\d+` extracts HLS streams from `mediaDefinitions`. API intermittently 403 both proxies (transient, not a code bug). |
 | `xvideos` | 42 | HLS via CDN, range test N/A for HLS |
 | `xnxx` | ~30 | **Via Deno Deploy proxy** (`cherry-proxy.aawersom.deno.net`); browse URL fixed to `/?k=new&p=N` |
 | `eporner` | ~30 | **Via Deno Deploy proxy** for video pages (`www.eporner.com` added to `PROXY_URL_2_HOSTS`); JSON search/browse API still uses direct fetch (CORS-open). URL format: `/video-{id}/{slug}/`. |
