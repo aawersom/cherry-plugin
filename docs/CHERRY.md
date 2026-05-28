@@ -124,13 +124,21 @@ plugin.js
 
 ## Proxy Layer
 
-All network calls from adapters flow through a single Cloudflare Worker at `PROXY_URL`.
+Adapters route requests through one of two proxies depending on the target hostname.
+
+### Primary proxy — Cloudflare Worker
+`PROXY_URL = https://cherry-proxy.aawersom.workers.dev`
+Used by default for all adapters.
+
+### Secondary proxy — Deno Deploy
+`PROXY_URL_2 = https://cherry-proxy.aawersom.deno.net`
+Used for hostnames in `PROXY_URL_2_HOSTS` (`xnxx.com`, `spankbang.com`) that block Cloudflare datacenter IPs at ASN level. Deno Deploy uses different IP ranges not blocked by xnxx.
 
 ### buildProxyUrl(url, referer?)
 ```
-GET {PROXY_URL}/proxy?url={encoded}&key={PROXY_KEY}[&referer={encoded}]
+GET {base}/proxy?url={encoded}&key={PROXY_KEY}[&referer={encoded}]
 ```
-Constructs a proxied URL. Key authenticates the Worker.
+Selects `PROXY_URL_2` if the target hostname is in `PROXY_URL_2_HOSTS`, otherwise `PROXY_URL`. Key authenticates the Worker.
 
 ### cherryFetch(url, referer?)
 Wrapper around native `fetch(buildProxyUrl(...))`. Returns `Promise<string>` (response text).
@@ -138,7 +146,7 @@ Used by all adapters for GET requests.
 
 ### cherryPost(url, body)
 POST variant for `application/x-www-form-urlencoded` bodies (used by Spankbang stream API).
-Comment in code notes that `Lampa.Reguest` does not expose POST, hence native `fetch` directly.
+`Lampa.Reguest` does not expose POST, hence native `fetch` directly.
 
 ### proxyM3u8(m3u8Url, referer?)
 Fetches an HLS master/media playlist via the proxy, rewrites every non-comment line
@@ -204,20 +212,22 @@ Fetches an HLS master/media playlist via the proxy, rewrites every non-comment l
 
 ---
 
-## Source Status (as of 2026-05-26)
+## Source Status (as of 2026-05-28)
 
-Results from `node test/cherry-browser-test.mjs` — Playwright/Chromium with real CORS enforcement.
+Results from `node test/cherry-lampa-e2e.mjs` — Playwright/Chromium with real CORS enforcement.
 
 ### Browse + Video working
 
 | id | cards | notes |
 |---|---|---|
-| `pornhub` | 30 | HLS/blob stream, always works |
+| `pornhub` | 30 | HLS/blob stream; CF rate-limiting intermittent (not a code bug) |
 | `xvideos` | 42 | HLS via CDN, range test N/A for HLS |
+| `xnxx` | ~30 | **Via Deno Deploy proxy** (`cherry-proxy.aawersom.deno.net`); browse URL fixed to `/?k=new&p=N` |
+| `eporner` | ~30 | **Direct fetch** — API `/api/v2/video/search/` has `Access-Control-Allow-Origin: *`; getStream falls back to embed URL |
 | `youjizz` | 24 | Direct MP4 via proxy |
 | `xozilla` | 100 | KVS get_file, consistent |
 | `analdin` | 100 | KVS get_file, consistent |
-| `porndig` | 36 | Previewclip CDN |
+| `porndig` | 36 | Previewclip CDN; CF rate-limiting intermittent |
 | `tizam` | 25 | Direct MP4 |
 | `hellporno` | 60 | KVS get_file, consistent |
 | `pornobolt` | 42 | KVS pbcdn.tv, consistent |
@@ -233,11 +243,11 @@ edge IP rotation. In real Lampa usage (immediate playback after selection), they
 
 | id | cards | notes |
 |---|---|---|
-| `porntrex` | 85 | Token occasionally expires before video test |
-| `3movs` | 36 | Same KVS signed-token issue |
-| `pornve` | 20 | Same KVS signed-token issue |
-| `familyporn` | 24 | Same KVS signed-token issue |
-| `ebun` | 30 | Same KVS signed-token issue |
+| `porntrex` | 85 | Thumbnails fixed (protocol-relative `//` → `https:`); token occasionally expires before video test |
+| `3movs` | 36 | KVS signed-token issue |
+| `pornve` | 20 | KVS signed-token issue |
+| `familyporn` | 24 | KVS signed-token issue |
+| `ebun` | 30 | KVS signed-token issue |
 | `lenporno` | 24 | Custom CDN, occasionally slow |
 | `perfektdamen` | 60 | KVS signed-token, get_file CDN |
 | `huyamba` | 20 | KVS get_file CDN |
@@ -245,21 +255,18 @@ edge IP rotation. In real Lampa usage (immediate playback after selection), they
 
 ### Browse works, video broken (CDN architecture limitation)
 
-These sources cannot serve video through the Cloudflare Worker proxy due to CDN-side restrictions
-that are not solvable at the plugin or proxy level.
-
 | id | cards | root cause |
 |---|---|---|
-| `hqporner` | 50 | **bigcdn.cc blocks all Cloudflare datacenter IPs.** The embed player (mydaddy.cc) hosts video on `sN.bigcdn.cc` which returns 403/404 to any CF Worker fetch, regardless of Referer/User-Agent headers. Not fixable via proxy. |
-| `pornone` | 49 | **IP-locked signed tokens.** pornone.com CDN generates tokens tied to the requesting IP. CF Worker fetches the page and CDN in separate requests that may route through different CF edge IPs → token mismatch → 403. Direct browser access works. Not fixable via proxy without a non-CF relay. |
+| `hqporner` | 50 | **bigcdn.cc blocks all Cloudflare datacenter IPs.** Embed player (mydaddy.cc) hosts video on `sN.bigcdn.cc` → 403/404 to any CF Worker fetch. Not fixable via proxy. |
+| `pornone` | 49 | **IP-locked signed tokens.** CDN tokens tied to requesting IP; CF Worker fetches page and CDN through different edge IPs → token mismatch → 403. Not fixable via proxy without non-CF relay. |
 
-### 0 cards (blocked by bot protection)
+### 0 cards — not fixable (Cloudflare JS challenge)
+
+SpankBang protects itself with Cloudflare JS challenge (`Just a moment...`). This blocks **all** datacenter IPs — CF Worker, Deno Deploy, and VPS alike. Only a residential proxy or FlareSolverr (self-hosted headless browser) could bypass it.
 
 | id | notes |
 |---|---|
-| `xnxx` | Cloudflare bot protection returns 403/empty for CF Worker IPs |
-| `eporner` | Same — CF Worker IP blocked at site level |
-| `spankbang` | Same — POST stream API also blocked |
+| `spankbang` | Cloudflare JS challenge on all paths; blocks CF Worker and Deno Deploy equally |
 
 ---
 

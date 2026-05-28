@@ -1,16 +1,19 @@
 # Cherry Plugin — Инструкция по деплою
 
-## Архитектура: два компонента
+## Архитектура: три компонента
 
 ```
 plugin.js  →  GitHub Pages (cherry-plugin)  →  пользователь в Lampa
                     ↓
-           PROXY_URL = https://cherry-proxy.aawersom.workers.dev
+           PROXY_URL = https://cherry-proxy.aawersom.workers.dev   (основной)
+           PROXY_URL_2 = https://cherry-proxy.aawersom.deno.net    (для xnxx/spankbang)
                     ↓
-           Cloudflare Worker (cherry-proxy)
+           Cloudflare Worker (cherry-proxy) / Deno Deploy (cherry-proxy)
                     ↓
-           целевые сайты (Pornhub, HellPorno, ...)
+           целевые сайты (Pornhub, HellPorno, Xnxx, ...)
 ```
+
+`buildProxyUrl()` автоматически роутит запросы к `xnxx.com` и `spankbang.com` через Deno Deploy, все остальные — через CF Worker.
 
 ---
 
@@ -44,7 +47,7 @@ curl "https://aawersom.github.io/cherry-plugin/plugin.js?t=$(Get-Date -UFormat %
 
 ---
 
-## 2. Cloudflare Worker (`cherry-proxy`)
+## 2. Cloudflare Worker (`cherry-proxy`) — основной прокси
 
 **Репо:** `d:\Works\Lampa\workers\cherry-proxy\` → GitHub: `aawersom/cherry-proxy`  
 **URL воркера:** `https://cherry-proxy.aawersom.workers.dev`
@@ -97,7 +100,46 @@ npx wrangler dev
 
 ---
 
-## 3. Тесты перед деплоем
+## 3. Deno Deploy (`cherry-proxy`) — резервный прокси
+
+**Репо:** `d:\Works\Lampa\workers\cherry-proxy\deno.js` → GitHub: `aawersom/cherry-proxy` (файл `deno.js`)  
+**URL прокси:** `https://cherry-proxy.aawersom.deno.net`  
+**Console:** `console.deno.com/aawersom` → Apps → cherry-proxy
+
+> Deno Deploy деплоится автоматически при каждом пуше в `aawersom/cherry-proxy` (GitHub Integration).
+> Отдельная команда `wrangler deploy` не нужна.
+
+### Деплой (автоматический через GitHub)
+
+```powershell
+# Изменить deno.js в репо воркера
+cd d:\Works\Lampa\workers\cherry-proxy
+git add deno.js
+git commit -m "fix: <описание>"
+git push origin main
+# Deno Deploy задеплоится автоматически через ~30 секунд
+```
+
+### Ручной передеплой (если нужно)
+
+`console.deno.com/aawersom` → Apps → cherry-proxy → Overview → **Deploy Default Branch**
+
+### Настройки (один раз)
+
+- **Entrypoint:** `deno.js`
+- **Env variable:** `PROXY_KEY = 1206` (тот же что у CF Worker)
+- **Region:** All Regions (free tier: ord, ams)
+
+### Проверка
+
+```powershell
+curl "https://cherry-proxy.aawersom.deno.net/proxy?url=https://example.com&key=1206"
+# Ожидаем: HTML example.com (200)
+```
+
+---
+
+## 4. Тесты перед деплоем
 
 ```powershell
 cd d:\Works\Lampa
@@ -114,8 +156,11 @@ npx vitest run
 2. Тесты   →  npx vitest run  (51 должны быть green)
 3. Синк    →  cp plugin.js plugin-release\plugin.js
 4. Пуш     →  cd plugin-release && git add . && git commit -m "..." && git push
-5. Если менялся воркер:
+5. Если менялся CF воркер (src/index.js):
               cd workers\cherry-proxy && npx wrangler deploy && git add . && git commit && git push
+6. Если менялся Deno прокси (deno.js):
+              cd workers\cherry-proxy && git add deno.js && git commit && git push
+              (Deno Deploy задеплоится автоматически)
 ```
 
 ---
