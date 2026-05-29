@@ -472,9 +472,20 @@
       loading = true;
       setLoading(true);
 
-      var promise = object.query
-        ? source.search(object.query, page)
-        : source.browse('', page);
+      var promise;
+      if (object.model_url) {
+        if (!source || !source.browseByModel) {
+          html.find('.cherry-grid__empty').show();
+          loading = false;
+          setLoading(false);
+          return;
+        }
+        promise = source.browseByModel(object.model_url, page);
+      } else if (object.query) {
+        promise = source.search(object.query, page);
+      } else {
+        promise = source.browse('', page);
+      }
 
       promise.then(function (result) {
         if (destroyed) return;
@@ -597,6 +608,27 @@
         // Set initial fav indicator state.
         if (Fav.has(video)) {
           card.find('.cherry-card__fav').show();
+        }
+
+        // REQ-3: model/performer badge.
+        if (video.model && video.model.name) {
+          var modelBadge = card.find('.cherry-card__model');
+          modelBadge.text(video.model.name).show();
+          modelBadge.on('hover:enter', function () {
+            var badgeSrc = sourceById(video.source);
+            if (!badgeSrc || !badgeSrc.browseByModel) {
+              Lampa.Noty.show(video.model.name, { style: 'info' });
+              return;
+            }
+            Lampa.Activity.push({
+              component:  'cherry_grid',
+              title:      video.model.name,
+              source_id:  video.source,
+              model_url:  video.model.url,
+              model_name: video.model.name,
+              page:       1
+            });
+          });
         }
 
         // OK / Enter: play.
@@ -1595,6 +1627,48 @@ SOURCES.push({
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
+  _parseHtmlCards: function(html) {
+    var items = [];
+    var seen = {};
+    var hrefRx = /href="(\/view_video\.php\?viewkey=([a-z0-9]+)[^"]*)"/g;
+    var m;
+    while ((m = hrefRx.exec(html)) !== null) {
+      var href = m[1];
+      var vkey = m[2];
+      if (!vkey || seen[vkey]) continue;
+      seen[vkey] = true;
+      var videoUrl = 'https://www.pornhub.com' + href;
+      var chunk = html.slice(Math.max(0, m.index - 200), m.index + 800);
+      var thumb = _attr(chunk, /data-mediumthumb="([^"]+)"/) ||
+                  _attr(chunk, /data-thumb_url="([^"]+)"/) || '';
+      var title = _decodeHtml(
+        _attr(chunk, /class="[^"]*videoTitle[^"]*"[^>]*>([^<]+)/) ||
+        _attr(chunk, /title="([^"]+)"/)
+      );
+      var duration = parseDur(_attr(chunk, /<var class="duration">([^<]+)</));
+      var views    = parseViews(_attr(chunk, /class="[^"]*videoViewCount[^"]*"[^>]*>([^<]+)</));
+      if (title || thumb) {
+        items.push({ id: vkey, source: 'pornhub', title: title, thumb: thumb,
+                     url: videoUrl, duration: duration, views: views });
+      }
+    }
+    return items;
+  },
+
+  browseByModel: function(modelUrl, page) {
+    var self = this;
+    var p = page || 1;
+    var url = modelUrl.replace(/\/$/, '') + '/videos?page=' + p;
+    return cherryFetch(url).then(function(html) {
+      var items = self._parseHtmlCards(html);
+      var totalMatch = html.match(/paginationCount[^>]*>[^<]*<strong>([^<]+)<\/strong>/);
+      var total = totalMatch
+        ? Math.ceil(parseInt((totalMatch[1] || '0').replace(/[^0-9]/g, ''), 10) / 30)
+        : (p + 5);
+      return { items: items, total_pages: total || 1 };
+    }).catch(function() { return { items: [], total_pages: 0 }; });
+  },
+
   getStream: function(video) {
     var pageUrl = video.url;
     if (!pageUrl) return Promise.resolve({ url: '', quality: {} });
@@ -1710,6 +1784,19 @@ SOURCES.push({
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html, p);
       return { items: items, total_pages: p + 10 };
+    }).catch(function() { return { items: [], total_pages: 0 }; });
+  },
+
+  browseByModel: function(modelUrl, page) {
+    var self = this;
+    var p = page || 1;
+    var pageIdx = p - 1;
+    var baseUrl = modelUrl.replace(/\/$/, '');
+    // xvideos model pages: baseUrl for page 1, baseUrl/{pageIdx} for subsequent
+    var url = pageIdx === 0 ? baseUrl : baseUrl + '/' + pageIdx;
+    return cherryFetch(url).then(function(html) {
+      var items = self._parseCards(html, p);
+      return { items: items, total_pages: p + 5 };
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
