@@ -121,6 +121,11 @@
   // Track blob URLs created by proxyM3u8 so they can be revoked on player close.
   var _blobUrls = [];
 
+  // Related video panel state (REQ-4).
+  var _relatedGeneration = 0;
+  var _pendingRelated    = [];
+  var _relatedSrc        = null;
+
   // Fetches an HLS m3u8 through the proxy and rewrites all non-comment lines:
   //   - Sub-playlist lines (.m3u8) → recursively proxied → inner blob URL
   //   - Segment lines (.ts, etc.) → direct proxy URL
@@ -321,6 +326,22 @@
         poster:  video.thumb,
         quality: proxiedQuality
       });
+
+      // REQ-4: reset state and kick off background related fetch.
+      _relatedGeneration++;
+      var myGen       = _relatedGeneration;
+      _pendingRelated = [];
+      _relatedSrc     = null;
+
+      if (source.getRelated) {
+        source.getRelated(video).then(function (items) {
+          if (myGen !== _relatedGeneration) return;
+          if (items && items.length) {
+            _pendingRelated = items;
+            _relatedSrc     = source;
+          }
+        }).catch(function () {});
+      }
     }).catch(function (err) {
       console.warn('[Cherry] getStream error:', err);
       Lampa.Noty.show(Lampa.Lang.translate('cherry_error'), { style: 'warn' });
@@ -419,6 +440,10 @@
         } else {
           html.find('.cherry-grid__empty').show();
         }
+      } else if (object._related_items) {
+        renderCards(object._related_items, scroll.body());
+        totalPages  = 1;
+        currentPage = 1;
       } else if (object.all_sources && object.query) {
         loadAllSources(object.query);
       } else {
@@ -1365,11 +1390,28 @@
       }
     );
 
-    // Revoke HLS blob URLs when the player closes to prevent memory leaks on TV devices.
+    // Revoke HLS blob URLs on player close; push related panel if available (REQ-4).
     Lampa.Listener.follow('player', function (e) {
-      if (e.type === 'destroy' && _blobUrls.length) {
-        _blobUrls.forEach(function (u) { try { URL.revokeObjectURL(u); } catch (_) {} });
-        _blobUrls = [];
+      if (e.type === 'destroy') {
+        if (_blobUrls.length) {
+          _blobUrls.forEach(function (u) { try { URL.revokeObjectURL(u); } catch (_) {} });
+          _blobUrls = [];
+        }
+        // REQ-4: invalidate any in-flight getRelated then push related grid if ready.
+        _relatedGeneration++;
+        if (_pendingRelated.length) {
+          var items = _pendingRelated;
+          var rSrc  = _relatedSrc;
+          _pendingRelated = [];
+          _relatedSrc     = null;
+          Lampa.Activity.push({
+            component:      'cherry_grid',
+            title:          Lampa.Lang.translate('cherry_related'),
+            source_id:      rSrc ? rSrc.id : '',
+            _related_items: items,
+            page:           1
+          });
+        }
       }
     });
   }
@@ -1669,6 +1711,22 @@ SOURCES.push({
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
+  getRelated: function(video) {
+    var self = this;
+    return cherryFetch(video.url).then(function(html) {
+      // Try to find relatedVideosJSON block first
+      var jsonMatch = html.match(/var\s+relatedVideosJSON\s*=\s*(\[[\s\S]+?\]);\s*\n/);
+      if (jsonMatch) {
+        var arr;
+        try { arr = JSON.parse(jsonMatch[1]); } catch(e) { arr = []; }
+        var items = arr.map(function(v) { return self._mapVideo(v); }).filter(function(v) { return v.id; });
+        if (items.length) return items;
+      }
+      // Fallback: parse HTML card links from the page (reuse _parseHtmlCards)
+      return self._parseHtmlCards(html).slice(0, 20);
+    }).catch(function() { return []; });
+  },
+
   getStream: function(video) {
     var pageUrl = video.url;
     if (!pageUrl) return Promise.resolve({ url: '', quality: {} });
@@ -1798,6 +1856,14 @@ SOURCES.push({
       var items = self._parseCards(html, p);
       return { items: items, total_pages: p + 5 };
     }).catch(function() { return { items: [], total_pages: 0 }; });
+  },
+
+  getRelated: function(video) {
+    var self = this;
+    return cherryFetch(video.url).then(function(html) {
+      // xvideos video pages include a related videos section with thumb-block cards
+      return self._parseCards(html, 1).slice(0, 20);
+    }).catch(function() { return []; });
   },
 
   getStream: function(video) {

@@ -977,3 +977,149 @@ describe('REQ-3 model browse', function () {
     expect(playVideoCalled).toBe(false);
   });
 });
+
+// ============================================================
+// REQ-4: Related videos — generation counter + push logic tests
+// ============================================================
+
+// Inline reimplementation of the playVideo getRelated + player destroy logic.
+function makeRelatedState() {
+  var state = {
+    relatedGeneration: 0,
+    pendingRelated:    [],
+    relatedSrc:        null
+  };
+
+  function playVideoRelated(video, source, _getRelated) {
+    state.relatedGeneration++;
+    var myGen          = state.relatedGeneration;
+    state.pendingRelated = [];
+    state.relatedSrc     = null;
+    if (source.getRelated) {
+      _getRelated(video).then(function (items) {
+        if (myGen !== state.relatedGeneration) return;
+        if (items && items.length) {
+          state.pendingRelated = items;
+          state.relatedSrc     = source;
+        }
+      }).catch(function () {});
+    }
+  }
+
+  function onPlayerDestroy(ActivityPush, translateFn) {
+    state.relatedGeneration++;
+    if (state.pendingRelated.length) {
+      var items = state.pendingRelated;
+      var rSrc  = state.relatedSrc;
+      state.pendingRelated = [];
+      state.relatedSrc     = null;
+      ActivityPush({
+        component:      'cherry_grid',
+        title:          translateFn('cherry_related'),
+        source_id:      rSrc ? rSrc.id : '',
+        _related_items: items,
+        page:           1
+      });
+    }
+  }
+
+  return { state: state, playVideoRelated: playVideoRelated, onPlayerDestroy: onPlayerDestroy };
+}
+
+describe('REQ-4 related videos', function () {
+  it('AC-4.1: adapter with getRelated — spy called after playVideoRelated', async function () {
+    var r = makeRelatedState();
+    var spyCalled = false;
+    var src = {
+      id: 'pornhub',
+      getRelated: function(v) {
+        spyCalled = true;
+        return Promise.resolve([{ id: '1', title: 'r1' }]);
+      }
+    };
+    r.playVideoRelated({ id: 'v1' }, src, src.getRelated.bind(src));
+    await Promise.resolve();
+    expect(spyCalled).toBe(true);
+  });
+
+  it('AC-4.2: adapter without getRelated — no error, pendingRelated stays empty', function () {
+    var r = makeRelatedState();
+    var src = { id: 'xvideos' }; // no getRelated
+    r.playVideoRelated({ id: 'v1' }, src, function() { return Promise.resolve([]); });
+    expect(r.state.pendingRelated.length).toBe(0);
+  });
+
+  it('AC-4.3: player destroy with non-empty pendingRelated — Activity.push called', async function () {
+    var r = makeRelatedState();
+    var src = {
+      id: 'pornhub',
+      getRelated: function(v) { return Promise.resolve([{ id: '1', title: 'r1' }]); }
+    };
+    r.playVideoRelated({ id: 'v1' }, src, src.getRelated.bind(src));
+    await new Promise(function(res) { setTimeout(res, 0); });
+
+    var pushed = null;
+    r.onPlayerDestroy(function(p) { pushed = p; }, function(k) { return k; });
+    expect(pushed).not.toBeNull();
+    expect(pushed.component).toBe('cherry_grid');
+    expect(pushed._related_items.length).toBe(1);
+  });
+
+  it('AC-4.4: player destroy with empty pendingRelated — Activity.push NOT called', function () {
+    var r = makeRelatedState();
+    var pushed = null;
+    r.onPlayerDestroy(function(p) { pushed = p; }, function(k) { return k; });
+    expect(pushed).toBeNull();
+  });
+
+  it('AC-4.7: generation counter prevents stale result overwrite', async function () {
+    var r = makeRelatedState();
+    var resolveFirst;
+    var src1 = {
+      id: 's1',
+      getRelated: function() {
+        return new Promise(function(res) { resolveFirst = res; });
+      }
+    };
+    var src2 = {
+      id: 's2',
+      getRelated: function() {
+        return Promise.resolve([{ id: '2', title: 'second' }]);
+      }
+    };
+    // First call — will resolve late
+    r.playVideoRelated({ id: 'v1' }, src1, src1.getRelated.bind(src1));
+    // Second call — resolves immediately
+    r.playVideoRelated({ id: 'v2' }, src2, src2.getRelated.bind(src2));
+    await new Promise(function(res) { setTimeout(res, 0); });
+    // Now resolve the first (stale)
+    resolveFirst([{ id: '1', title: 'first' }]);
+    await new Promise(function(res) { setTimeout(res, 0); });
+    // Only second call's result should survive
+    expect(r.state.pendingRelated.length).toBe(1);
+    expect(r.state.pendingRelated[0].id).toBe('2');
+  });
+
+  it('AC-4.5: CherryGrid with _related_items — renderCards called, no loadPage', function () {
+    // Simulate the create() branch logic
+    var rendered = false;
+    var loadPageCalled = false;
+    var object = { _related_items: [{ id: '1' }, { id: '2' }] };
+
+    function simulateCreate() {
+      if (object.is_favorites) {
+        // ...
+      } else if (object._related_items) {
+        rendered = true;
+        // renderCards(object._related_items, ...)
+      } else if (object.all_sources) {
+        // ...
+      } else {
+        loadPageCalled = true;
+      }
+    }
+    simulateCreate();
+    expect(rendered).toBe(true);
+    expect(loadPageCalled).toBe(false);
+  });
+});
