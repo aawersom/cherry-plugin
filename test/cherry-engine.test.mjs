@@ -1322,6 +1322,62 @@ function xnxxParseCards(html) {
   return items;
 }
 
+// ============================================================
+// adapter-preview-quality: pornhub data-mediabook (REQ-3)
+// ============================================================
+function phParseHtmlCards(html) {
+  // _attr, _decodeHtml, parseDur, parseViews already at module scope (lines 13/20/32/44)
+  var items = [];
+  var seen = {};
+  var hrefRx = /href="(\/view_video\.php\?viewkey=([a-z0-9]+)[^"]*)"/g;
+  var m;
+  while ((m = hrefRx.exec(html)) !== null) {
+    var href = m[1];
+    var vkey = m[2];
+    if (!vkey || seen[vkey]) continue;
+    seen[vkey] = true;
+    var videoUrl = 'https://www.pornhub.com' + href;
+    var chunk = html.slice(Math.max(0, m.index - 200), m.index + 800);
+    var thumb = _attr(chunk, /data-mediumthumb="([^"]+)"/) ||
+                _attr(chunk, /data-thumb_url="([^"]+)"/) || '';
+    var preview = _attr(chunk, /data-mediabook="([^"]+)"/);
+    var title = _decodeHtml(
+      _attr(chunk, /class="[^"]*videoTitle[^"]*"[^>]*>([^<]+)/) ||
+      _attr(chunk, /title="([^"]+)"/)
+    );
+    var duration = parseDur(_attr(chunk, /<var class="duration">([^<]+)</));
+    var views    = parseViews(_attr(chunk, /class="[^"]*videoViewCount[^"]*"[^>]*>([^<]+)</));
+    if (title || thumb) {
+      items.push({ id: vkey, source: 'pornhub', title: title, thumb: thumb,
+                   preview: preview, url: videoUrl, duration: duration, views: views });
+    }
+  }
+  return items;
+}
+
+describe('REQ-3 pornhub data-mediabook', function () {
+  var MEDIABOOK = 'https://kw.phncdn.com/videos/202405/14/452452431/180P_225K_452452431.webm?hdnea=st=1~exp=2~hdl=-1~hmac=abc';
+
+  it('AC-P4: extracts data-mediabook as preview', function () {
+    var html = '<li class="pcVideoListItem"><a href="/view_video.php?viewkey=ph123456">' +
+               '<img data-mediumthumb="https://ei.phncdn.com/thumb.jpg"' +
+               ' data-mediabook="' + MEDIABOOK + '">' +
+               '</a><span class="videoTitle"><a title="Test">Test video</a></span></li>';
+    var items = phParseHtmlCards(html);
+    expect(items.length).toBe(1);
+    expect(items[0].preview).toBe(MEDIABOOK);
+  });
+
+  it('AC-P5: card without data-mediabook has empty preview', function () {
+    var html = '<li class="pcVideoListItem"><a href="/view_video.php?viewkey=ph123456">' +
+               '<img data-mediumthumb="https://ei.phncdn.com/thumb.jpg">' +
+               '</a><span class="videoTitle"><a title="Test">Test video</a></span></li>';
+    var items = phParseHtmlCards(html);
+    expect(items.length).toBe(1);
+    expect(items[0].preview).toBe('');
+  });
+});
+
 describe('REQ-2 xnxx video.preview', function () {
   var UUID = '8f9a9694-d042-4f65-9a3b-c13ed3c0f91b';
   var THUMB = 'https://thumb-cdn77.xnxx-cdn.com/' + UUID + '/3/xn_15_t.jpg';

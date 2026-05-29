@@ -1766,6 +1766,7 @@ SOURCES.push({
       var chunk = html.slice(Math.max(0, m.index - 200), m.index + 800);
       var thumb = _attr(chunk, /data-mediumthumb="([^"]+)"/) ||
                   _attr(chunk, /data-thumb_url="([^"]+)"/) || '';
+      var preview = _attr(chunk, /data-mediabook="([^"]+)"/);
       var title = _decodeHtml(
         _attr(chunk, /class="[^"]*videoTitle[^"]*"[^>]*>([^<]+)/) ||
         _attr(chunk, /title="([^"]+)"/)
@@ -1774,7 +1775,7 @@ SOURCES.push({
       var views    = parseViews(_attr(chunk, /class="[^"]*videoViewCount[^"]*"[^>]*>([^<]+)</));
       if (title || thumb) {
         items.push({ id: vkey, source: 'pornhub', title: title, thumb: thumb,
-                     url: videoUrl, duration: duration, views: views });
+                     preview: preview, url: videoUrl, duration: duration, views: views });
       }
     }
     return items;
