@@ -1,0 +1,567 @@
+/**
+ * Unit tests for _kvsPages, _kvsParseCards, _kvsEngine.
+ * Functions are defined inline here since plugin.js is a browser IIFE
+ * and these three helpers do not exist in plugin.js yet (Phase 0 — RED).
+ *
+ * Pattern: identical to plugin-helpers.test.js — copy-paste the pure
+ * helpers verbatim at the top, then describe/it below.
+ */
+import { describe, it, expect } from 'vitest';
+
+// ---- _attr ------------------------------------------------------------------
+// Verbatim from plugin.js line 1333
+function _attr(html, rx, group) {
+  var m = rx.exec(html);
+  return (m && m[group || 1] !== undefined) ? m[group || 1].trim() : '';
+}
+
+// ---- _decodeHtml ------------------------------------------------------------
+// Verbatim from plugin.js line 1343
+function _decodeHtml(s) {
+  return (s || '').replace(/&amp;/g, '&')
+                  .replace(/&lt;/g, '<')
+                  .replace(/&gt;/g, '>')
+                  .replace(/&quot;/g, '"')
+                  .replace(/&#039;/g, "'")
+                  .replace(/&nbsp;/g, ' ')
+                  .trim();
+}
+
+// ---- parseDur ---------------------------------------------------------------
+// Verbatim from plugin.js line 1211
+function parseDur(str) {
+  if (!str) return 0;
+  str = ('' + str).trim();
+  if (/^\d+$/.test(str)) return parseInt(str, 10);
+  var p = str.split(':').map(Number);
+  if (p.length === 2) return p[0] * 60 + p[1];
+  if (p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
+  return 0;
+}
+
+// ---- parseViews -------------------------------------------------------------
+// Verbatim from plugin.js line 1225
+function parseViews(str) {
+  if (!str) return 0;
+  str = ('' + str).replace(/[,\s]/g, '');
+  if (/k$/i.test(str)) return parseInt(str) * 1000;
+  if (/m$/i.test(str)) return parseInt(str) * 1000000;
+  return parseInt(str, 10) || 0;
+}
+
+// ---- _kvsPages --------------------------------------------------------------
+// Spec: A-5 / primer §A-5
+// - if pagesRxOrFn is a function: call it(html, page), return result || 10
+// - if RegExp: exec html, parseInt group 1, || 10
+// - else (undefined / null / other): return 10
+// - no-match: return 10
+function _kvsPages(html, pagesRxOrFn, page) {
+  if (typeof pagesRxOrFn === 'function') {
+    return pagesRxOrFn(html, page) || 10;
+  }
+  if (pagesRxOrFn instanceof RegExp) {
+    var m = pagesRxOrFn.exec(html);
+    if (m) return parseInt(m[1], 10) || 10;
+    return 10;
+  }
+  return 10;
+}
+
+// ---- _kvsParseCards ---------------------------------------------------------
+// Spec: A-4
+// cfg shape (relevant fields):
+//   hrefRxSrc      string — engine creates new RegExp(hrefRxSrc,'g') each call
+//   idFromUrl      function(url, match): string
+//   chunkWindow    {before, after}  default {before:0, after:800}
+//   thumbRx        RegExp[]
+//   titleRx        RegExp[]
+//   stripBase64    bool
+//   normalizeUrl   function(rawUrl, match): string  (optional)
+//   thumbFallback  function(id): string             (optional)
+//   parseCards     function(html): VideoCard[]       (optional — dispatch override)
+//   id             string — used as card.source
+function _kvsParseCards(html, cfg) {
+  if (cfg.parseCards) {
+    return cfg.parseCards(html);
+  }
+
+  var clean = html;
+  if (cfg.stripBase64) {
+    clean = clean.replace(/\bsrc="data:[^"]+"/g, 'src=""');
+  }
+
+  var before = (cfg.chunkWindow && cfg.chunkWindow.before) || 0;
+  var after  = (cfg.chunkWindow && cfg.chunkWindow.after  !== undefined) ? cfg.chunkWindow.after : 800;
+
+  var hrefRx = new RegExp(cfg.hrefRxSrc, 'g');
+  var seen   = {};
+  var items  = [];
+  var m;
+
+  while ((m = hrefRx.exec(clean)) !== null) {
+    var rawUrl   = m[1];
+    var videoUrl = cfg.normalizeUrl ? cfg.normalizeUrl(rawUrl, m) : rawUrl;
+    var id       = cfg.idFromUrl(videoUrl, m);
+
+    if (!id || seen[id]) continue;
+    seen[id] = true;
+
+    var chunk = clean.slice(Math.max(0, m.index - before), m.index + after);
+
+    // thumb
+    var thumb = '';
+    var thumbRxList = cfg.thumbRx || [];
+    for (var ti = 0; ti < thumbRxList.length; ti++) {
+      thumb = _attr(chunk, thumbRxList[ti]);
+      if (thumb) break;
+    }
+    if (!thumb && cfg.thumbFallback) {
+      thumb = cfg.thumbFallback(id);
+    }
+
+    // title
+    var titleRaw = '';
+    var titleRxList = cfg.titleRx || [];
+    for (var ri = 0; ri < titleRxList.length; ri++) {
+      titleRaw = _attr(chunk, titleRxList[ri]);
+      if (titleRaw) break;
+    }
+    var title = _decodeHtml(titleRaw);
+
+    // duration
+    var durStr   = _attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</);
+    var duration = parseDur(durStr);
+
+    // views
+    var viewsStr = _attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</);
+    var views    = parseViews(viewsStr);
+
+    if (title || thumb) {
+      items.push({ id: id, source: cfg.id, title: title, thumb: thumb,
+                   url: videoUrl, duration: duration, views: views });
+    }
+  }
+
+  return items;
+}
+
+// ---- _kvsEngine -------------------------------------------------------------
+// Spec: A-1 / A-3 / A-5
+// Returns {id, name, host, search, browse, getStream}.
+// cherryFetch is injected via cfg._cherryFetch so tests can mock it without
+// patching a module-level variable.  In the real plugin.js the closure
+// references the module-scope cherryFetch directly; here we use the same
+// injection trick that plugin-helpers.test.js uses for validateStreamReachable.
+function _kvsEngine(cfg) {
+  // In production plugin.js, cherryFetch is a closure variable (not injected).
+  // For testability we allow cfg._cherryFetch as an override.
+  var fetch = cfg._cherryFetch;
+
+  function _doCards(html) {
+    return _kvsParseCards(html, cfg);
+  }
+
+  return {
+    id:   cfg.id,
+    name: cfg.name,
+    host: cfg.host,
+
+    search: function(query, page) {
+      return fetch(cfg.searchUrl(query, page)).then(function(html) {
+        var items = _doCards(html);
+        var total = typeof cfg.searchTotalPages === 'number'
+          ? cfg.searchTotalPages
+          : _kvsPages(html, cfg.pagesRx, page);
+        return { items: items, total_pages: total };
+      }).catch(function() { return { items: [], total_pages: 0 }; });
+    },
+
+    browse: function(category, page) {
+      return fetch(cfg.browseUrl(page || 1)).then(function(html) {
+        return {
+          items:       _doCards(html),
+          total_pages: _kvsPages(html, cfg.pagesRx, page)
+        };
+      }).catch(function() { return { items: [], total_pages: 0 }; });
+    },
+
+    getStream: cfg.getStream
+  };
+}
+
+// =============================================================================
+// Fixtures
+// =============================================================================
+
+// Minimal fixture HTML: one video card with href, title, img, duration, views.
+var FIXTURE_HTML = [
+  '<div class="thumb-block">',
+  '<a href="https://example.com/videos/123/hot-video/">',
+  '<img data-src="https://cdn.example.com/thumb-123.jpg" alt="Hot Video">',
+  '<span class="duration">12:34</span>',
+  '<span class="views">1,234</span>',
+  '</a>',
+  '<strong class="title-label">Hot Video</strong>',
+  '</div>'
+].join('\n');
+
+// Minimal cfg for _kvsParseCards (no cherryFetch needed)
+var BASE_CFG = {
+  id:         'example',
+  hrefRxSrc:  'href="(https?:\\/\\/example\\.com\\/videos\\/[0-9]+\\/[^"]+)"',
+  idFromUrl:  function(url) {
+    return url.replace(/^https?:\/\/[^/]+/, '').replace(/[^a-z0-9]/gi, '_');
+  },
+  chunkWindow: { before: 0, after: 800 },
+  thumbRx: [
+    /(?:data-src|src)="([^"?#]+\.jpe?g)"/i
+  ],
+  titleRx: [
+    /<strong[^>]*class="[^"]*title[^"]*"[^>]*>\s*([^<]+)/,
+    /alt="([^"]+)"/
+  ]
+};
+
+// =============================================================================
+// describe: _kvsPages
+// =============================================================================
+
+describe('_kvsPages', () => {
+  it('extracts page count via RegExp', () => {
+    var html = '<a href="?p=42"class="last">&raquo;</a>';
+    var rx = /p=(\d+)"[^>]*(?:last|>>|&raquo;)/i;
+    expect(_kvsPages(html, rx, 1)).toBe(42);
+  });
+
+  it('returns 10 when RegExp does not match', () => {
+    var html = '<a href="/page/2/">Next</a>';
+    var rx = /p=(\d+)"[^>]*(?:last|>>|&raquo;)/i;
+    expect(_kvsPages(html, rx, 1)).toBe(10);
+  });
+
+  it('calls function and returns its result', () => {
+    var html = '<a href="/99/">last</a>';
+    var fn = function(h, p) { return 99; };
+    expect(_kvsPages(html, fn, 1)).toBe(99);
+  });
+
+  it('returns 10 for falsy function return (zero counts as falsy → 10)', () => {
+    // A function returning 0 should fall back to 10 (same as no-match).
+    var fn = function() { return 0; };
+    expect(_kvsPages('', fn, 1)).toBe(10);
+  });
+
+  it('returns 10 when pagesRxOrFn is undefined', () => {
+    expect(_kvsPages('<p>some html</p>', undefined, 1)).toBe(10);
+  });
+
+  it('passes (html, page) to function form', () => {
+    var captured = {};
+    var fn = function(html, page) {
+      captured.html = html;
+      captured.page = page;
+      return 5;
+    };
+    _kvsPages('test-html', fn, 3);
+    expect(captured.html).toBe('test-html');
+    expect(captured.page).toBe(3);
+  });
+
+  it('function returning p+5 dynamic fallback works', () => {
+    // hellporno pagesRx pattern: returns p+5 when no links found
+    var fn = function(html, p) {
+      var nums = [];
+      var rx1 = /hellporno\.com\/(\d+)\//g;
+      var m;
+      while ((m = rx1.exec(html)) !== null) nums.push(parseInt(m[1], 10));
+      return nums.length ? Math.max.apply(null, nums) : (p + 5);
+    };
+    // No pagination links → should return page+5
+    expect(_kvsPages('<html>no links here</html>', fn, 3)).toBe(8);
+  });
+});
+
+// =============================================================================
+// describe: _kvsParseCards
+// =============================================================================
+
+describe('_kvsParseCards', () => {
+  it('returns [] for empty html', () => {
+    var result = _kvsParseCards('', BASE_CFG);
+    expect(result).toEqual([]);
+  });
+
+  it('extracts one card from fixture HTML with href + title + thumb + duration', () => {
+    var result = _kvsParseCards(FIXTURE_HTML, BASE_CFG);
+    expect(result).toHaveLength(1);
+    var card = result[0];
+    expect(card.source).toBe('example');
+    expect(card.url).toBe('https://example.com/videos/123/hot-video/');
+    expect(card.thumb).toBe('https://cdn.example.com/thumb-123.jpg');
+    expect(card.title).toBe('Hot Video');
+    expect(card.duration).toBe(754); // 12*60+34
+    expect(card.id).toBeTruthy();
+  });
+
+  it('deduplicates cards with same id', () => {
+    // Two identical href blocks in the HTML → one card
+    var html = FIXTURE_HTML + '\n' + FIXTURE_HTML;
+    var result = _kvsParseCards(html, BASE_CFG);
+    expect(result).toHaveLength(1);
+  });
+
+  it('strips base64 src before parsing when cfg.stripBase64 is true', () => {
+    // Insert a base64 src that would otherwise confuse the thumb regex.
+    var html = [
+      '<a href="https://example.com/videos/99/strip-test/">',
+      '<img src="data:image/png;base64,AAAABBBBCCCC" alt="Strip Test">',
+      '<img data-src="https://cdn.example.com/real-thumb.jpg">',
+      '</a>',
+      '<strong class="title-label">Strip Test</strong>'
+    ].join('\n');
+
+    var cfgStrip = Object.assign({}, BASE_CFG, {
+      stripBase64: true,
+      thumbRx: [
+        /(?:data-src|src)="([^"?#]+\.jpe?g)"/i
+      ]
+    });
+
+    var result = _kvsParseCards(html, cfgStrip);
+    expect(result).toHaveLength(1);
+    // The real thumb (data-src) must survive; the base64 src must be stripped.
+    expect(result[0].thumb).toBe('https://cdn.example.com/real-thumb.jpg');
+  });
+
+  it('calls cfg.parseCards and returns its result when provided (dispatch test)', () => {
+    var sentinel = [{ id: 'sentinel', source: 'mock', title: 'S', thumb: '', url: '', duration: 0, views: 0 }];
+    var cfg = Object.assign({}, BASE_CFG, {
+      parseCards: function() { return sentinel; }
+    });
+    var result = _kvsParseCards(FIXTURE_HTML, cfg);
+    expect(result).toBe(sentinel);
+  });
+
+  it('applies cfg.normalizeUrl to raw href capture', () => {
+    // Relative href starting with / — normalizeUrl should prepend the host.
+    var html = [
+      '<a href="/video/77/relative-url/">',
+      '<img data-src="https://cdn.example.com/t.jpg">',
+      '</a>',
+      '<strong class="title-label">Relative</strong>'
+    ].join('\n');
+
+    var cfg = Object.assign({}, BASE_CFG, {
+      hrefRxSrc: 'href="(\\/video\\/[0-9]+\\/[^"]+)"',
+      normalizeUrl: function(rawUrl) {
+        return rawUrl.charAt(0) === '/' ? 'https://example.com' + rawUrl : rawUrl;
+      },
+      idFromUrl: function(url) {
+        return url.replace(/^https?:\/\/[^/]+/, '').replace(/[^a-z0-9]/gi, '_');
+      }
+    });
+
+    var result = _kvsParseCards(html, cfg);
+    expect(result).toHaveLength(1);
+    expect(result[0].url).toBe('https://example.com/video/77/relative-url/');
+  });
+
+  it('uses cfg.thumbFallback when no thumbRx matches', () => {
+    var html = [
+      '<a href="https://example.com/videos/55/no-img/">',
+      '</a>',
+      '<strong class="title-label">No Image</strong>'
+    ].join('\n');
+
+    var cfg = Object.assign({}, BASE_CFG, {
+      thumbRx: [/THIS_WONT_MATCH_ANYTHING/i],
+      thumbFallback: function(id) { return 'https://cdn.example.com/fallback-' + id + '.jpg'; }
+    });
+
+    var result = _kvsParseCards(html, cfg);
+    expect(result).toHaveLength(1);
+    expect(result[0].thumb).toMatch(/fallback/);
+    expect(result[0].thumb).toContain(result[0].id);
+  });
+
+  it('creates fresh RegExp per call (lastIndex not shared across two calls)', () => {
+    // If the engine reused the same /g regex, the second call would start
+    // from a non-zero lastIndex and miss the first match.
+    var result1 = _kvsParseCards(FIXTURE_HTML, BASE_CFG);
+    var result2 = _kvsParseCards(FIXTURE_HTML, BASE_CFG);
+    expect(result1).toHaveLength(1);
+    expect(result2).toHaveLength(1);
+    expect(result2[0].id).toBe(result1[0].id);
+  });
+
+  it('applies cfg.idFromUrl result as card id', () => {
+    var customId = 'my-custom-id-123';
+    var cfg = Object.assign({}, BASE_CFG, {
+      idFromUrl: function() { return customId; }
+    });
+    var result = _kvsParseCards(FIXTURE_HTML, cfg);
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe(customId);
+  });
+
+  it('skips card when id is empty string', () => {
+    var cfg = Object.assign({}, BASE_CFG, {
+      idFromUrl: function() { return ''; }
+    });
+    var result = _kvsParseCards(FIXTURE_HTML, cfg);
+    expect(result).toHaveLength(0);
+  });
+
+  it('extracts views from class containing "views"', () => {
+    var html = [
+      '<a href="https://example.com/videos/77/views-test/">',
+      '<img data-src="https://cdn.example.com/t.jpg">',
+      '<span class="video-views">5k</span>',
+      '</a>',
+      '<strong class="title-label">Views Test</strong>'
+    ].join('\n');
+    var result = _kvsParseCards(html, BASE_CFG);
+    expect(result).toHaveLength(1);
+    expect(result[0].views).toBe(5000);
+  });
+
+  it('skips card when neither title nor thumb can be extracted', () => {
+    // A match with no img and no title markup → should not be pushed.
+    var html = '<a href="https://example.com/videos/11/bare-link/"></a>';
+    var cfg = Object.assign({}, BASE_CFG, {
+      thumbRx: [/THIS_WONT_MATCH/i],
+      titleRx: [/THIS_WONT_MATCH_EITHER/]
+    });
+    var result = _kvsParseCards(html, cfg);
+    expect(result).toHaveLength(0);
+  });
+});
+
+// =============================================================================
+// describe: _kvsEngine
+// =============================================================================
+
+describe('_kvsEngine', () => {
+  // Build a minimal but functional cfg with a mockable cherryFetch.
+  function makeCfg(fetchMock, overrides) {
+    return Object.assign({
+      id:        'testsite',
+      name:      'Test Site',
+      host:      'example.com',
+      searchUrl: function(q, p) { return 'https://example.com/?s=' + q + '&p=' + p; },
+      browseUrl: function(p) { return 'https://example.com/page/' + p + '/'; },
+      hrefRxSrc: BASE_CFG.hrefRxSrc,
+      idFromUrl:  BASE_CFG.idFromUrl,
+      chunkWindow: { before: 0, after: 800 },
+      thumbRx:   BASE_CFG.thumbRx,
+      titleRx:   BASE_CFG.titleRx,
+      pagesRx:   /p=(\d+)"[^>]*(?:last|>>|&raquo;)/i,
+      getStream: function(video) { return Promise.resolve({ url: 'stream.mp4', quality: {} }); },
+      _cherryFetch: fetchMock
+    }, overrides || {});
+  }
+
+  it('returns adapter object with correct shape {id, name, host, search, browse, getStream}', () => {
+    var adapter = _kvsEngine(makeCfg(function() { return Promise.resolve(''); }));
+    expect(adapter.id).toBe('testsite');
+    expect(adapter.name).toBe('Test Site');
+    expect(adapter.host).toBe('example.com');
+    expect(typeof adapter.search).toBe('function');
+    expect(typeof adapter.browse).toBe('function');
+    expect(typeof adapter.getStream).toBe('function');
+    // Must have exactly these six keys (SourceAdapter contract)
+    var keys = Object.keys(adapter).sort();
+    expect(keys).toEqual(['browse', 'getStream', 'host', 'id', 'name', 'search']);
+  });
+
+  it('getStream is cfg.getStream verbatim', () => {
+    var myGetStream = function(v) { return Promise.resolve({ url: 'test.mp4', quality: {} }); };
+    var adapter = _kvsEngine(makeCfg(function() { return Promise.resolve(''); }, {
+      getStream: myGetStream
+    }));
+    expect(adapter.getStream).toBe(myGetStream);
+  });
+
+  it('search calls cfg.searchUrl and returns {items, total_pages}', async () => {
+    var paginatedHtml = FIXTURE_HTML + '\n<a href="?p=7"class="last">&raquo;</a>';
+    var urlSeen = null;
+    var fetch = function(url) { urlSeen = url; return Promise.resolve(paginatedHtml); };
+
+    var adapter = _kvsEngine(makeCfg(fetch));
+    var result = await adapter.search('hot', 2);
+
+    expect(urlSeen).toContain('s=hot');
+    expect(urlSeen).toContain('p=2');
+    expect(result.items).toHaveLength(1);
+    expect(result.total_pages).toBe(7);
+  });
+
+  it('browse calls cfg.browseUrl with page', async () => {
+    var urlSeen = null;
+    var fetch = function(url) { urlSeen = url; return Promise.resolve(FIXTURE_HTML); };
+
+    var adapter = _kvsEngine(makeCfg(fetch));
+    var result = await adapter.browse(null, 3);
+
+    expect(urlSeen).toContain('/page/3/');
+    expect(typeof result.items).toBe('object');
+    expect(typeof result.total_pages).toBe('number');
+  });
+
+  it('browse defaults page to 1 when page is falsy', async () => {
+    var urlSeen = null;
+    var fetch = function(url) { urlSeen = url; return Promise.resolve(''); };
+
+    var adapter = _kvsEngine(makeCfg(fetch));
+    await adapter.browse(null, 0);
+
+    expect(urlSeen).toContain('/page/1/');
+  });
+
+  it('browse uses searchTotalPages when set (search does not paginate)', async () => {
+    // pornobolt: searchTotalPages=1 means total_pages is always 1 for search results
+    var fetch = function() { return Promise.resolve(FIXTURE_HTML); };
+    var adapter = _kvsEngine(makeCfg(fetch, { searchTotalPages: 1 }));
+
+    var result = await adapter.search('test', 1);
+    expect(result.total_pages).toBe(1);
+  });
+
+  it('search catches errors and returns empty result', async () => {
+    var fetch = function() { return Promise.reject(new Error('network error')); };
+    var adapter = _kvsEngine(makeCfg(fetch));
+
+    var result = await adapter.search('test', 1);
+    expect(result.items).toEqual([]);
+    expect(result.total_pages).toBe(0);
+  });
+
+  it('browse catches errors and returns empty result', async () => {
+    var fetch = function() { return Promise.reject(new Error('timeout')); };
+    var adapter = _kvsEngine(makeCfg(fetch));
+
+    var result = await adapter.browse(null, 1);
+    expect(result.items).toEqual([]);
+    expect(result.total_pages).toBe(0);
+  });
+
+  it('browse routes through cfg.parseCards when provided', async () => {
+    var sentinel = [{ id: 'hp-slug', source: 'hellporno', title: 'HP', thumb: 'x.jpg', url: 'y', duration: 0, views: 0 }];
+    var fetch = function() { return Promise.resolve('<html>hellporno browse</html>'); };
+    var adapter = _kvsEngine(makeCfg(fetch, {
+      parseCards: function() { return sentinel; }
+    }));
+
+    var result = await adapter.browse(null, 1);
+    expect(result.items).toBe(sentinel);
+  });
+
+  it('id and source on returned VideoCards match cfg.id', async () => {
+    var fetch = function() { return Promise.resolve(FIXTURE_HTML); };
+    var adapter = _kvsEngine(makeCfg(fetch));
+
+    var result = await adapter.browse(null, 1);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].source).toBe('testsite');
+  });
+});

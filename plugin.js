@@ -2354,6 +2354,113 @@ function _porntrexPages(html) {
     return 10;
 }
 
+  // ============================================================
+  // KVS ENGINE — generic browse/search/card-parse for KVS sites
+  // ============================================================
+
+  function _kvsPages(html, pagesRxOrFn, page) {
+    if (typeof pagesRxOrFn === 'function') {
+      return pagesRxOrFn(html, page) || 10;
+    }
+    if (pagesRxOrFn instanceof RegExp) {
+      var m = pagesRxOrFn.exec(html);
+      if (m) return parseInt(m[1], 10) || 10;
+      return 10;
+    }
+    return 10;
+  }
+
+  function _kvsParseCards(html, cfg) {
+    if (cfg.parseCards) {
+      return cfg.parseCards(html);
+    }
+    if (!cfg.hrefRxSrc) return [];
+
+    var clean = cfg.stripBase64 ? html.replace(/\bsrc="data:[^"]+"/g, 'src=""') : html;
+    var before = (cfg.chunkWindow && cfg.chunkWindow.before) || 0;
+    var after  = (cfg.chunkWindow && cfg.chunkWindow.after !== undefined) ? cfg.chunkWindow.after : 800;
+
+    var hrefRx = new RegExp(cfg.hrefRxSrc, 'g');
+    var seen   = {};
+    var items  = [];
+    var m;
+
+    while ((m = hrefRx.exec(clean)) !== null) {
+      var rawUrl   = m[1];
+      var videoUrl = cfg.normalizeUrl ? cfg.normalizeUrl(rawUrl, m) : rawUrl;
+      var id       = cfg.idFromUrl(videoUrl, m);
+
+      if (!id || seen[id]) continue;
+      seen[id] = true;
+
+      var chunk = clean.slice(Math.max(0, m.index - before), m.index + after);
+
+      var thumb = '';
+      var thumbRxList = cfg.thumbRx || [];
+      for (var ti = 0; ti < thumbRxList.length; ti++) {
+        thumb = _attr(chunk, thumbRxList[ti]);
+        if (thumb) break;
+      }
+      if (!thumb && cfg.thumbFallback) {
+        thumb = cfg.thumbFallback(id);
+      }
+
+      var titleRaw = '';
+      var titleRxList = cfg.titleRx || [];
+      for (var ri = 0; ri < titleRxList.length; ri++) {
+        titleRaw = _attr(chunk, titleRxList[ri]);
+        if (titleRaw) break;
+      }
+      var title = _decodeHtml(titleRaw);
+
+      var durStr   = _attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</);
+      var duration = parseDur(durStr);
+
+      var viewsStr = _attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</);
+      var views    = parseViews(viewsStr);
+
+      if (title || thumb) {
+        items.push({ id: id, source: cfg.id, title: title, thumb: thumb,
+                     url: videoUrl, duration: duration, views: views });
+      }
+    }
+
+    return items;
+  }
+
+  function _kvsEngine(cfg) {
+    if (cfg.id && !/^[a-z0-9_-]+$/i.test(cfg.id)) {
+      throw new Error('Cherry _kvsEngine: cfg.id must be alphanumeric/hyphen/underscore, got: ' + cfg.id);
+    }
+    return {
+      id:   cfg.id,
+      name: cfg.name,
+      host: cfg.host,
+
+      search: function(query, page) {
+        return cherryFetch(cfg.searchUrl(query, page)).then(function(html) {
+          var items = _kvsParseCards(html, cfg);
+          var total = typeof cfg.searchTotalPages === 'number'
+            ? cfg.searchTotalPages
+            : _kvsPages(html, cfg.pagesRx, page);
+          return { items: items, total_pages: total };
+        }).catch(function() { return { items: [], total_pages: 0 }; });
+      },
+
+      browse: function(category, page) {
+        var p = page || 1;
+        return cherryFetch(cfg.browseUrl(p)).then(function(html) {
+          return {
+            items:       _kvsParseCards(html, cfg),
+            total_pages: _kvsPages(html, cfg.pagesRx, p)
+          };
+        }).catch(function() { return { items: [], total_pages: 0 }; });
+      },
+
+      getStream: cfg.getStream
+    };
+  }
+
 // ---- 2. Xozilla ----
 SOURCES.push({
     id: 'xozilla',
