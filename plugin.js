@@ -3047,12 +3047,32 @@ function _perfektPages(html) {
 }
 
 // ---- HellPorno ----
-SOURCES.push({
+SOURCES.push(_kvsEngine({
   id: 'hellporno',
   name: 'HellPorno',
   host: 'hellporno.com',
-
-  _parseCards: function(html) {
+  searchUrl: function(query, page) {
+    return 'https://hellporno.com/search/' + (page || 1) + '/?q=' + encodeURIComponent(query);
+  },
+  browseUrl: function(page) {
+    return 'https://hellporno.com/' + (page || 1) + '/';
+  },
+  pagesRx: function(html, p) {
+    var nums = [];
+    var m;
+    var brRe = /href="https?:\/\/hellporno\.com\/(\d+)\/"/g;
+    while ((m = brRe.exec(html)) !== null) {
+      var n = parseInt(m[1], 10);
+      if (!isNaN(n)) nums.push(n);
+    }
+    var srRe = /\/search\/(\d+)\//g;
+    while ((m = srRe.exec(html)) !== null) {
+      var n = parseInt(m[1], 10);
+      if (!isNaN(n)) nums.push(n);
+    }
+    return nums.length ? Math.max.apply(null, nums) : (p + 5);
+  },
+  parseCards: function(html) {
     var items = [];
     var seen = {};
     var blocks = html.split('<div class="video-thumb"');
@@ -3066,20 +3086,17 @@ SOURCES.push({
       if (seen[id]) continue;
       seen[id] = true;
 
-      // Thumbnail: poster attribute on video preview, or CDN img
       var thumbMatch = block.match(/poster="([^"]+\.jpg[^"]*)"/) ||
                        block.match(/data-src="([^"]+)"/) ||
                        block.match(/src="([^"]+img\d+-hp\.hellcdn[^"]+)"/) ||
                        block.match(/src="([^"]+\.jpg[^"]*)"/);
       var thumb = thumbMatch ? thumbMatch[1] : '';
 
-      // Title: <a class="title">TITLE</a>
       var titleMatch = block.match(/<a[^>]*class="title"[^>]*>([^<]+)/) ||
                        block.match(/<div[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\/div>/) ||
                        block.match(/title="([^"]+)"/);
       var title = titleMatch ? stripTags(titleMatch[1]) : slug.replace(/-/g, ' ');
 
-      // Duration: <span class="time">7:57</span>
       var durMatch = block.match(/<span[^>]*class="[^"]*time[^"]*"[^>]*>([^<]+)/) ||
                      block.match(/<span[^>]*class="[^"]*duration[^"]*"[^>]*>([^<]+)/) ||
                      block.match(/([\d]+:[\d]{2})/);
@@ -3097,62 +3114,21 @@ SOURCES.push({
     }
     return items;
   },
-
-  search: function(query, page) {
-    var self = this;
-    var p = page || 1;
-    var url = 'https://hellporno.com/search/' + p + '/?q=' + encodeURIComponent(query);
-    return cherryFetch(url).then(function(html) {
-      var items = self._parseCards(html);
-      var pgNums = [];
-      var pgRe = /\/search\/(\d+)\//g;
-      var m;
-      while ((m = pgRe.exec(html)) !== null) {
-        var n = parseInt(m[1], 10);
-        if (!isNaN(n)) pgNums.push(n);
-      }
-      var total = pgNums.length ? Math.max.apply(null, pgNums) : p + 5;
-      return { items: items, total_pages: total };
-    }).catch(function() { return { items: [], total_pages: 0 }; });
-  },
-
-  browse: function(category, page) {
-    var self = this;
-    var p = page || 1;
-    var url = 'https://hellporno.com/' + p + '/';
-    return cherryFetch(url).then(function(html) {
-      var items = self._parseCards(html);
-      var pgNums = [];
-      var pgRe = /href="https?:\/\/hellporno\.com\/(\d+)\/"/g;
-      var m;
-      while ((m = pgRe.exec(html)) !== null) {
-        var n = parseInt(m[1], 10);
-        if (!isNaN(n)) pgNums.push(n);
-      }
-      var total = pgNums.length ? Math.max.apply(null, pgNums) : p + 5;
-      return { items: items, total_pages: total };
-    }).catch(function() { return { items: [], total_pages: 0 }; });
-  },
-
   getStream: function(video) {
     return cherryFetch(video.url).then(function(html) {
       var quality = {};
       var url = '';
       var m;
 
-      // Pattern 0: chs_object JS variable (yt-dlp HellPorno extractor approach)
-      // var chs_object = {..., "urlPlayer":"https://..."}
       var chsM = html.match(/var\s+chs_object\s*=\s*(\{[\s\S]+?\});/);
       if (chsM) {
         try {
           var chs = JSON.parse(chsM[1]);
           var playerUrl = chs.urlPlayer || chs.url_player || '';
           if (playerUrl && playerUrl.indexOf('http') === 0) {
-            // Player URL itself may be an MP4 or we need to fetch it
             if (/\.mp4/.test(playerUrl)) {
               return { url: playerUrl, quality: {} };
             }
-            // Fetch the iframe player page to extract the real stream
             return cherryFetch(playerUrl).then(function(ihtml) {
               var iResult = extractStreams(ihtml);
               return iResult.url ? iResult : extractStreams(html);
@@ -3161,7 +3137,6 @@ SOURCES.push({
         } catch (e) {}
       }
 
-      // Pattern 1: <source type="video/mp4"> — extract quality from res/label/title attribute
       var srcRe = /<source\s([^>]+)>/gi;
       while ((m = srcRe.exec(html)) !== null) {
         var attrs = m[1];
@@ -3174,12 +3149,10 @@ SOURCES.push({
         if (!url) url = srcM[1];
       }
 
-      // Fallback
       if (!url && !Object.keys(quality).length) {
         return extractStreams(html);
       }
 
-      // Pick best quality by resolution number
       if (Object.keys(quality).length) {
         var best = Object.keys(quality).reduce(function(a, b) {
           return (parseInt(a, 10) || 0) >= (parseInt(b, 10) || 0) ? a : b;
@@ -3190,7 +3163,7 @@ SOURCES.push({
       return { url: url, quality: quality };
     }).catch(function() { return { url: '', quality: {} }; });
   }
-});
+}));
 
 // ---- 16. Pornobolt ----
 SOURCES.push({
