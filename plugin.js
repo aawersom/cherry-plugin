@@ -380,6 +380,9 @@
     var _currentPreviewEl   = null;
     var _currentPreviewCard = null;
 
+    var currentSort     = '';
+    var currentCategory = '';
+
     function _stopCurrentPreview() {
       if (_currentPreviewEl) {
         _currentPreviewEl.pause();
@@ -403,6 +406,22 @@
         if (!videoEl.parentNode) return;
         videoEl.style.display = 'none';
       });
+    }
+
+    function _reloadFromStart() {
+      html.find('.cherry-grid__empty').hide();
+      currentPage = 1;
+      totalPages  = 1;
+      loading     = false;
+      scroll.body().find('.cherry-card').remove();
+      loadPage(1);
+    }
+
+    function _findLabel(arr, id) {
+      for (var i = 0; i < arr.length; i++) {
+        if (arr[i].id === id) return arr[i].label;
+      }
+      return id;
     }
 
     // ---- lifecycle --------------------------------------------------
@@ -432,6 +451,60 @@
 
       scroll.body().addClass('cherry-cards-wrap');
       html.find('.cherry-grid__body').append(scroll.render());
+
+      // REQ-5: filter bar visibility + handlers.
+      var hasSorts = source && source.cfg && source.cfg.sorts && source.cfg.sorts.length;
+      var hasCats  = source && source.cfg && source.cfg.categories && source.cfg.categories.length;
+
+      if (hasSorts || hasCats) {
+        html.find('.cherry-grid__filters').show();
+      }
+      if (!hasSorts) { html.find('.cherry-grid__filter-sort').hide(); }
+      if (!hasCats)  { html.find('.cherry-grid__filter-cat').hide(); }
+
+      html.find('.cherry-grid__filter-sort').on('hover:enter', function () {
+        if (!source || !source.cfg || !source.cfg.sorts) return;
+        var items = source.cfg.sorts.map(function (s) {
+          return { title: s.label, id: s.id };
+        });
+        items.unshift({ title: Lampa.Lang.translate('cherry_sort_default'), id: '' });
+        Lampa.Select.show({
+          title: Lampa.Lang.translate('cherry_sort'),
+          items: items,
+          onSelect: function (item) {
+            currentSort = item.id;
+            var sortLabel = currentSort
+              ? _findLabel(source.cfg.sorts, currentSort)
+              : Lampa.Lang.translate('cherry_sort');
+            html.find('.cherry-grid__filter-sort').text(sortLabel);
+            _reloadFromStart();
+            Lampa.Controller.toggle('cherry_grid');
+          },
+          onBack: function () { Lampa.Controller.toggle('cherry_grid'); }
+        });
+      });
+
+      html.find('.cherry-grid__filter-cat').on('hover:enter', function () {
+        if (!source || !source.cfg || !source.cfg.categories) return;
+        var items = source.cfg.categories.map(function (c) {
+          return { title: c.label, id: c.id };
+        });
+        items.unshift({ title: Lampa.Lang.translate('cherry_category_default'), id: '' });
+        Lampa.Select.show({
+          title: Lampa.Lang.translate('cherry_category'),
+          items: items,
+          onSelect: function (item) {
+            currentCategory = item.id;
+            var catLabel = currentCategory
+              ? _findLabel(source.cfg.categories, currentCategory)
+              : Lampa.Lang.translate('cherry_category');
+            html.find('.cherry-grid__filter-cat').text(catLabel);
+            _reloadFromStart();
+            Lampa.Controller.toggle('cherry_grid');
+          },
+          onBack: function () { Lampa.Controller.toggle('cherry_grid'); }
+        });
+      });
 
       if (object.is_favorites) {
         var favItems = Fav.all();
@@ -507,9 +580,9 @@
         }
         promise = source.browseByModel(object.model_url, page);
       } else if (object.query) {
-        promise = source.search(object.query, page);
+        promise = source.search(object.query, page, currentSort);
       } else {
-        promise = source.browse('', page);
+        promise = source.browse(currentCategory, page, currentSort);
       }
 
       promise.then(function (result) {
@@ -1643,11 +1716,20 @@ SOURCES.push({
     };
   },
 
-  search: function(query, page) {
+  cfg: {
+    sorts: [
+      { id: 'mv',   label: 'Популярное'  },
+      { id: 'tr',   label: 'Трендовое'   },
+      { id: 'mr',   label: 'Свежее'      }
+    ]
+  },
+
+  search: function(query, page, sort) {
     var self = this;
     var p = page || 1;
+    var ordering = (sort && sort !== 'mv') ? sort : 'mostviewed';
     var url = 'https://www.pornhub.com/webmasters/search?search=' + encodeURIComponent(query) +
-      '&page=' + p + '&ordering=mostviewed&thumbsize=medium_hd';
+      '&page=' + p + '&ordering=' + ordering + '&thumbsize=medium_hd';
     return cherryFetch(url).then(function(text) {
       var data = JSON.parse(text);
       var videos = data.videos || (data.data && data.data.videos) || [];
@@ -1656,11 +1738,12 @@ SOURCES.push({
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
-  browse: function(category, page) {
+  browse: function(category, page, sort) {
     var self = this;
     var p = page || 1;
+    var ordering = (sort && sort !== 'mv') ? sort : 'mostviewed';
     var url = 'https://www.pornhub.com/webmasters/search?search=&page=' + p +
-      '&ordering=mostviewed&thumbsize=medium_hd';
+      '&ordering=' + ordering + '&thumbsize=medium_hd';
     return cherryFetch(url).then(function(text) {
       var data = JSON.parse(text);
       var videos = data.videos || (data.data && data.data.videos) || [];
@@ -1822,7 +1905,14 @@ SOURCES.push({
     return items;
   },
 
-  search: function(query, page) {
+  cfg: {
+    sorts: [
+      { id: 'new',   label: 'Свежее'           },
+      { id: 'views', label: 'По просмотрам'    }
+    ]
+  },
+
+  search: function(query, page, sort) {
     var self = this;
     var p = page || 1;
     // Xvideos p is 0-indexed
@@ -1833,12 +1923,13 @@ SOURCES.push({
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
-  browse: function(category, page) {
+  browse: function(category, page, sort) {
     var self = this;
     var p = page || 1;
     var pageIdx = p - 1;
-    // xvideos2.com: root for page 1, /new/(N-1) for subsequent pages
-    var url = pageIdx === 0 ? 'https://www.xvideos2.com/' : 'https://www.xvideos2.com/new/' + pageIdx;
+    // sort='views': use /best/ prefix; sort='new' or default: /new/
+    var base = (sort === 'views') ? 'https://www.xvideos2.com/best/' : 'https://www.xvideos2.com/';
+    var url = pageIdx === 0 ? base : base + pageIdx;
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html, p);
       return { items: items, total_pages: p + 10 };

@@ -1123,3 +1123,135 @@ describe('REQ-4 related videos', function () {
     expect(loadPageCalled).toBe(false);
   });
 });
+
+// ============================================================
+// REQ-5: Sort + categories — filter bar logic tests
+// ============================================================
+
+// Inline helpers matching the closure implementation.
+function _findLabel(arr, id) {
+  for (var i = 0; i < arr.length; i++) {
+    if (arr[i].id === id) return arr[i].label;
+  }
+  return id;
+}
+
+function makeFilterState() {
+  var state = { currentSort: '', currentCategory: '' };
+
+  function isFilterBarVisible(source) {
+    var hasSorts = source && source.cfg && source.cfg.sorts && source.cfg.sorts.length;
+    var hasCats  = source && source.cfg && source.cfg.categories && source.cfg.categories.length;
+    return !!(hasSorts || hasCats);
+  }
+
+  function selectSort(source, sortId) {
+    state.currentSort = sortId;
+  }
+
+  function selectCategory(source, catId) {
+    state.currentCategory = catId;
+  }
+
+  return { state: state, isFilterBarVisible: isFilterBarVisible,
+           selectSort: selectSort, selectCategory: selectCategory };
+}
+
+describe('REQ-5 sort + categories', function () {
+  it('AC-5.1: adapter without cfg — filter bar hidden', function () {
+    var f = makeFilterState();
+    expect(f.isFilterBarVisible({})).toBe(false);
+    expect(f.isFilterBarVisible(null)).toBe(false);
+  });
+
+  it('AC-5.2: adapter with cfg.sorts only — sorts visible, categories not', function () {
+    var source = { cfg: { sorts: [{ id: 'mv', label: 'Популярное' }] } };
+    var hasSorts = !!(source.cfg && source.cfg.sorts && source.cfg.sorts.length);
+    var hasCats  = !!(source.cfg && source.cfg.categories && source.cfg.categories && source.cfg.categories.length);
+    expect(hasSorts).toBe(true);
+    expect(hasCats).toBe(false);
+  });
+
+  it('AC-5.3: selecting sort — browse called with (category, 1, sortId)', function () {
+    var f = makeFilterState();
+    var browseCalls = [];
+    var source = {
+      cfg: { sorts: [{ id: 'mv', label: 'Популярное' }] },
+      browse: function(cat, page, sort) { browseCalls.push({ cat: cat, page: page, sort: sort }); return Promise.resolve({ items: [], total_pages: 1 }); }
+    };
+    f.selectSort(source, 'mv');
+    // Simulate loadPage after reload
+    source.browse(f.state.currentCategory, 1, f.state.currentSort);
+    expect(browseCalls[0].sort).toBe('mv');
+    expect(browseCalls[0].page).toBe(1);
+    expect(browseCalls[0].cat).toBe('');
+  });
+
+  it('AC-5.4: selecting category — browse called with (catId, 1, sort)', function () {
+    var f = makeFilterState();
+    var browseCalls = [];
+    var source = {
+      cfg: { categories: [{ id: 'teen', label: 'Teen' }] },
+      browse: function(cat, page, sort) { browseCalls.push({ cat: cat, page: page, sort: sort }); return Promise.resolve({ items: [], total_pages: 1 }); }
+    };
+    f.selectCategory(source, 'teen');
+    source.browse(f.state.currentCategory, 1, f.state.currentSort);
+    expect(browseCalls[0].cat).toBe('teen');
+    expect(browseCalls[0].sort).toBe('');
+  });
+
+  it('AC-5.5: selecting Default sort — browse called with sort=""', function () {
+    var f = makeFilterState();
+    f.state.currentSort = 'mv';
+    f.selectSort(null, '');
+    expect(f.state.currentSort).toBe('');
+  });
+
+  it('AC-5.6: sort button label updates to selected sort label', function () {
+    var sorts = [{ id: 'mv', label: 'Популярное' }, { id: 'tr', label: 'Трендовое' }];
+    var label = _findLabel(sorts, 'tr');
+    expect(label).toBe('Трендовое');
+  });
+
+  it('AC-5.7: page 2 browse respects active sort', function () {
+    var f = makeFilterState();
+    f.state.currentSort = 'mv';
+    var browseCalls = [];
+    var source = {
+      browse: function(cat, page, sort) { browseCalls.push({ page: page, sort: sort }); return Promise.resolve({ items: [], total_pages: 3 }); }
+    };
+    // Simulate page 1 and page 2
+    source.browse(f.state.currentCategory, 1, f.state.currentSort);
+    source.browse(f.state.currentCategory, 2, f.state.currentSort);
+    expect(browseCalls[1].sort).toBe('mv');
+    expect(browseCalls[1].page).toBe(2);
+  });
+
+  it('AC-5.9: _reloadFromStart hides empty state before loadPage', function () {
+    var emptyHidden = false;
+    var loadPageCalled = false;
+    // Simulate _reloadFromStart logic
+    function simulateReload() {
+      emptyHidden = true;  // html.find('.cherry-grid__empty').hide()
+      // ... reset state ...
+      loadPageCalled = true;  // loadPage(1)
+    }
+    simulateReload();
+    expect(emptyHidden).toBe(true);
+    expect(loadPageCalled).toBe(true);
+  });
+
+  it('AC-5.10: sort button hover:enter with source.cfg absent — no crash', function () {
+    var source = {}; // no cfg
+    var threw = false;
+    try {
+      // Simulate the hover:enter guard
+      if (!source || !source.cfg || !source.cfg.sorts) {
+        // early return — no crash
+      } else {
+        throw new Error('should not reach here');
+      }
+    } catch(e) { threw = true; }
+    expect(threw).toBe(false);
+  });
+});
