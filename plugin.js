@@ -356,6 +356,34 @@
     var loading     = false;
     var destroyed   = false;
 
+    var _currentPreviewEl   = null;
+    var _currentPreviewCard = null;
+
+    function _stopCurrentPreview() {
+      if (_currentPreviewEl) {
+        _currentPreviewEl.pause();
+        _currentPreviewEl.removeAttribute('src');
+        _currentPreviewEl.load();
+        _currentPreviewEl.style.display = 'none';
+        _currentPreviewEl   = null;
+        _currentPreviewCard = null;
+      }
+    }
+
+    function _startPreview(card, url) {
+      var videoEl = card.find('.cherry-card__preview')[0];
+      if (!videoEl) return;
+      videoEl.src = url;
+      videoEl.load();
+      videoEl.style.display = 'block';
+      _currentPreviewEl   = videoEl;
+      _currentPreviewCard = card;
+      videoEl.play().catch(function () {
+        if (!videoEl.parentNode) return;
+        videoEl.style.display = 'none';
+      });
+    }
+
     // ---- lifecycle --------------------------------------------------
 
     this.create = function () {
@@ -417,9 +445,13 @@
 
     this.render  = function () { return html; };
     this.pause   = function () {};
-    this.stop    = function () { if (scroll) scroll.body().off('scroll'); };
+    this.stop    = function () {
+      if (scroll) scroll.body().off('scroll');
+      _stopCurrentPreview();
+    };
 
     this.destroy = function () {
+      _stopCurrentPreview();
       destroyed = true;
       if (html) html.remove();
     };
@@ -576,9 +608,15 @@
           playVideo(video, src);
         });
 
-        // Focus: refresh fav badge.
+        // Focus: refresh fav badge + animated preview (REQ-2).
         card.on('hover:focus', function () {
           card.find('.cherry-card__fav').toggle(Fav.has(video));
+          _stopCurrentPreview();
+          if (video.preview && Lampa.Storage.get('cherry_preview_enabled', true)) {
+            if (!_isAndroid()) {
+              _startPreview(card, video.preview);
+            }
+          }
         });
 
         // Long-press: context menu (favorites + similar search).
@@ -650,6 +688,30 @@
       html = Lampa.Template.get('cherry_main', {});
       renderSources();
       bindSearch();
+
+      // REQ-2: preview toggle via long-press on the title/logo area.
+      html.find('.cherry-main__title').on('hover:long', function () {
+        var current = Lampa.Storage.get('cherry_preview_enabled', true);
+        Lampa.Select.show({
+          title: 'Cherry',
+          items: [
+            {
+              title: Lampa.Lang.translate('cherry_preview_setting') + ': ' + (current ? 'ON' : 'OFF'),
+              action: 'preview_toggle'
+            }
+          ],
+          onSelect: function (item) {
+            if (item.action === 'preview_toggle') {
+              var val = !Lampa.Storage.get('cherry_preview_enabled', true);
+              Lampa.Storage.set('cherry_preview_enabled', val);
+              Lampa.Noty.show(Lampa.Lang.translate('cherry_preview_setting') + ': ' + (val ? 'ON' : 'OFF'));
+            }
+            Lampa.Controller.toggle('cherry_main');
+          },
+          onBack: function () { Lampa.Controller.toggle('cherry_main'); }
+        });
+      });
+
       return html;
     };
 

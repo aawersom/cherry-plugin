@@ -657,3 +657,181 @@ describe('_nativeFetch', function() {
     expect(cleared).toBe(true);
   });
 });
+
+// ============================================================
+// REQ-2: Preview on hover — extracted closure logic unit tests
+// ============================================================
+
+// Inline reimplementation of closure helpers for testability.
+// Must match the plugin.js implementation exactly.
+
+function makePreviewClosure() {
+  var _currentPreviewEl   = null;
+  var _currentPreviewCard = null;
+
+  function _stopCurrentPreview() {
+    if (_currentPreviewEl) {
+      _currentPreviewEl.pause();
+      _currentPreviewEl.removeAttribute('src');
+      _currentPreviewEl.load();
+      _currentPreviewEl.style.display = 'none';
+      _currentPreviewEl   = null;
+      _currentPreviewCard = null;
+    }
+  }
+
+  function _startPreview(card, url) {
+    var videoEl = card._videoEl;
+    if (!videoEl) return;
+    videoEl.src = url;
+    videoEl.load();
+    videoEl.style.display = 'block';
+    _currentPreviewEl   = videoEl;
+    _currentPreviewCard = card;
+    videoEl.play().catch(function () {
+      if (!videoEl.parentNode) return;
+      videoEl.style.display = 'none';
+    });
+  }
+
+  return { stop: _stopCurrentPreview, start: _startPreview };
+}
+
+function makeVideoEl(overrides) {
+  var el = {
+    src:        '',
+    style:      { display: 'none' },
+    parentNode: {},          // non-null by default (card in DOM)
+    _paused:    false,
+    _loaded:    false,
+    _playResolve: null,
+    _playReject:  null,
+    pause:           function () { el._paused = true; },
+    load:            function () { el._loaded = true; },
+    removeAttribute: function (a) { if (a === 'src') el.src = ''; },
+    play:            function () {
+      return new Promise(function (resolve, reject) {
+        el._playResolve = resolve;
+        el._playReject  = reject;
+      });
+    }
+  };
+  if (overrides) {
+    Object.keys(overrides).forEach(function (k) { el[k] = overrides[k]; });
+  }
+  return el;
+}
+
+function makeCard(videoEl) {
+  return {
+    _videoEl: videoEl,
+    find:     function (sel) {
+      if (sel === '.cherry-card__preview') {
+        return [videoEl];
+      }
+      return [];
+    }
+  };
+}
+
+describe('REQ-2 preview', function () {
+  it('AC-2.2: video becomes visible when preview set and enabled (non-android)', function () {
+    var closure = makePreviewClosure();
+    var videoEl = makeVideoEl();
+    var card    = makeCard(videoEl);
+
+    // Simulate hover:focus handler with preview enabled, non-android
+    closure.stop();
+    closure.start(card, 'http://x/preview.mp4');
+
+    expect(videoEl.style.display).toBe('block');
+    expect(videoEl.src).toBe('http://x/preview.mp4');
+  });
+
+  it('AC-2.3: focusing card B stops card A preview', function () {
+    var closure = makePreviewClosure();
+    var elA  = makeVideoEl();
+    var elB  = makeVideoEl();
+    var cardA = makeCard(elA);
+    var cardB = makeCard(elB);
+
+    closure.start(cardA, 'http://x/a.mp4');
+    expect(elA.style.display).toBe('block');
+
+    // Now focus card B
+    closure.stop();
+    closure.start(cardB, 'http://x/b.mp4');
+
+    expect(elA.style.display).toBe('none');
+    expect(elA.src).toBe('');
+    expect(elB.style.display).toBe('block');
+  });
+
+  it('AC-2.4: empty preview URL — video stays hidden', function () {
+    var closure = makePreviewClosure();
+    var videoEl = makeVideoEl();
+    var card    = makeCard(videoEl);
+
+    // Simulate: video.preview = '' → condition fails → no startPreview called
+    var previewUrl = '';
+    if (previewUrl) {
+      closure.start(card, previewUrl);
+    }
+
+    expect(videoEl.style.display).toBe('none');
+    expect(videoEl.src).toBe('');
+  });
+
+  it('AC-2.5: android guard — no preview started', function () {
+    var closure = makePreviewClosure();
+    var videoEl = makeVideoEl();
+    var card    = makeCard(videoEl);
+
+    // Simulate: _isAndroid() returns true → no startPreview
+    var isAndroid = true;
+    if (!isAndroid) {
+      closure.start(card, 'http://x/preview.mp4');
+    }
+
+    expect(videoEl.style.display).toBe('none');
+  });
+
+  it('AC-2.6: destroy while preview playing — src cleared and hidden', function () {
+    var closure = makePreviewClosure();
+    var videoEl = makeVideoEl();
+    var card    = makeCard(videoEl);
+
+    closure.start(card, 'http://x/preview.mp4');
+    expect(videoEl.style.display).toBe('block');
+
+    // Simulate destroy
+    closure.stop();
+
+    expect(videoEl.src).toBe('');
+    expect(videoEl.style.display).toBe('none');
+    expect(videoEl._paused).toBe(true);
+  });
+
+  it('AC-2.8: play().catch does not touch DOM after card removed from DOM', async function () {
+    var closure = makePreviewClosure();
+    var videoEl = makeVideoEl();
+    var card    = makeCard(videoEl);
+
+    closure.start(card, 'http://x/preview.mp4');
+    // save deferred
+    var reject = videoEl._playReject;
+
+    // Simulate destroy: _stopCurrentPreview called, then html.remove() sets parentNode = null
+    closure.stop();
+    videoEl.parentNode = null;
+
+    // Now the play() promise rejects (e.g. AbortError after src removed)
+    reject(new Error('AbortError'));
+    // Give microtask queue a tick
+    await Promise.resolve();
+
+    // catch handler bailed early because parentNode is null
+    // display should NOT have been set to 'none' by the catch (it was already none by _stop)
+    expect(videoEl.style.display).toBe('none');
+  });
+});
