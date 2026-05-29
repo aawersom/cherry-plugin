@@ -1297,6 +1297,61 @@ function xvParseCards(html) {
   return items;
 }
 
+// ============================================================
+// adapter-preview-quality: xnxx video.preview (REQ-2)
+// ============================================================
+function xnxxParseCards(html) {
+  var items = [];
+  var mozParts = html.split('<div class="mozaique"');
+  var content = mozParts.length > 1 ? mozParts[mozParts.length - 1] : html;
+  var blocks = content.split(/<div[^>]+class="[^"]*thumb-under[^"]*"/);
+  for (var i = 1; i < blocks.length; i++) {
+    var block = blocks[i];
+    var hrefMatch = block.match(/href="(\/video-?([^/]+)\/[^"]+)"/);
+    if (!hrefMatch) hrefMatch = block.match(/href="(\/video([a-z0-9]+)[^"]*)"/);
+    if (!hrefMatch) continue;
+    var href = hrefMatch[1];
+    var rawId = hrefMatch[2] || '';
+    var videoUrl = 'https://www.xnxx.com' + href;
+    var thumbMatch = block.match(/data-src="([^"]+)"/) || block.match(/src="([^"]+\.jpg[^"]*)"/);
+    var thumb = thumbMatch ? thumbMatch[1] : '';
+    var preview = thumb ? thumb.replace(/\/[^\/]+$/, '/preview.mp4') : '';
+    items.push({ id: 'xnxx-' + rawId, source: 'xnxx', title: '', thumb: thumb,
+                 preview: preview, url: videoUrl, duration: 0, views: 0 });
+  }
+  return items;
+}
+
+describe('REQ-2 xnxx video.preview', function () {
+  var UUID = '8f9a9694-d042-4f65-9a3b-c13ed3c0f91b';
+  var THUMB = 'https://thumb-cdn77.xnxx-cdn.com/' + UUID + '/3/xn_15_t.jpg';
+  var PREVIEW = 'https://thumb-cdn77.xnxx-cdn.com/' + UUID + '/3/preview.mp4';
+
+  it('AC-P3a: populates preview from thumb URL', function () {
+    var html = '<div class="mozaique"><div class="thumb-under">' +
+               '<a href="/video-abc123/slug"><img data-src="' + THUMB + '"></a></div></div>';
+    var items = xnxxParseCards(html);
+    expect(items.length).toBe(1);
+    expect(items[0].preview).toBe(PREVIEW);
+  });
+
+  it('AC-P3b: works for any extension (webp)', function () {
+    var thumb = 'https://thumb-cdn77.xnxx-cdn.com/' + UUID + '/3/xn_15_t.webp';
+    var html = '<div class="mozaique"><div class="thumb-under">' +
+               '<a href="/video-abc123/slug"><img data-src="' + thumb + '"></a></div></div>';
+    var items = xnxxParseCards(html);
+    expect(items[0].preview).toBe('https://thumb-cdn77.xnxx-cdn.com/' + UUID + '/3/preview.mp4');
+  });
+
+  it('AC-P3c: empty thumb produces empty preview', function () {
+    var html = '<div class="mozaique"><div class="thumb-under">' +
+               '<a href="/video-abc123/slug"></a></div></div>';
+    var items = xnxxParseCards(html);
+    expect(items.length).toBe(1);
+    expect(items[0].preview).toBe('');
+  });
+});
+
 describe('REQ-1 xvideos video.preview', function () {
   var UUID = '5854c00a-cf8f-4ff8-bcef-38a1133f1132';
   var THUMB = 'https://thumb-cdn77.xvideos-cdn.com/' + UUID + '/3/xv_14_t.jpg';

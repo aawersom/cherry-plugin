@@ -2008,6 +2008,7 @@ SOURCES.push({
 
       var thumbMatch = block.match(/data-src="([^"]+)"/) || block.match(/src="([^"]+\.jpg[^"]*)"/);
       var thumb = thumbMatch ? thumbMatch[1] : '';
+      var preview = thumb ? thumb.replace(/\/[^\/]+$/, '/preview.mp4') : '';
 
       var titleMatch = block.match(/class="title"[^>]*>([^<]+)/) ||
                        block.match(/title="([^"]+)"/) ||
@@ -2024,6 +2025,7 @@ SOURCES.push({
         source: 'xnxx',
         title: title,
         thumb: thumb,
+        preview: preview,
         url: videoUrl,
         duration: duration,
         views: 0
