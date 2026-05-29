@@ -127,6 +127,7 @@
   // Handles multi-level HLS (master → index → segments) so hls.js resolves
   // segment paths against a blob URL that already has correct proxied paths.
   function proxyM3u8(m3u8Url, referer) {
+    if (_isAndroid()) return Promise.resolve(m3u8Url);
     return cherryFetch(m3u8Url, referer).then(function (content) {
       var basePath = m3u8Url.split('?')[0];
       var baseUrl = basePath.substring(0, basePath.lastIndexOf('/') + 1);
@@ -344,8 +345,6 @@
    * @param {Object} object  Activity params
    */
   function CherryGrid(object) {
-    var network = new Lampa.Reguest();
-    network.timeout(15000);
 
     /** @type {jQuery} */
     var html;
@@ -422,7 +421,6 @@
 
     this.destroy = function () {
       destroyed = true;
-      network.clear();
       if (html) html.remove();
     };
 
