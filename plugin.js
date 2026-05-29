@@ -51,9 +51,38 @@
     return p;
   }
 
+  function _isAndroid() {
+    try {
+      return !!(window.Lampa && window.Lampa.Platform &&
+                typeof window.Lampa.Platform.is === 'function' &&
+                window.Lampa.Platform.is('android'));
+    } catch (e) { return false; }
+  }
+
+  function _nativeFetch(url) {
+    return new Promise(function(resolve, reject) {
+      var req = new window.Lampa.Reguest();
+      req.native(url, function(data) {
+        resolve(typeof data === 'object' ? JSON.stringify(data) : String(data));
+        req.clear();
+      }, function(err) {
+        req.clear();
+        reject(err);
+      }, false, { dataType: 'text', timeout: 4000 });
+    });
+  }
+
   /** @param {string} url @param {string=} referer @returns {Promise<string>} */
   function cherryFetch(url, referer) {
-    return fetch(buildProxyUrl(url, referer)).then(function (r) {
+    if (_isAndroid()) {
+      return _nativeFetch(url).catch(function() {
+        return fetch(buildProxyUrl(url, referer)).then(function(r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.text();
+        });
+      });
+    }
+    return fetch(buildProxyUrl(url, referer)).then(function(r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.text();
     });

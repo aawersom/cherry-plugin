@@ -565,3 +565,95 @@ describe('_kvsEngine', () => {
     expect(result.items[0].source).toBe('testsite');
   });
 });
+
+// =============================================================================
+// REQ-C helpers: _isAndroid, _nativeFetch
+// =============================================================================
+
+// Verbatim from plugin.js (Phase 4)
+function _isAndroid() {
+  try {
+    return !!(window.Lampa && window.Lampa.Platform &&
+              typeof window.Lampa.Platform.is === 'function' &&
+              window.Lampa.Platform.is('android'));
+  } catch (e) { return false; }
+}
+
+function _nativeFetch(url, LampaReguest) {
+  // In plugin.js `window.Lampa.Reguest` is used directly.
+  // For testability, accept it as a parameter here.
+  return new Promise(function(resolve, reject) {
+    var req = new LampaReguest();
+    req.native(url, function(data) {
+      resolve(typeof data === 'object' ? JSON.stringify(data) : String(data));
+      req.clear();
+    }, function(err) {
+      req.clear();
+      reject(err);
+    }, false, { dataType: 'text', timeout: 4000 });
+  });
+}
+
+describe('_isAndroid', function() {
+  it('returns false when window is undefined (Node.js env)', function() {
+    // In vitest Node environment window is not defined — the try/catch must return false.
+    expect(_isAndroid()).toBe(false);
+  });
+
+  it('returns false when Lampa is absent from window', function() {
+    // Simulate a browser-like window without Lampa.
+    var origWindow = typeof window !== 'undefined' ? window : undefined;
+    if (typeof window !== 'undefined') {
+      var savedLampa = window.Lampa;
+      delete window.Lampa;
+      expect(_isAndroid()).toBe(false);
+      if (savedLampa !== undefined) window.Lampa = savedLampa;
+    } else {
+      // window is already undefined — covered by previous test
+      expect(_isAndroid()).toBe(false);
+    }
+  });
+});
+
+describe('_nativeFetch', function() {
+  it('resolves with string data from success callback', async function() {
+    var MockReguest = function() {
+      this.cleared = false;
+      this.clear = function() { this.cleared = true; };
+      this.native = function(url, ok, err, sync, opts) {
+        ok('hello from native');
+      };
+    };
+    var result = await _nativeFetch('https://example.com', MockReguest);
+    expect(result).toBe('hello from native');
+  });
+
+  it('resolves with JSON.stringify when data is an object', async function() {
+    var MockReguest = function() {
+      this.clear = function() {};
+      this.native = function(url, ok) { ok({ videos: [1, 2, 3] }); };
+    };
+    var result = await _nativeFetch('https://example.com', MockReguest);
+    expect(result).toBe('{"videos":[1,2,3]}');
+  });
+
+  it('calls req.clear() in success path', async function() {
+    var cleared = false;
+    var MockReguest = function() {
+      this.clear = function() { cleared = true; };
+      this.native = function(url, ok) { ok('data'); };
+    };
+    await _nativeFetch('https://example.com', MockReguest);
+    expect(cleared).toBe(true);
+  });
+
+  it('rejects and calls req.clear() in reject path', async function() {
+    var cleared = false;
+    var MockReguest = function() {
+      this.clear = function() { cleared = true; };
+      this.native = function(url, ok, err) { err(new Error('network fail')); };
+    };
+    await expect(_nativeFetch('https://example.com', MockReguest)).rejects.toThrow('network fail');
+    expect(cleared).toBe(true);
+  });
+});
