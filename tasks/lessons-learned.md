@@ -1,5 +1,19 @@
 # Lessons Learned — Cherry Plugin
 
+## adapter-preview-quality · Task Complete · 2026-05-29
+
+**Mode:** full | **Result:** 4 phases committed, 71 unit tests, E2E intermittent (not regression)
+
+### Summary of findings across the full pipeline
+
+1. **Phase 0 CDN discovery invalidated spec transform** — The `_169.mp4` 5-step transform was based on AdultJS analysis but xvideos/xnxx CDN switched to UUID-based format. Phase 0 CORS pre-flight found the actual pattern: `UUID/N/preview.mp4` (HTTP 200, CORS `*`). Single-line replace saved ~6 lines of spec'd transform code.
+
+2. **Arch reviewer used stale knowledge** — After Phase 0 confirmed the new CDN pattern, arch reviewer still flagged it as wrong (recommended the old `_169.mp4`). Pre-apply verification caught this: reviewer's finding contradicted Phase 0 test data → PARK. Rule: always document pre-flight results explicitly so reviewers have the data.
+
+3. **Lessons-format: record mode per task** — Mode: full was user-requested but blast radius is actually `medium` (3 adapter-private functions, no concurrency, no auth). Future calibration: preview field additions in IIFE adapters → `fast` mode.
+
+---
+
 ## adapter-preview-quality · Phase 1 Code Review Batch · 2026-05-29
 
 **Mode:** full | **Reviewers:** code-reviewer-architecture + security-reviewer (parallel)
