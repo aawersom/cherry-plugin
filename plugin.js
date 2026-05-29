@@ -2462,31 +2462,36 @@ function _porntrexPages(html) {
   }
 
 // ---- 2. Xozilla ----
-SOURCES.push({
+SOURCES.push(_kvsEngine({
     id: 'xozilla',
     name: 'Xozilla',
     host: 'xozilla.com',
-
-    search: function (query, page) {
-        var url = 'https://xozilla.com/?s=' + encodeURIComponent(query) + '&p=' + page;
-        return cherryFetch(url).then(function (html) {
-            return { items: _xozillaCards(html), total_pages: _xozillaPages(html) };
-        }).catch(function () { return { items: [], total_pages: 0 }; });
+    searchUrl: function(query, page) {
+        return 'https://xozilla.com/?s=' + encodeURIComponent(query) + '&p=' + page;
     },
-
-    browse: function (category, page) {
-        var p = page || 1;
-        var url = p > 1
-            ? 'https://www.xozilla.com/latest-updates/' + p + '/'
+    browseUrl: function(page) {
+        return page > 1
+            ? 'https://www.xozilla.com/latest-updates/' + page + '/'
             : 'https://www.xozilla.com/latest-updates/';
-        return cherryFetch(url).then(function (html) {
-            return { items: _xozillaCards(html), total_pages: _xozillaPages(html) };
-        }).catch(function () { return { items: [], total_pages: 0 }; });
     },
-
-    getStream: function (video) {
-        return cherryFetch(video.url).then(function (html) {
-            // kt_player flashvars: video_url: 'url', video_alt_url: 'url'
+    hrefRxSrc: 'href="(https?://(?:www\\.)?xozilla\\.com/videos/[0-9]+/[^"]+)"',
+    idFromUrl: function(url) {
+        return url.replace(/^https?:\/\/[^/]+/, '').replace(/[^a-z0-9]/gi, '_');
+    },
+    chunkWindow: { before: 0, after: 800 },
+    stripBase64: true,
+    thumbRx: [
+        /(?:data-original|data-src|src)="([^"?#]+\.jpe?g)/i,
+        /(?:data-original|data-src|src)="([^"?#]+\.(?:webp|png))/i
+    ],
+    titleRx: [
+        /<strong[^>]*class="[^"]*title[^"]*"[^>]*>\s*([^<]+)/,
+        /title="([^"]+)"/,
+        /alt="([^"]+)"/
+    ],
+    pagesRx: /p=(\d+)"[^>]*(?:last|>>|&raquo;)/i,
+    getStream: function(video) {
+        return cherryFetch(video.url).then(function(html) {
             var varM = /(video_url|video_alt_url2|video_alt_url)\s*[=:]\s*['"]([^'"]+)['"]/g;
             var best = '', quality = {};
             var labels = { video_url: '480p', video_alt_url: '720p', video_alt_url2: '1080p' };
@@ -2497,50 +2502,9 @@ SOURCES.push({
             }
             if (best) return { url: best, quality: quality };
             return extractStreams(html);
-        }).catch(function () { return { url: '', quality: {} }; });
+        }).catch(function() { return { url: '', quality: {} }; });
     }
-});
-
-function _xozillaCards(html) {
-    var items = [];
-    // Strip inline base64 placeholder images so they don't blow out the chunk window
-    var clean = html.replace(/\bsrc="data:[^"]+"/g, 'src=""');
-    var hrefRx = /href="(https?:\/\/(?:www\.)?xozilla\.com\/videos\/[0-9]+\/[^"]+)"/g;
-    var seen = {};
-    var m;
-    while ((m = hrefRx.exec(clean)) !== null) {
-        var videoUrl = m[1];
-        // Already filtered by regex to /videos/NUMBER/ pattern — no extra check needed
-        var id = videoUrl.replace(/^https?:\/\/[^/]+/, '').replace(/[^a-z0-9]/gi, '_');
-        if (seen[id]) continue;
-        seen[id] = true;
-
-        // Look only FORWARD from href — title in <strong class="title">, thumb in data-original/data-src
-        var chunk = clean.slice(m.index, m.index + 800);
-
-        var thumb = _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.jpe?g)/i) ||
-                    _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.(?:webp|png))/i);
-
-        var title = _decodeHtml(
-            _attr(chunk, /<strong[^>]*class="[^"]*title[^"]*"[^>]*>\s*([^<]+)/) ||
-            _attr(chunk, /title="([^"]+)"/) ||
-            _attr(chunk, /alt="([^"]+)"/)
-        );
-
-        var duration = parseDur(_attr(chunk, /class="[^"]*duration[^"]*"[^>]*>([^<]+)</));
-        var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
-
-        if (title || thumb) {
-            items.push({ id: id, source: 'xozilla', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
-        }
-    }
-    return items;
-}
-
-function _xozillaPages(html) {
-    var m = /p=(\d+)"[^>]*(?:last|>>|&raquo;)/i.exec(html);
-    return m ? (parseInt(m[1], 10) || 10) : 10;
-}
+}));
 
 // ---- 3. 3Movs ----
 SOURCES.push({
@@ -2622,31 +2586,38 @@ function _3movsPages(html) {
 }
 
 // ---- 4. Analdin ----
-SOURCES.push({
+SOURCES.push(_kvsEngine({
     id: 'analdin',
     name: 'Analdin',
     host: 'analdin.com',
-
-    search: function (query, page) {
-        var url = 'https://analdin.com/?s=' + encodeURIComponent(query) + '&p=' + page;
-        return cherryFetch(url).then(function (html) {
-            return { items: _analdinCards(html), total_pages: _analdinPages(html) };
-        }).catch(function () { return { items: [], total_pages: 0 }; });
+    searchUrl: function(query, page) {
+        return 'https://analdin.com/?s=' + encodeURIComponent(query) + '&p=' + page;
     },
-
-    browse: function (category, page) {
-        var p = page || 1;
-        var url = p > 1
-            ? 'https://analdin.com/latest-updates/' + p + '/'
+    browseUrl: function(page) {
+        return page > 1
+            ? 'https://analdin.com/latest-updates/' + page + '/'
             : 'https://analdin.com/latest-updates/';
-        return cherryFetch(url).then(function (html) {
-            return { items: _analdinCards(html), total_pages: _analdinPages(html) };
-        }).catch(function () { return { items: [], total_pages: 0 }; });
     },
-
-    getStream: function (video) {
-        return cherryFetch(video.url).then(function (html) {
-            // kt_player flashvars: video_url: 'url', video_alt_url: '720p', video_alt_url2: '1080p'
+    hrefRxSrc: 'href="(https?://(?:www\\.)?analdin\\.com/videos/[0-9]+/[^"]+)"',
+    idFromUrl: function(url) {
+        return url.replace(/^https?:\/\/[^/]+\//, '').replace(/[^a-z0-9]/gi, '_');
+    },
+    chunkWindow: { before: 0, after: 1400 },
+    stripBase64: true,
+    thumbRx: [
+        /\bthumb="([^"]+\.jpe?g)"/i,
+        /data-original="([^"]+\.jpe?g)"/i,
+        /(?:data-src|src)="([^"]+\.jpe?g)"/i,
+        /(?:data-src|src)="([^"]+\.(?:webp|png))"/i
+    ],
+    titleRx: [
+        /<strong[^>]*class="[^"]*title[^"]*"[^>]*>\s*([^<]+)/,
+        /alt="([^"]+)"/,
+        /title="([^"]+)"/
+    ],
+    pagesRx: /p=(\d+)"[^>]*(?:last|>>|&raquo;)/i,
+    getStream: function(video) {
+        return cherryFetch(video.url).then(function(html) {
             var varM = /(video_url|video_alt_url2|video_alt_url)\s*[=:]\s*['"]([^'"]+)['"]/g;
             var best = '', quality = {};
             var labels = { video_url: '480p', video_alt_url: '720p', video_alt_url2: '1080p' };
@@ -2657,52 +2628,9 @@ SOURCES.push({
             }
             if (best) return { url: best, quality: quality };
             return extractStreams(html);
-        }).catch(function () { return { url: '', quality: {} }; });
+        }).catch(function() { return { url: '', quality: {} }; });
     }
-});
-
-function _analdinCards(html) {
-    var items = [];
-    // Strip base64 placeholders so the 900-char chunk reaches past the inline img
-    var clean = html.replace(/\bsrc="data:[^"]+"/g, 'src=""');
-    var hrefRx = /href="(https?:\/\/(?:www\.)?analdin\.com\/videos\/[0-9]+\/[^"]+)"/g;
-    var seen = {};
-    var m;
-    while ((m = hrefRx.exec(clean)) !== null) {
-        var videoUrl = m[1];
-        // Already filtered by regex to /videos/NUMBER/ pattern — no extra check needed
-        var id = videoUrl.replace(/^https?:\/\/[^/]+\//, '').replace(/[^a-z0-9]/gi, '_');
-        if (!id || seen[id]) continue;
-        seen[id] = true;
-
-        // Look only FORWARD from href — thumb in thumb="" or data-original="", title in strong.title
-        var chunk = clean.slice(m.index, m.index + 1400);
-
-        var thumb = _attr(chunk, /\bthumb="([^"]+\.jpe?g)"/i) ||
-                    _attr(chunk, /data-original="([^"]+\.jpe?g)"/i) ||
-                    _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i) ||
-                    _attr(chunk, /(?:data-src|src)="([^"]+\.(?:webp|png))"/i);
-
-        var title = _decodeHtml(
-            _attr(chunk, /<strong[^>]*class="[^"]*title[^"]*"[^>]*>\s*([^<]+)/) ||
-            _attr(chunk, /alt="([^"]+)"/) ||
-            _attr(chunk, /title="([^"]+)"/)
-        );
-
-        var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
-        var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
-
-        if (title || thumb) {
-            items.push({ id: id, source: 'analdin', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
-        }
-    }
-    return items;
-}
-
-function _analdinPages(html) {
-    var m = /p=(\d+)"[^>]*(?:last|>>|&raquo;)/i.exec(html);
-    return m ? (parseInt(m[1], 10) || 10) : 10;
-}
+}));
 
 // ---- 5. PornVe ----
 SOURCES.push({
