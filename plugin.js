@@ -3166,40 +3166,50 @@ SOURCES.push(_kvsEngine({
 }));
 
 // ---- 16. Pornobolt ----
-SOURCES.push({
+SOURCES.push(_kvsEngine({
     id: 'pornobolt',
     name: 'Pornobolt',
     host: 'sex.pornobolt.in',
-
-    search: function (query, page) {
-        // Search does not paginate — page ignored
-        var url = 'https://sex.pornobolt.in/search/' + encodeURIComponent(query);
-        return cherryFetch(url).then(function (html) {
-            return { items: _pornoboltCards(html), total_pages: 1 };
-        }).catch(function () { return { items: [], total_pages: 0 }; });
+    searchUrl: function(query) {
+        return 'https://sex.pornobolt.in/search/' + encodeURIComponent(query);
     },
-
-    browse: function (category, page) {
-        var url = page > 1
+    browseUrl: function(page) {
+        return page > 1
             ? 'https://sex.pornobolt.in/' + page + '?sort=mv'
             : 'https://sex.pornobolt.in/?sort=mv';
-        return cherryFetch(url).then(function (html) {
-            return { items: _pornoboltCards(html), total_pages: _pornoboltPages(html) };
-        }).catch(function () { return { items: [], total_pages: 0 }; });
     },
-
-    getStream: function (video) {
-        return cherryFetch(video.url).then(function (html) {
-            // Playerjs with server-resolved /videofile/BASE64 path
+    searchTotalPages: 1,
+    hrefRxSrc: 'href="((?:https?://sex\\.pornobolt\\.in)?/video/([^/"]+)\\.html)"',
+    idFromUrl: function(url, m) { return m[2]; },
+    normalizeUrl: function(rawUrl) {
+        return rawUrl.charAt(0) === '/' ? 'https://sex.pornobolt.in' + rawUrl : rawUrl;
+    },
+    chunkWindow: { before: 800, after: 600 },
+    thumbRx: [
+        /(?:data-src|src)="(https?:\/\/pbcdn\.tv\/pornobolt-kartinki\/huge-[^"]+\.jpe?g)"/i
+    ],
+    thumbFallback: function(id) {
+        return 'https://pbcdn.tv/pornobolt-kartinki/huge-' + id + '.jpg';
+    },
+    titleRx: [
+        /<(?:h\d|div)[^>]*class="[^"]*(?:title|name)[^"]*"[^>]*>([^<]+)<\//,
+        /title="([^"]+)"/,
+        /alt="([^"]+)"/
+    ],
+    pagesRx: function(html) {
+        var m = /["']\/(\d+)\?sort["'][^>]*(?:last|>>)/i.exec(html) ||
+                /["']\/(\d+)["'][^>]*(?:last|>>)/i.exec(html);
+        return m ? (parseInt(m[1], 10) || 10) : 10;
+    },
+    getStream: function(video) {
+        return cherryFetch(video.url).then(function(html) {
             var pjRx = /Playerjs\s*\(\s*\{[^}]*?file\s*:\s*["']([^"']+)["']/i;
             var pm = pjRx.exec(html);
             if (pm) {
                 var filePath = pm[1];
-                // /videofile/BASE64 is the direct MP4 stream — return it as-is
                 var fileUrl = filePath.charAt(0) === '/' ? 'https://sex.pornobolt.in' + filePath : filePath;
                 return { url: fileUrl, quality: {} };
             }
-            // pbcdn.tv CDN fallback
             var cdnRx = /['"]?(https?:\/\/pbcdn\.tv\/[^"'\s]+\.(?:mp4|m3u8))['"]/gi;
             var found = [], m;
             while ((m = cdnRx.exec(html)) !== null) {
@@ -3207,51 +3217,9 @@ SOURCES.push({
             }
             if (found.length) return _kvsPickBest(found);
             return extractStreams(html);
-        }).catch(function () { return { url: '', quality: {} }; });
+        }).catch(function() { return { url: '', quality: {} }; });
     }
-});
-
-function _pornoboltCards(html) {
-    var items = [];
-    var hrefRx = /href="((?:https?:\/\/sex\.pornobolt\.in)?\/video\/([^/"]+)\.html)"/g;
-    var seen = {};
-    var m;
-    while ((m = hrefRx.exec(html)) !== null) {
-        var videoUrl = m[1].charAt(0) === '/' ? 'https://sex.pornobolt.in' + m[1] : m[1];
-        var slug = m[2];
-        if (!slug || seen[slug]) continue;
-        seen[slug] = true;
-
-        var chunk = html.slice(Math.max(0, m.index - 800), m.index + 600);
-
-        // Thumb: pbcdn.tv/pornobolt-kartinki/huge-{slug}.jpg
-        var thumb = _attr(chunk, /(?:data-src|src)="(https?:\/\/pbcdn\.tv\/pornobolt-kartinki\/huge-[^"]+\.jpe?g)"/i);
-        if (!thumb) {
-            // Reconstruct from slug
-            thumb = 'https://pbcdn.tv/pornobolt-kartinki/huge-' + slug + '.jpg';
-        }
-
-        var title = _decodeHtml(
-            _attr(chunk, /<(?:h\d|div)[^>]*class="[^"]*(?:title|name)[^"]*"[^>]*>([^<]+)<\//) ||
-            _attr(chunk, /title="([^"]+)"/) ||
-            _attr(chunk, /alt="([^"]+)"/)
-        );
-
-        var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
-        var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
-
-        if (title || thumb) {
-            items.push({ id: slug, source: 'pornobolt', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
-        }
-    }
-    return items;
-}
-
-function _pornoboltPages(html) {
-    var m = /["']\/(\d+)\?sort["'][^>]*(?:last|>>)/i.exec(html) ||
-            /["']\/(\d+)["'][^>]*(?:last|>>)/i.exec(html);
-    return m ? (parseInt(m[1], 10) || 10) : 10;
-}
+}));
 
 // ---- 8. CrocoTube ----
 SOURCES.push({
