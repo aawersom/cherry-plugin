@@ -7,7 +7,7 @@ Lampa components (`cherry_main`, `cherry_grid`), routes all external HTTP throug
 Cloudflare Worker proxy, and exposes a uniform `SourceAdapter` interface over 25 heterogeneous
 backends.
 
-Entry file: `plugin.js` (single-file, ~3700 lines)
+Entry file: `plugin.js` (single-file, ~4100 lines after cherry-ux-features)
 
 ---
 
@@ -42,11 +42,25 @@ plugin.js
  * @property {string}   id         — unique adapter key (used as source field on VideoCard)
  * @property {string}   name       — display name
  * @property {string}   host       — origin domain (informational)
- * @property {function(string, number): Promise<BrowseResult>} search  — keyword search
- * @property {function(string, number): Promise<BrowseResult>} browse  — paginated browse
- * @property {function(VideoCard): Promise<StreamResult>}      getStream
+ * @property {function(string, number, string?): Promise<BrowseResult>} search  — keyword search (3rd arg: sort id)
+ * @property {function(string, number, string?): Promise<BrowseResult>} browse  — paginated browse (1st: category id, 3rd: sort id)
+ * @property {function(VideoCard): Promise<StreamResult>}               getStream
+ * @property {function(string, number): Promise<BrowseResult>}          [browseByModel] — REQ-3 optional
+ * @property {function(VideoCard): Promise<VideoCard[]>}                 [getRelated]    — REQ-4 optional, returns plain array (no pagination)
+ * @property {{sorts?: Array<{id:string,label:string}>, categories?: Array<{id:string,label:string}>}} [cfg] — REQ-5 optional
  */
 ```
+
+**Optional method guards** (always check before calling):
+- `if (src.browseByModel)` — REQ-3
+- `if (src.getRelated)` — REQ-4
+- `if (src.cfg && src.cfg.sorts)` — REQ-5 sort filter
+- `if (src.cfg && src.cfg.categories)` — REQ-5 category filter
+
+**Adapters implementing optional methods** (as of 2026-05-29):
+- `browseByModel`: `pornhub` (HTML scrape `/pornstar/{slug}/videos`), `xvideos`
+- `getRelated`: `pornhub` (relatedVideosJSON block), `xvideos` (_parseCards on video page)
+- `cfg.sorts`: `pornhub` (mv/tr/mr), `xvideos` (new/views)
 
 ### VideoCard
 
@@ -60,8 +74,13 @@ plugin.js
  * @property {string}  url       — canonical video page URL on origin
  * @property {number}  [duration]— seconds
  * @property {number}  [views]
+ * @property {string}  [preview] — REQ-2: URL of short preview clip (mp4/hls). Not persisted in Fav.
+ * @property {{name:string,url:string}} [model] — REQ-3: performer info. Not persisted in Fav.
  */
 ```
+
+**Fav serialisation invariant:** only 7 fields persisted: `id, source, title, thumb, url, duration, views`.
+Fields `preview` and `model` are silently dropped on favourite — intentional (signed tokens expire).
 
 ### StreamResult
 
@@ -95,8 +114,8 @@ plugin.js
 | `start()` | `Lampa.Controller.add('cherry_grid', ...)` + `Lampa.Controller.toggle('cherry_grid')` |
 | `render()` | Returns `html` (jQuery element) |
 | `pause()` | No-op (empty function) |
-| `stop()` | No-op (empty function) |
-| `destroy()` | Sets `destroyed = true`, calls `network.clear()`, removes DOM |
+| `stop()` | Detaches scroll listener; stops any active preview video (`_stopCurrentPreview()`) |
+| `destroy()` | Stops preview (`_stopCurrentPreview()`), sets `destroyed = true`, removes DOM |
 
 **Activity params consumed:**
 
@@ -106,6 +125,9 @@ plugin.js
 | `query` | string | search query (omit for browse) |
 | `all_sources` | boolean | when true, searches all adapters in parallel via `Promise.all` |
 | `is_favorites` | boolean | renders the favorites list instead |
+| `model_url` | string | REQ-3: model page URL → triggers `browseByModel(model_url, page)` |
+| `model_name` | string | REQ-3: display title for model browse screen |
+| `_related_items` | VideoCard[] | REQ-4: pre-fetched related cards; skips loadPage entirely |
 | `title` | string | screen title override |
 | `page` | number | declared but not used; scroll drives pagination |
 
@@ -173,45 +195,65 @@ Fetches an HLS master/media playlist via the proxy, rewrites every non-comment l
 
 ## Source Adapters — Full List (25 adapters)
 
-| # | id | name | host | Protocol type |
-|---|---|---|---|---|
-| 1 | `pornhub` | Pornhub | pornhub.com | JSON API (`/webmasters/search`) |
-| 2 | `xvideos` | Xvideos | xvideos.com | HTML scraping (thumb-block divs) |
-| 3 | `xnxx` | Xnxx | xnxx.com | HTML scraping (mozaique / thumb-under) |
-| 4 | `eporner` | Eporner | eporner.com | JSON API (`/api/v2/video/search/`) — browse/search only; getStream uses Deno Deploy for video pages (hash XHR) |
-| 5 | `spankbang` | Spankbang | ru.spankbang.com | HTML scraping (`ru.` subdomain bypasses CF challenge) + quality map extraction + streamkey POST fallback |
-| 6 | `hqporner` | HQPorner | hqporner.com | HTML → mydaddy.cc embed → bigcdn.cc CDN **(stream broken — bigcdn.cc unreachable from all proxy tiers; browse functional)** |
-| 7 | `youjizz` | YouJizz | youjizz.com | HTML scraping (video-block divs) |
-| 8 | `pornone` | PornOne | pornone.com | WP REST API (`/wp-json/wp/v2/posts`); CDN streams via `gallery.vcmdiawe.com` routed through Deno Deploy (Strategy A for IP-bound tokens) |
-| 9 | `porntrex` | Porntrex | porntrex.com | KVS (get_file MP4 paths) + HTML scraping |
-| 10 | `xozilla` | Xozilla | xozilla.com | JWPlayer setup block + HTML scraping |
-| 11 | `3movs` | 3Movs | 3movs.com | HTML scraping (href scan + context window) |
-| 12 | `analdin` | Analdin | analdin.com | JWPlayer setup block + HTML scraping |
-| 13 | `pornve` | PornVe | pornve.com | SisiStyle (`videoUrl:` JS variable) + HTML fallback |
-| 14 | `familyporn` | FamilyPorn | familyporn.tv | SisiStyle (contents/videos_screenshots CDN) |
-| 15 | `porndig` | Porndig | porndig.com | iframe player URL extraction |
-| 16 | `tizam` | Tizam | tv4.tizam.org | HTML scraping (anchor scan, Russian-language site) |
-| 17 | `perfektdamen` | PerfektDamen | perfektdamen.co | KVS/HTML scraping |
-| 18 | `hellporno` | HellPorno | hellporno.com | `chs_object` JS var + `<source res>` tags |
-| 19 | `pornobolt` | Pornobolt | sex.pornobolt.in | KVS (pbcdn.tv CDN pattern) |
-| 20 | `crocotube` | CrocoTube | crocotube.com | KVS (alphaxcdn.com CDN pattern) |
-| 21 | `huyamba` | Huyamba | fuq.huyamba.mobi | KVS get_file pattern |
-| 22 | `ebun` | Ebun | www1.ebun.tv | HTML scraping |
-| 23 | `lenporno` | LenPorno | my.lenporno.live | Custom upload path reconstruction |
-| 24 | `24rolika` | 24Rolika | w2.huyalkino.com | DLE + JWPlayer |
-| 25 | `jopaonline` | JopaOnline | jopaonline.mobi | DLE + JWPlayer |
+| # | id | name | host | Protocol type | UX extras |
+|---|---|---|---|---|---|
+| 1 | `pornhub` | Pornhub | pornhub.com | JSON API (`/webmasters/search`) | `cfg.sorts` (mv/tr/mr), `browseByModel` (HTML scrape `/pornstar/`), `getRelated` (relatedVideosJSON) |
+| 2 | `xvideos` | Xvideos | xvideos.com | HTML scraping (thumb-block divs) | `cfg.sorts` (new/views), `browseByModel` (model profile page), `getRelated` (_parseCards on video page) |
+| 3 | `xnxx` | Xnxx | xnxx.com | HTML scraping (mozaique / thumb-under) | — |
+| 4 | `eporner` | Eporner | eporner.com | JSON API (`/api/v2/video/search/`) + Deno for video pages | — |
+| 5 | `spankbang` | Spankbang | ru.spankbang.com | HTML scraping (`ru.` subdomain) + quality regex + streamkey POST fallback | — |
+| 6 | `hqporner` | HQPorner | hqporner.com | HTML → mydaddy.cc → bigcdn.cc **(stream broken permanently)** | — |
+| 7 | `youjizz` | YouJizz | youjizz.com | HTML scraping (video-block divs) | — |
+| 8 | `pornone` | PornOne | pornone.com | WP REST API; CDN via Deno Deploy | — |
+| 9 | `porntrex` | Porntrex | porntrex.com | KVS get_file + HTML | — |
+| 10 | `xozilla` | Xozilla | xozilla.com | KVS (_kvsEngine) | — |
+| 11 | `3movs` | 3Movs | 3movs.com | HTML scraping (href scan + context window) | — |
+| 12 | `analdin` | Analdin | analdin.com | KVS (_kvsEngine) | — |
+| 13 | `pornve` | PornVe | pornve.com | SisiStyle (`videoUrl:` JS var) + HTML fallback | — |
+| 14 | `familyporn` | FamilyPorn | familyporn.tv | SisiStyle (contents/videos_screenshots CDN) | — |
+| 15 | `porndig` | Porndig | porndig.com | iframe player URL extraction | — |
+| 16 | `tizam` | Tizam | tv4.tizam.org | HTML scraping (anchor scan) | — |
+| 17 | `perfektdamen` | PerfektDamen | perfektdamen.co | KVS/HTML scraping | — |
+| 18 | `hellporno` | HellPorno | hellporno.com | KVS (_kvsEngine: `chs_object` + `<source>` tags) | — |
+| 19 | `pornobolt` | Pornobolt | sex.pornobolt.in | KVS (_kvsEngine: pbcdn.tv CDN) | — |
+| 20 | `crocotube` | CrocoTube | crocotube.com | KVS (_kvsEngine: alphaxcdn.com CDN) | — |
+| 21 | `huyamba` | Huyamba | fuq.huyamba.mobi | KVS get_file | — |
+| 22 | `ebun` | Ebun | www1.ebun.tv | HTML scraping | — |
+| 23 | `lenporno` | LenPorno | www.lenporno.net | Custom upload path reconstruction | — |
+| 24 | `24rolika` | 24Rolika | w2.huyalkino.com | DLE + JWPlayer | — |
+| 25 | `jopaonline` | JopaOnline | jopaonline.mobi | DLE + JWPlayer | — |
 
 **Adapter type legend:**
 - **JSON API** — adapter parses structured JSON from official or semi-official API endpoint
 - **HTML scraping** — adapter splits raw HTML into card-sized chunks using string.split() on class names
-- **KVS** — adapter targets KVS (Kernel Video Sharing) platform patterns: `get_file/` URLs or `video_url` JS vars
-- **DLE** — DataLife Engine CMS: search via `?do=search&subaction=search`, pagination via `/page/N/`
-- **SisiStyle** — tube script with `videoUrl:` JS variable and `contents/videos_screenshots/` CDN path
-- **JWPlayer** — adapter parses `jwplayer(...).setup({...})` block for file/sources
+- **KVS** — uses `_kvsEngine` factory (5 adapters); targets KVS platform `get_file/` URL pattern
+- **DLE** — DataLife Engine CMS: search `?do=search`, pagination `/page/N/`
+- **SisiStyle** — tube script: `videoUrl:` JS variable + `contents/videos_screenshots/` CDN
+- **JWPlayer** — parses `jwplayer(...).setup({...})` block for file/sources
+
+**UX extras** (REQ-2/3/4/5 features, see cherry-ux-features):
+- `cfg.sorts/categories` — filter bar in CherryGrid (REQ-5)
+- `browseByModel(modelUrl, page)` — model badge navigation (REQ-3)
+- `getRelated(video)` — related panel after playback (REQ-4)
+- `video.preview` — animated thumbnail preview on focus (REQ-2); currently populated by: **none** (backlog: xvideos `_169.mp4` transform, pornhub `data-mediabook`)
 
 ---
 
-## Source Status (as of 2026-05-28)
+## Known Improvement Backlog (from AdultJS analysis)
+
+Discovered 2026-05-29 by comparing with AdultJS implementation.
+
+| Adapter | Gap | Fix | Effort |
+|---------|-----|-----|--------|
+| `xvideos` + `xnxx` | `video.preview` not populated | Add `_169.mp4` URL transform in `_parseCards()` | ~5 lines each |
+| `pornhub` | `video.preview` not populated in webmasters browse | Add `data-mediabook` extraction in `_parseHtmlCards()` (used by browseByModel) | ~2 lines |
+| `pornhub` | Browse uses webmasters API (no preview/model in listing) | Switch to HTML scrape `rt.pornhub.com/video?page=N` + XPath; gets preview+model free | Medium effort, HTML more fragile |
+| `spankbang` | Quality map regex may miss formats | Add `/'([0-9]+)(p\|k)':\s*\['(https?...)'/g` before POST fallback | ~10 lines |
+| `xvideos` + `xnxx` | `video_related` JSON parsed separately from stream | Move related parse into `getStream` (same page fetch) to avoid double request | Medium |
+
+---
+
+## Source Status (as of 2026-05-29)
 
 Results from `node test/cherry-lampa-e2e.mjs` — Playwright/Chromium with real CORS enforcement.
 
@@ -219,7 +261,7 @@ Results from `node test/cherry-lampa-e2e.mjs` — Playwright/Chromium with real 
 
 | id | cards | notes |
 |---|---|---|
-| `pornhub` | 30 | getStream uses `video.url` directly (`rt.pornhub.com/view_video.php?viewkey=...` → CF Worker). `flashvars_\d+` extracts HLS streams from `mediaDefinitions`. API intermittently 403 both proxies (transient, not a code bug). |
+| `pornhub` | 30 | getStream: `video.url` → CF Worker → `flashvars_\d+` JSON block → HLS/MP4. Browse: webmasters API JSON. `cfg.sorts`, `browseByModel`, `getRelated` implemented (Phase 3/4/5). |
 | `xvideos` | 42 | HLS via CDN, range test N/A for HLS |
 | `xnxx` | ~30 | **Via Deno Deploy proxy** (`cherry-proxy.aawersom.deno.net`); browse URL fixed to `/?k=new&p=N` |
 | `eporner` | ~30 | **Via Deno Deploy proxy** for video pages (`www.eporner.com` added to `PROXY_URL_2_HOSTS`); JSON search/browse API still uses direct fetch (CORS-open). URL format: `/video-{id}/{slug}/`. |
@@ -335,12 +377,28 @@ SpankBang previously failed with Cloudflare JS challenge on `spankbang.com` and 
 |---|---|
 | `Lampa.Player.play({title, url, poster, quality})` | Hands off resolved stream to Lampa player |
 
+### Lampa.Listener
+| Call | Purpose |
+|---|---|
+| `Lampa.Listener.follow('app', fn)` | Waits for `app:ready` event before initialising |
+| `Lampa.Listener.follow('player', fn)` | Single block: revokes HLS blob URLs + pushes related panel (REQ-4) on `e.type==='destroy'` |
+
+### Lampa.Storage (REQ-2/5)
+| Call | Purpose |
+|---|---|
+| `Lampa.Storage.get('cherry_preview_enabled', true)` | REQ-2: read preview toggle state |
+| `Lampa.Storage.set('cherry_preview_enabled', bool)` | REQ-2: write preview toggle via CherryMain settings |
+
+### Lampa.SettingsApi (not used — CherryMain long-press instead)
+Preview toggle exposed via `hover:long` on `.cherry-main__title` → `Lampa.Select.show(...)`.
+Global `Lampa.SettingsApi` registration deliberately avoided (avoids polluting global settings page).
+
 ### Lampa.Reguest (class)
 | Call | Purpose |
 |---|---|
-| `new Lampa.Reguest()` | Creates network request manager in CherryGrid |
-| `network.timeout(15000)` | Sets timeout |
-| `network.clear()` | Cancels in-flight requests on destroy |
+| `new Lampa.Reguest()` | Android-native HTTP fetch (used in `_nativeFetch()`) |
+| `.native(url, ok, err, sync, opts)` | 5-arg signature: makes native OS-level HTTP request, bypasses WebView CORS |
+| `.clear()` | Cancels in-flight request |
 
 ### Lampa.Scroll (class)
 | Call | Purpose |
