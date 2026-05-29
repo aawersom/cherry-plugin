@@ -1355,6 +1355,32 @@ function phParseHtmlCards(html) {
   return items;
 }
 
+// ============================================================
+// adapter-preview-quality: Fav serialisation invariant (AC-P6)
+// ============================================================
+var FAV_FIELDS = ['id', 'source', 'title', 'thumb', 'url', 'duration', 'views'];
+
+function favSerialise(video) {
+  var out = {};
+  FAV_FIELDS.forEach(function(k) { out[k] = video[k]; });
+  return out;
+}
+
+describe('Fav serialisation invariant — preview excluded', function () {
+  it('AC-P6: favSerialise strips preview and model fields', function () {
+    var card = {
+      id: 'xv-abc', source: 'xvideos', title: 'T', thumb: 'http://t', url: 'http://u',
+      duration: 60, views: 100,
+      preview: 'https://thumb-cdn77.xvideos-cdn.com/UUID/3/preview.mp4',
+      model: { name: 'Test', url: 'http://m' }
+    };
+    var saved = favSerialise(card);
+    expect(saved.preview).toBeUndefined();
+    expect(saved.model).toBeUndefined();
+    expect(Object.keys(saved)).toEqual(FAV_FIELDS);
+  });
+});
+
 describe('REQ-3 pornhub data-mediabook', function () {
   var MEDIABOOK = 'https://kw.phncdn.com/videos/202405/14/452452431/180P_225K_452452431.webm?hdnea=st=1~exp=2~hdl=-1~hmac=abc';
 
