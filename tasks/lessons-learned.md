@@ -1,5 +1,55 @@
 # Lessons Learned — Cherry Plugin
 
+## adapter-preview-quality · Phase 1 Code Review Batch · 2026-05-29
+
+**Mode:** full | **Reviewers:** code-reviewer-architecture + security-reviewer (parallel)
+**Verdict after verification:** approve — both findings parked as "not confirmed against Phase 0 results"
+
+### Key pattern
+
+**Arch reviewer flagged a CDN URL transform as wrong**, recommending the old `_169.mp4` approach. Finding was NOT CONFIRMED because: Phase 0 CORS pre-flight had already verified the new CDN structure (UUID-based `/preview.mp4` → HTTP 200; `_169.mp4` → 404). The reviewer's finding was based on outdated CDN knowledge that pre-dated the Phase 0 investigation.
+
+**Rule for future:** When a code reviewer's finding contradicts Phase 0 pre-flight test results, the pre-flight data wins. Always document Phase 0 findings explicitly and reference them during review verification — "verified against Phase 0 result: HTTP 200 for this URL pattern." This prevents re-investigation during code review.
+
+---
+
+## adapter-preview-quality · Plan Review Batch · 2026-05-29
+
+**Mode:** full | **Reviewers:** plan-reviewer-architecture + plan-reviewer-technical (parallel)
+**Verdict after apply:** approve (both confirmed CLEAN after apply pass)
+
+### Patterns caught
+
+**arch-reviewer caught:** CORS gate was inconsistent across three phases — Phase 0.1 said "no-op stub" while Phases 0.2/0.3 said "populate anyway." One policy must rule all phases.
+
+**tech-reviewer caught (MEDIUM):** Plan claimed `stripTags` was "already present in file" — it is NOT in cherry-engine.test.mjs. `_attr`, `_decodeHtml`, `parseDur`, `parseViews` ARE there; `stripTags` must be defined locally in each inline reimplementation block.
+
+### Rule for future plans
+
+**Helper scope must be explicit and verified.** Don't write "copy helpers verbatim (already present)" without checking. Write the exact line numbers of what exists vs. what must be locally defined. One wrong "already present" claim wastes the implementer's debug time on a false RED.
+
+---
+
+## adapter-preview-quality · Spec Review Batch · 2026-05-29
+
+**Mode:** full | **Reviewers:** spec-reviewer-architecture + spec-reviewer-technical (parallel)
+**Verdict after apply:** approve (both reviewers confirmed CLEAN after apply pass)
+
+### Patterns caught by reviewers
+
+**arch-reviewer caught:** xnxx CDN IP-reachability ≠ CORS — two independent failure modes conflated in OQ-2. Also caught ES5 `Array.isArray`/`.finally()` prohibitions missing from spec §6.
+
+**tech-reviewer caught (CRITICAL):** SpankBang exclusion text was factually wrong — quality-map regex was done, but `video.preview` in `_parseCards` was NOT done. Spec declared both done. AC-P2 fixture had no valid href → `_parseCards` would return 0 items, not a card with `preview === ''`.
+
+### Rules for future spec-writing
+
+1. **Exclusion claims must be two-dimensional.** "X is done" is never one boolean — list which sub-features are done and which are not.
+2. **Unit test fixtures must satisfy the parser's structural prerequisites** — `_parseCards` skips blocks without valid href. Any AC that asserts on a card field must provide a fixture that actually emits a card.
+3. **IP-reachability and CORS are independent checks.** CDN CORS-open (curl) ≠ CDN IP-reachable from Cloudflare egress. Document both in OQs separately.
+4. **ES5 prohibitions that come from platform constraints** (not just language spec) must be in every spec's ES5 section: `Array.isArray`, `.finally()`, `String.prototype.padStart`, etc.
+
+---
+
 ## e2e-test-hardening · E2E Run + v.play() Gap · 2026-05-26
 
 **Mode:** full — E2E run debugging
@@ -511,4 +561,148 @@ xnxx, eporner, spankbang (previously Tier D "broken") now return cards (36, 30, 
 
 - **Test new proxy + page URL combination manually before shipping**: the embed approach was never tested with `www.pornhub.com → Deno` routing. A single manual `curl`/node test would have caught both the 403 and the wrong `flashvars` variable name immediately.
 - **Regex against unknown HTML is fragile**: use the simplest extraction that works for the actual format. Verify on a real response before committing.
+
+---
+
+## cherry-engine-refactor · Spec Review Batch · 2026-05-29
+
+**Mode:** full
+
+### Applied findings (11 total)
+
+| Finding | Severity | Reviewer | Applied? |
+|---|---|---|---|
+| cfg.hrefRx shared g-flag lastIndex statefulness → hrefRxSrc string | CRITICAL | tech | ✅ |
+| XPathResult bare global ReferenceError in Node → irrelevant (REQ-B deferred) | CRITICAL | tech | deferred |
+| REQ-B DOMParser infrastructure — YAGNI (0 activations, OQ-5 confirmed) → deferred | HIGH | arch | ✅ defer |
+| pornobolt parseCards override unnecessary → normalizeUrl + thumbFallback hooks | HIGH | arch | ✅ |
+| xozilla search vs browse domain mismatch (www. vs bare) | HIGH | tech | ✅ |
+| pornobolt pagesRx second fallback pattern missing | HIGH | tech | ✅ |
+| hellporno pagesRx: p+5 dynamic fallback lost → restored | HIGH | tech | ✅ |
+| req.clear() missing in reject handler + 8s timeout → 4s | MEDIUM | arch | ✅ |
+| hellporno pagesRx search/browse collision → cfg.searchPagesRx | MEDIUM | arch | ✅ |
+| _kvsPickBest not mentioned in spec | MEDIUM | tech | ✅ |
+| Optional fields unmarked in A-3 table | LOW | arch | ✅ |
+
+### Pattern notes
+
+- **Data-driven cfg with >40% parseCards overrides is not a true engine.** If 2 of 5 sites bypass the generic card-parse loop, the engine delivers only URL-dispatch and cherryFetch wrapping — not parse deduplication. Pre-spec analysis must count how many sites fit the generic path before calling the abstraction a "data-driven engine."
+
+- **Shared RegExp with g flag in a cfg object is a silent bug.** Storing a `/pattern/g` literal in a config object that is used across multiple calls leaks lastIndex state. Always store the source string and call `new RegExp(src, 'g')` at the invocation site.
+
+- **Dead code ships as technical debt even when flagged with YAGNI.** Spec reviewers must ask: "if this code has zero callers on day 1, why does it exist?" Deferred activation is not a valid spec-time answer — the feature should have its own spec when there is at least one activation site identified.
+
+- **Spec URL patterns must be verified against actual code, not inferred.** Three high-severity spec errors (xozilla domain mismatch, pornobolt pagesRx truncation, hellporno dynamic fallback) came from spec-writer paraphrasing the code rather than quoting it. Spec-writer must read each helper function verbatim before writing its cfg equivalent.
 - **Proxy routing changes affect ALL URLs with that hostname**: adding `www.pornhub.com` to PROXY_URL_2_HOSTS routes BOTH API calls AND HTML page fetches through Deno. If Deno blocks one type but not the other, the routing logic needs per-path control or the hostname should not be added.
+
+---
+
+## cherry-engine-refactor · Plan Review Batch · 2026-05-29
+
+**Mode:** full
+
+### Applied findings (7 of 8)
+
+| Finding | Severity | Reviewer | Applied? |
+|---|---|---|---|
+| Split Phase 2 → 2a (hellporno) + 2b (pornobolt) — different risk profiles | HIGH | arch | ✅ |
+| Deletion ordering — dedicate final phase for all helpers | HIGH | arch | ❌ park — per-adapter deletion is atomic and correct; no cross-deps |
+| Insertion point 2256 vs 2358 contradiction | MEDIUM | tech | ✅ |
+| Phase 0: SOURCES.length === 25 missing from criteria | MEDIUM | arch | ✅ |
+| analdin chunkWindow {before:0, after:1400} not called out | MEDIUM | arch | ✅ |
+| Phase 0: cfg.parseCards dispatch path not tested | LOW | tech | ✅ |
+| Phase 4: _nativeFetch callback branches not covered | LOW | tech | ✅ |
+
+### Pattern notes
+
+- **"One adapter per phase" applies to high-risk adapters; batching is acceptable for same-risk-profile pairs.** xozilla + analdin share identical cfg shape, URL pattern, and getStream — valid to batch. hellporno (parseCards override) and pornobolt (4 non-default hooks) each deserved isolation. Risk profile is a better atomicity signal than "one entity per phase."
+
+- **Per-phase helper deletion is correct when helpers have no cross-adapter dependencies.** The only reason to defer all deletions to a final phase is if helpers are shared across adapters — in this codebase they are not. One-adapter-one-helper-set makes per-phase deletion safe and keeps each commit self-consistent.
+
+- **Plan insertion point must match the Baseline table.** When two sections of a plan reference the same code location, they must agree on the line number. Inconsistency ("2256" vs "2358") is caught by reviewers but wastes a review cycle. Rule: write the Baseline table first, then copy its line number into phase prose.
+
+---
+
+## cherry-ux-features · Spec Review Batch · 2026-05-29
+
+**Mode:** full
+
+### Applied findings (11 of 12)
+
+| Finding | Severity | Reviewer | Applied? |
+|---|---|---|---|
+| play().catch() missing destroyed guard | CRITICAL | arch | ✅ |
+| Badge .selector class — stopPropagation не нужен | HIGH | arch+tech | ✅ |
+| _pendingRelated race — generation counter | HIGH | tech | ✅ |
+| Player listener — explicit "one listener" constraint | HIGH | arch | ✅ |
+| REQ-5 null guard cfg.sorts в hover:enter | HIGH | arch+tech | ✅ |
+| browseByModel(modelName) → browseByModel(modelUrl) | MEDIUM | arch | ✅ |
+| stop() pseudocode missing _stopCurrentPreview() | MEDIUM | tech | ✅ |
+| videoEl.load() перед play() | MEDIUM | tech | ✅ |
+| Filter bar в .cherry-grid__head, не в scroll | MEDIUM | tech | ✅ |
+| Badge visible на model.name, не на browseByModel | MEDIUM | tech | ✅ |
+| _reloadFromStart не скрывает empty state | LOW | arch | ✅ |
+| _previewBlobUrls YAGNI | MEDIUM | arch | PARK — proxyM3u8 bypass, blob не создаётся |
+
+### Pattern notes
+
+- **Async DOM mutation must always check `destroyed` at entry.** play().catch() runs after the microtask queue — the component may have been destroyed in the meantime. Rule: any callback that was closured BEFORE destroy() fired needs an `if (destroyed) return` guard as its first statement.
+
+- **Lampa selector focus model vs DOM bubbling.** When a child element has `class="selector"`, Lampa's controller focuses it directly — the parent's `hover:enter` does NOT fire. This makes `stopPropagation` irrelevant and wrong to spec. Before writing propagation guards, verify which elements hold the `selector` class.
+
+- **Race conditions in module-level accumulators.** `_pendingRelated = []` reset on each `playVideo` call looks safe but isn't when the prior `getRelated` promise resolves after the reset. The generation-counter pattern (capture gen at call, compare at resolve) is the correct fix — 3 lines vs a potentially wrong result.
+
+---
+
+## cherry-engine-refactor · Code Phases 0–4 · 2026-05-29
+
+**Mode:** full
+
+### Summary of all phases
+
+| Phase | What | Key finding |
+|---|---|---|
+| Phase 0 | _kvsEngine + _kvsParseCards + _kvsPages factory | Rename _kvsRegexCards → _kvsParseCards (spec name was always _kvsParseCards; function dispatches to override OR regex — not regex-only) |
+| Phase 1 | xozilla + analdin → _kvsEngine | analdin chunkWindow {0,1400} not {0,800}; analdin thumbRx[0] = `\bthumb="..."` not generic data-src |
+| Phase 2a | hellporno → _kvsEngine (parseCards override) | hp- FAV prefix preserved; p+5 dynamic pagesRx fallback preserved via function form |
+| Phase 2b | pornobolt → _kvsEngine (normalizeUrl + thumbFallback) | No parseCards override needed — 3 optional hooks (normalizeUrl, thumbFallback, idFromUrl) fully covers non-standard card shape |
+| Phase 3 | crocotube → _kvsEngine + E2E full regression | E2E PASS all 5 migrated adapters; net -56 lines |
+| Phase 4 | REQ-C: _isAndroid + _nativeFetch + cherryFetch | API confirmed via AdultJS source (OQ-1/OQ-2); req.clear() in both success+reject paths; 4s timeout |
+
+### Pattern notes
+
+- **Function name must match spec name.** `_kvsRegexCards` was renamed to `_kvsParseCards` in the post-review apply pass because the spec consistently used `_kvsParseCards`. Code-writer followed test-file convention and test-file followed its own name — both diverged from spec. Rule: when implementing, grep the spec for the function name before creating it.
+
+- **`parseCards` override is narrower than expected.** Initially, both hellporno AND pornobolt were planned as `parseCards` overrides. After adding `normalizeUrl` + `thumbFallback` + `idFromUrl` hooks, pornobolt fits the generic loop — its delta is now 3 clean cfg lines rather than a 30-line full override. The override is genuinely needed only when the card-container selector itself is incompatible with href-regex (hellporno uses block-split, not href-first).
+
+- **Test file inner function naming.** When a test file defines a test-local `_kvsEngine` that wraps the outer `_kvsParseCards`, and we do a global rename, the inner function can become recursive. Rule: inner test-helper wrappers should have distinct names (`_doCards`, `_callEngine`) — never re-use the outer public name.
+
+- **OQ resolution gates Phase 4 cleanly.** Having explicit OQ-1/OQ-2 as merge blockers in the plan forced API verification before implementation. The AdultJS source file (already on disk at `/tmp/adultjs2.js`) contained exact call signatures — no guesswork needed. This pattern (keep reference implementation on disk, grep it before implementing) saved 30 min of Lampa source hunting.
+
+---
+
+## cherry-ux-features · Plan Review Batch · 2026-05-29
+
+**Mode:** full
+
+### Applied findings (9 of 9)
+
+| Finding | Severity | Reviewer | Applied? |
+|---|---|---|---|
+| Preview helpers promoted to module-level → multi-instance bug | CRITICAL | arch | ✅ reverted to closure |
+| PH webmasters API нет performer filter → нужен scraping | HIGH | tech | ✅ |
+| _kvsEngine.browse() sort-blind — задокументирован лимит | HIGH | tech | ✅ |
+| destroyed boolean value-copy в catch → videoEl.parentNode check | MEDIUM | tech | ✅ |
+| Late getRelated после player close → generation++ в destroy | MEDIUM | tech | ✅ |
+| sourceById fallback неверный для badge | MEDIUM | arch | ✅ |
+| Phase 3→5 два edit loadPage без forward comment | MEDIUM | arch | ✅ |
+| CSS gap не поддерживается TV WebViews → margin-left | LOW | arch | ✅ |
+| AC-2.8 test нужен deferred Promise | LOW | arch | ✅ |
+
+### Pattern notes
+
+- **Async guard через value-copy boolean — молчащий баг.** `_startPreview(card, url, destroyed)` с boolean-параметром всегда видит `false` в catch-callback — значение копируется в момент вызова. Правильный паттерн для DOM-destroyed guard: `if (!el.parentNode) return` (el null или отсоединён после `html.remove()`). Или closure-ссылка на {destroyed: false} объект.
+
+- **Module-level helpers с мультиэкземплярными компонентами.** Когда Lampa стекует Activity.push (main grid → model sub-grid → related sub-grid), каждый CherryGrid — отдельный экземпляр. Module-level pointer (_currentPreviewEl) разделяется между ними и создаёт race. Правило: любой стейт который относится к конкретному экземпляру компонента — только closure-переменная.
+
+- **API-first → scraping-fallback pattern.** Перед спецификацией метода browseByModel для PH проверять документацию Webmasters API. Отсутствие performer filter в API означает что нужен scraping HTML-страницы — более хрупко, но единственный путь. Задокументировать в план явно, чтобы code-writer не угадывал.

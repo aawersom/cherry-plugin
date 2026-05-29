@@ -1255,3 +1255,69 @@ describe('REQ-5 sort + categories', function () {
     expect(threw).toBe(false);
   });
 });
+
+// ============================================================
+// adapter-preview-quality: xvideos video.preview (REQ-1)
+// ============================================================
+
+// Inline reimplementation of xvideos _parseCards (no imports — IIFE).
+// _attr, parseDur, parseViews are at module scope (lines 13/32/44).
+// stripTags defined locally below (NOT in module scope).
+function stripTagsLocal(s) {
+  return (s || '').replace(/<[^>]+>/g, '').replace(/&amp;/g, '&')
+                  .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+                  .replace(/&quot;/g, '"').replace(/&#039;/g, "'").trim();
+}
+
+function xvParseCards(html) {
+  var items = [];
+  var blocks = html.split(/<div[^>]+class="[^"]*thumb-block[^"]*"/);
+  for (var i = 1; i < blocks.length; i++) {
+    var block = blocks[i];
+    var hrefMatch = block.match(/href="(\/video\.([a-z0-9]+)\/[^"]+)"/);
+    if (!hrefMatch) continue;
+    var href = hrefMatch[1];
+    var numId = hrefMatch[2];
+    var videoUrl = 'https://www.xvideos2.com' + href;
+    var thumbMatch = block.match(/data-src="([^"]+)"/) || block.match(/src="([^"]+\.jpg[^"]*)"/);
+    var thumb = thumbMatch ? thumbMatch[1] : '';
+    var preview = thumb ? thumb.replace(/\/[^\/]+$/, '/preview.mp4') : '';
+    var titleMatch = block.match(/<p[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)/) ||
+                     block.match(/title="([^"]+)"/);
+    var title = titleMatch ? stripTagsLocal(titleMatch[1]) : '';
+    var durMatch = block.match(/<span[^>]*class="[^"]*duration[^"]*"[^>]*>([^<]+)/);
+    var duration = durMatch ? parseDur(durMatch[1].trim()) : 0;
+    if (!numId && href) {
+      var idFromHref = href.match(/video(\d+)\//);
+      numId = idFromHref ? idFromHref[1] : String(i);
+    }
+    items.push({ id: 'xv' + numId, source: 'xvideos', title: title, thumb: thumb,
+                 preview: preview, url: videoUrl, duration: duration, views: 0 });
+  }
+  return items;
+}
+
+describe('REQ-1 xvideos video.preview', function () {
+  var UUID = '5854c00a-cf8f-4ff8-bcef-38a1133f1132';
+  var THUMB = 'https://thumb-cdn77.xvideos-cdn.com/' + UUID + '/3/xv_14_t.jpg';
+  var PREVIEW = 'https://thumb-cdn77.xvideos-cdn.com/' + UUID + '/3/preview.mp4';
+
+  it('AC-P1: populates preview from thumb URL (replace filename with preview.mp4)', function () {
+    var html = '<div class="thumb-block"><a href="/video.abc123/slug">' +
+               '<img data-src="' + THUMB + '"></a>' +
+               '<p class="title">Test video</p></div>';
+    var items = xvParseCards(html);
+    expect(items.length).toBe(1);
+    expect(items[0].preview).toBe(PREVIEW);
+    expect(items[0].thumb).toBe(THUMB);
+  });
+
+  it('AC-P2: empty thumb produces empty preview', function () {
+    var html = '<div class="thumb-block"><a href="/video.abc123/slug">' +
+               '<p class="title">No thumb</p></a></div>';
+    var items = xvParseCards(html);
+    expect(items.length).toBe(1);
+    expect(items[0].preview).toBe('');
+    expect(items[0].thumb).toBe('');
+  });
+});
