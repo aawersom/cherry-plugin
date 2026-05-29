@@ -3222,81 +3222,49 @@ SOURCES.push(_kvsEngine({
 }));
 
 // ---- 8. CrocoTube ----
-SOURCES.push({
+SOURCES.push(_kvsEngine({
     id: 'crocotube',
     name: 'CrocoTube',
     host: 'crocotube.com',
-
-    search: function (query, page) {
-        var url = page > 1
+    searchUrl: function(query, page) {
+        return page > 1
             ? 'https://crocotube.com/search/' + page + '/?q=' + encodeURIComponent(query)
             : 'https://crocotube.com/search/1/?q=' + encodeURIComponent(query);
-        return cherryFetch(url).then(function (html) {
-            return { items: _crocotCards(html), total_pages: _crocotPages(html) };
-        }).catch(function () { return { items: [], total_pages: 0 }; });
     },
-
-    browse: function (category, page) {
-        var url = 'https://crocotube.com/' + page + '/';
-        return cherryFetch(url).then(function (html) {
-            return { items: _crocotCards(html), total_pages: _crocotPages(html) };
-        }).catch(function () { return { items: [], total_pages: 0 }; });
+    browseUrl: function(page) {
+        return 'https://crocotube.com/' + (page || 1) + '/';
     },
-
-    getStream: function (video) {
-        return cherryFetch(video.url).then(function (html) {
-            // AlphaXCDN CDN direct pattern
+    hrefRxSrc: 'href="(https?://crocotube\\.com/videos/[^"]+)"',
+    idFromUrl: function(url) {
+        return url.replace(/^https?:\/\/[^/]+\/videos\//, '').replace(/[^a-z0-9]/gi, '_');
+    },
+    chunkWindow: { before: 800, after: 600 },
+    thumbRx: [
+        /(?:data-src|src)="(https?:\/\/img\d*-ct\.alphaxcdn\.com\/[^"]+)"/i,
+        /(?:data-src|src)="([^"]+\.jpe?g)"/i
+    ],
+    titleRx: [
+        /title="([^"]+)"/,
+        /alt="([^"]+)"/,
+        /<h\d[^>]*>([^<]+)<\/h\d>/
+    ],
+    pagesRx: function(html) {
+        var m = /\/search\/(\d+)\/?["'][^>]*(?:last|>>)/i.exec(html) ||
+                /\/(\d+)\/["'][^>]*(?:last|>>)/i.exec(html);
+        return m ? (parseInt(m[1], 10) || 10) : 10;
+    },
+    getStream: function(video) {
+        return cherryFetch(video.url).then(function(html) {
             var cdnRx = /['"]?(https?:\/\/cdn[^"'\s]*alphaxcdn\.com\/[^"'\s]+\.(?:mp4|m3u8))['"]/gi;
-            var found = [];
-            var m;
+            var found = [], m;
             while ((m = cdnRx.exec(html)) !== null) {
                 if (found.indexOf(m[1]) === -1) found.push(m[1]);
             }
             if (found.length) return _kvsPickBest(found);
-
             return extractStreams(html);
-        }).catch(function () { return { url: '', quality: {} }; });
+        }).catch(function() { return { url: '', quality: {} }; });
     }
-});
-
-function _crocotCards(html) {
-    var items = [];
-    var hrefRx = /href="(https?:\/\/crocotube\.com\/videos\/[^"]+)"/g;
-    var seen = {};
-    var m;
-    while ((m = hrefRx.exec(html)) !== null) {
-        var videoUrl = m[1];
-        var id = videoUrl.replace(/^https?:\/\/[^/]+\/videos\//, '').replace(/[^a-z0-9]/gi, '_');
-        if (!id || seen[id]) continue;
-        seen[id] = true;
-
-        var chunk = html.slice(Math.max(0, m.index - 800), m.index + 600);
-
-        // img{1-3}-ct.alphaxcdn.com thumbnail pattern
-        var thumb = _attr(chunk, /(?:data-src|src)="(https?:\/\/img\d*-ct\.alphaxcdn\.com\/[^"]+)"/i) ||
-                    _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i);
-
-        var title = _decodeHtml(
-            _attr(chunk, /title="([^"]+)"/) ||
-            _attr(chunk, /alt="([^"]+)"/) ||
-            _attr(chunk, /<h\d[^>]*>([^<]+)<\/h\d>/)
-        );
-
-        var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
-        var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
-
-        if (title || thumb) {
-            items.push({ id: id, source: 'crocotube', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
-        }
-    }
-    return items;
-}
-
-function _crocotPages(html) {
-    var m = /\/search\/(\d+)\/?["'][^>]*(?:last|>>)/i.exec(html) ||
-            /\/(\d+)\/["'][^>]*(?:last|>>)/i.exec(html);
-    return m ? (parseInt(m[1], 10) || 10) : 10;
-}
+}));
 
 // ---- 9. Huyamba ----
 SOURCES.push({
