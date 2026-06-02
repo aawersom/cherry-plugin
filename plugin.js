@@ -25,7 +25,8 @@
     'tv4.tizam.org': 1,
     // eporner.com — CF Worker returns 369B obfuscated JS redirect for video pages; Deno returns real page
     'www.eporner.com': 1,
-    // pornone CDN IP-bound tokens
+    // pornone: page + CDN must share same proxy IP so token stays valid
+    'pornone.com': 1, 'www.pornone.com': 1,
     'gallery.vcmdiawe.com': 1, 'galleryn2.vcmdiawe.com': 1,
     // bigcdn.cc — LeaseWeb NL CDN used by KVS-based sites; 13 confirmed subdomains
     's1.bigcdn.cc': 1, 's4.bigcdn.cc': 1, 's16.bigcdn.cc': 1, 's18.bigcdn.cc': 1,
@@ -3312,33 +3313,31 @@ SOURCES.push({
   _parseCards: function(html) {
     var items = [];
     var seen = {};
-    // Find video card links pointing to tizam.org video paths
-    // Site uses relative hrefs — match /category/subcategory/slug/ pattern
-    var cardRe = /<a\s[^>]*href="((?:https?:\/\/tv4\.tizam\.org)?\/fil_my_dlya_vzroslyh\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+    // Match only 3-segment video URLs: /category/subcategory/slug/
+    // [^/?#"]+ excludes ? # / " so ?p=N pagination links are never matched
+    var hrefRx = /href="((?:https?:\/\/tv4\.tizam\.org)?\/fil_my_dlya_vzroslyh\/[^/?#"]+\/[^/?#"]+\/)"/g;
     var m;
-    while ((m = cardRe.exec(html)) !== null) {
+    while ((m = hrefRx.exec(html)) !== null) {
       var cardUrl = m[1].charAt(0) === '/' ? 'https://tv4.tizam.org' + m[1] : m[1];
-      var cardBody = m[2];
-      // Skip navigation/menu links — valid video URLs have at least 3 path segments
-      if (!/tv4\.tizam\.org\/[^/]+\/[^/]+\/[^/]+/.test(cardUrl)) continue;
-
-      var thumbMatch = cardBody.match(/src="([^"]+\/images\/cms\/thumbs\/[^"]+)"/) ||
-                       cardBody.match(/src="([^"]+\.jpg[^"]*)"/);
-      var rawThumb = thumbMatch ? thumbMatch[1] : '';
-      var thumb = rawThumb && rawThumb.charAt(0) === '/' ? 'https://tv4.tizam.org' + rawThumb : rawThumb;
-
-      var titleMatch = cardBody.match(/title="([^"]+)"/) ||
-                       cardBody.match(/<[^>]+class="[^"]*title[^"]*"[^>]*>([^<]+)/) ||
-                       cardBody.match(/<[^>]+class="[^"]*name[^"]*"[^>]*>([^<]+)/);
-      var title = titleMatch ? stripTags(titleMatch[1]) : '';
-
-      // ID from URL slug (last path segment)
-      var slugMatch = cardUrl.match(/\/([^/]+)\/?$/);
+      var slugMatch = cardUrl.replace(/\/$/, '').match(/\/([^/]+)$/);
       var id = slugMatch ? slugMatch[1] : cardUrl;
-
-      // Each URL appears twice (thumb link + title link) — keep only the first (with thumb)
       if (seen[id]) continue;
       seen[id] = true;
+
+      // Look FORWARD from href: chunk covers the <a> and the <h3> title that follows it
+      var chunk = html.slice(m.index, m.index + 1200);
+
+      var rawThumb = _attr(chunk, /src="([^"]+\/images\/cms\/thumbs\/[^"]+)"/) ||
+                     _attr(chunk, /src="([^"?#]+\.jpe?g)"/);
+      var thumb = rawThumb && rawThumb.charAt(0) === '/' ? 'https://tv4.tizam.org' + rawThumb : rawThumb;
+
+      // Title: prefer <span class="title"> (actual video name) or <h3>, then img alt
+      var title = _decodeHtml(
+        _attr(chunk, /<span[^>]*class="[^"]*\btitle\b[^"]*"[^>]*>([^<]+)/) ||
+        _attr(chunk, /<h[23][^>]*>([^<]+)<\/h[23]>/) ||
+        _attr(chunk, /itemprop="name"[^>]*>([^<]+)/) ||
+        _attr(chunk, /alt="([^"]+)"/)
+      );
 
       if (!title && !thumb) continue;
 
@@ -3663,7 +3662,7 @@ SOURCES.push(_kvsEngine({
     idFromUrl: function(url) {
         return url.replace(/^https?:\/\/[^/]+\/videos\//, '').replace(/[^a-z0-9]/gi, '_');
     },
-    chunkWindow: { before: 800, after: 600 },
+    chunkWindow: { before: 0, after: 1000 },
     thumbRx: [
         /(?:data-src|src)="(https?:\/\/img\d*-ct\.alphaxcdn\.com\/[^"]+)"/i,
         /(?:data-src|src)="([^"]+\.jpe?g)"/i
@@ -3691,33 +3690,32 @@ SOURCES.push(_kvsEngine({
     }
 }));
 
-// ---- 9. Huyamba ----
-SOURCES.push({
-    id: 'huyamba',
-    name: 'Huyamba',
-    host: 'fuq.huyamba.mobi',
+// ---- 9. Huyamba — DISABLED (fuq.huyamba.mobi returns 404, site dead as of 2026-06) ----
+// SOURCES.push({
+//     id: 'huyamba',
+//     name: 'Huyamba',
+//     host: 'fuq.huyamba.mobi',
+//
+//     search: function (query, page) {
+//         var url = 'https://fuq.huyamba.mobi/search/' + encodeURIComponent(query) + '/';
+//         return cherryFetch(url).then(function (html) {
+//             return { items: _huyambaCards(html), total_pages: 1 };
+//         }).catch(function () { return { items: [], total_pages: 0 }; });
+//     },
 
-    search: function (query, page) {
-        // Search returns all results on one page; page param ignored but kept for interface compliance
-        var url = 'https://fuq.huyamba.mobi/search/' + encodeURIComponent(query) + '/';
-        return cherryFetch(url).then(function (html) {
-            return { items: _huyambaCards(html), total_pages: 1 };
-        }).catch(function () { return { items: [], total_pages: 0 }; });
-    },
-
-    browse: function (category, page) {
-        var url = 'https://fuq.huyamba.mobi/videos/?by=post_date&page=' + page;
-        return cherryFetch(url).then(function (html) {
-            return { items: _huyambaCards(html), total_pages: _huyambaPages(html) };
-        }).catch(function () { return { items: [], total_pages: 0 }; });
-    },
-
-    getStream: function (video) {
-        return cherryFetch(video.url).then(function (html) {
-            return extractStreams(html);
-        }).catch(function () { return { url: '', quality: {} }; });
-    }
-});
+//     browse: function (category, page) {
+//         var url = 'https://fuq.huyamba.mobi/videos/?by=post_date&page=' + page;
+//         return cherryFetch(url).then(function (html) {
+//             return { items: _huyambaCards(html), total_pages: _huyambaPages(html) };
+//         }).catch(function () { return { items: [], total_pages: 0 }; });
+//     },
+//
+//     getStream: function (video) {
+//         return cherryFetch(video.url).then(function (html) {
+//             return extractStreams(html);
+//         }).catch(function () { return { url: '', quality: {} }; });
+//     }
+// });
 
 function _huyambaCards(html) {
     var items = [];
