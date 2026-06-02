@@ -8,8 +8,12 @@
   // CONFIG — user sets these after deploying their proxy
   // ============================================================
   var PROXY_URL = 'https://cherry-proxy.aawersom.workers.dev';
-  // Secondary proxy on Deno Deploy — used for sites that block Cloudflare datacenter IPs (xnxx, ru.spankbang.com, eporner video pages)
+  // Secondary proxy on Deno Deploy — used for sites that block Cloudflare datacenter IPs
   var PROXY_URL_2 = 'https://cherry-proxy.aawersom.deno.net';
+  // Tertiary proxy — VPS with rotating residential IPs (set to '' if not deployed)
+  // Deploy workers/cherry-proxy-vps/index.js on Beget VPS, then fill in your IP:PORT
+  var PROXY_URL_3 = '';
+
   var PROXY_URL_2_HOSTS = {
     'xnxx.com': 1, 'www.xnxx.com': 1,
     // ru.spankbang.com has lower CF security level than www — may break if site enables Bot Fight Mode
@@ -21,13 +25,24 @@
     'tv4.tizam.org': 1,
     // eporner.com — CF Worker returns 369B obfuscated JS redirect for video pages; Deno returns real page
     'www.eporner.com': 1,
-    // pornone CDN IP-bound tokens — routes via Deno; same-POP delivery is likely (Anycast) but not guaranteed
+    // pornone CDN IP-bound tokens
     'gallery.vcmdiawe.com': 1, 'galleryn2.vcmdiawe.com': 1,
     // bigcdn.cc — LeaseWeb NL CDN used by KVS-based sites; 13 confirmed subdomains
-    's1.bigcdn.cc': 1, 's4.bigcdn.cc': 1, 's16.bigcdn.cc': 1, 's25.bigcdn.cc': 1,
-    's30.bigcdn.cc': 1, 's33.bigcdn.cc': 1, 's38.bigcdn.cc': 1, 's39.bigcdn.cc': 1,
-    's41.bigcdn.cc': 1, 's43.bigcdn.cc': 1, 's47.bigcdn.cc': 1, 's50.bigcdn.cc': 1,
-    's61.bigcdn.cc': 1
+    's1.bigcdn.cc': 1, 's4.bigcdn.cc': 1, 's16.bigcdn.cc': 1, 's18.bigcdn.cc': 1,
+    's25.bigcdn.cc': 1, 's30.bigcdn.cc': 1, 's33.bigcdn.cc': 1, 's38.bigcdn.cc': 1,
+    's39.bigcdn.cc': 1, 's41.bigcdn.cc': 1, 's43.bigcdn.cc': 1, 's47.bigcdn.cc': 1,
+    's50.bigcdn.cc': 1, 's61.bigcdn.cc': 1,
+    // perfektdamen KVS CDN — IP-bound tokens require consistent egress IP
+    'www.perfektdamen.co': 1
+  };
+
+  // Domains that need residential IP — routed via PROXY_URL_3 when available
+  var PROXY_URL_3_HOSTS = {
+    'www.pornhub.com': 1,
+    'rt.pornhub.com': 1,
+    'www.eporner.com': 1,
+    'ru.spankbang.com': 1,
+    'www.spankbang.com': 1
   };
 
   function getProxyKey() {
@@ -42,8 +57,14 @@
   function buildProxyUrl(url, referer) {
     var key = getProxyKey();
     var base = PROXY_URL;
-    if (PROXY_URL_2) {
-      try { if (PROXY_URL_2_HOSTS[new URL(url).hostname]) base = PROXY_URL_2; } catch (e) {}
+    if (PROXY_URL_3) {
+      try { if (PROXY_URL_3_HOSTS[new URL(url).hostname]) base = PROXY_URL_3; } catch (e) {}
+    }
+    if (base === PROXY_URL && PROXY_URL_2) {
+      try {
+        var h = new URL(url).hostname;
+        if (PROXY_URL_2_HOSTS[h] || /\.pornone\.com$/.test(h)) base = PROXY_URL_2;
+      } catch (e) {}
     }
     var p = base + '/proxy?url=' + encodeURIComponent(url);
     if (key)     p += '&key=' + encodeURIComponent(key);
