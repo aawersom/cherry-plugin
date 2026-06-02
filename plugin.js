@@ -15,19 +15,17 @@
   var PROXY_URL_3 = '';
 
   var PROXY_URL_2_HOSTS = {
+    // xnxx: CF Worker IPs blocked at ASN level; Deno works
     'xnxx.com': 1, 'www.xnxx.com': 1,
-    // ru.spankbang.com has lower CF security level than www — may break if site enables Bot Fight Mode
-    'ru.spankbang.com': 1,
-    // pornhub Webmasters API + youjizz homepage rate-limit CF datacenter IPs
-    'www.pornhub.com': 1,
+    // youjizz: rate-limits CF datacenter IPs
     'www.youjizz.com': 1, 'youjizz.com': 1,
-    // tizam.org — rate-limits rapid sequential requests from CF datacenter IPs
+    // tizam.org: rate-limits rapid sequential CF datacenter requests
     'tv4.tizam.org': 1,
-    // eporner.com — CF Worker returns 369B obfuscated JS redirect for video pages; Deno returns real page
-    'www.eporner.com': 1,
-    // pornone: page + CDN must share same proxy IP so token stays valid
+    // pornone: page + CDN must share same proxy IP so KVS token stays valid
     'pornone.com': 1, 'www.pornone.com': 1,
     'gallery.vcmdiawe.com': 1, 'galleryn2.vcmdiawe.com': 1,
+    // NOTE: pornhub/eporner/spankbang intentionally NOT here —
+    //       they go to CF Worker which routes them via SOCKS5 Dutch residential proxies
     // bigcdn.cc — LeaseWeb NL CDN used by KVS-based sites; 13 confirmed subdomains
     's1.bigcdn.cc': 1, 's4.bigcdn.cc': 1, 's16.bigcdn.cc': 1, 's18.bigcdn.cc': 1,
     's25.bigcdn.cc': 1, 's30.bigcdn.cc': 1, 's33.bigcdn.cc': 1, 's38.bigcdn.cc': 1,
