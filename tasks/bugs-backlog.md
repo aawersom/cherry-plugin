@@ -17,6 +17,11 @@ Out-of-scope bugs spotted during tasks. Critical/high → fix in flight. Medium/
 **Risk:** Low (javascript:/data: URLs inert for img/video media loads), but malformed values could trigger unexpected requests.
 **Fix:** validate `https?://` or `//` prefix centrally in renderCards before assignment. Caught by: security reviewer (Phase 1).
 
+### BL-4 (low) — row-mode card creation duplicates CherryGrid.renderCards
+**Where:** `plugin.js` `renderRows()` (CherryMain) vs `renderCards()` (CherryGrid)
+**Risk:** cherry_card instantiation (title/duration/views/thumb) + hover:enter→playVideo wiring exist in two places. A future card-markup or play-wiring change must be made twice.
+**Scope:** Acceptable for v1 (row cards intentionally minimal — no fav/preview/long-press). If row cards later gain those, extract a shared `buildCard(video, src, opts)` helper rather than a third copy. Caught by: arch reviewer (Phase 5).
+
 ### BL-3 (nit) — getRelated relatedVideosJSON branch has no result cap
 **Where:** `plugin.js` pornhub getRelated — JSON path returns full array; HTML fallback caps at `.slice(0,20)`.
 **Risk:** malicious page with huge relatedVideosJSON → unbounded card render (mild client resource exhaustion).

@@ -835,3 +835,272 @@ describe('P1: plugin.js source assertions (anti-drift)', () => {
     expect(SRC).toMatch(/clientHeight\s*<\s*300/);
   });
 });
+
+// ============================================================
+// UX-A — Home Screen Row Mode (Phase 5)
+// (behaviour documentation)
+//
+// CherryMain gains a second presentation: one horizontal strip per source.
+// Mode is stored as cherry_home_mode ('tiles'|'rows'), default 'tiles', and
+// toggled from the long-press menu on .cherry-main__title (alongside the
+// existing preview toggle). Pure functions below mirror the load-bearing
+// decisions: mode toggle, menu label selection, per-row card cap, and the
+// collectionSet gate. No DOM, no Lampa, no async — exact-truthiness asserts.
+// ============================================================
+
+describe('UX-A: nextHomeMode — POST behaviour', function () {
+  /**
+   * Mirror of: var newMode = mode === 'rows' ? 'tiles' : 'rows';
+   * Toggles between the two valid modes. Anything not 'rows' becomes 'rows'
+   * (so the default 'tiles' flips to 'rows' on first toggle).
+   */
+  function nextHomeMode(current) {
+    return current === 'rows' ? 'tiles' : 'rows';
+  }
+
+  it('tiles -> rows', function () {
+    expect(nextHomeMode('tiles')).toBe('rows');
+  });
+
+  it('rows -> tiles', function () {
+    expect(nextHomeMode('rows')).toBe('tiles');
+  });
+
+  it('toggling twice returns to the original mode (rows)', function () {
+    expect(nextHomeMode(nextHomeMode('rows'))).toBe('rows');
+  });
+
+  it('toggling twice returns to the original mode (tiles)', function () {
+    expect(nextHomeMode(nextHomeMode('tiles'))).toBe('tiles');
+  });
+
+  it('undefined/unknown current defaults toward rows (only "rows" maps to tiles)', function () {
+    expect(nextHomeMode(undefined)).toBe('rows');
+    expect(nextHomeMode('')).toBe('rows');
+  });
+});
+
+describe('UX-A: homeModeLabel — POST behaviour', function () {
+  /**
+   * Mirror of the menu label selection:
+   *   var modeLabel = mode === 'rows'
+   *     ? Lampa.Lang.translate('cherry_view_tiles')
+   *     : Lampa.Lang.translate('cherry_view_rows');
+   * The label always advertises the OPPOSITE (target) action: in tiles mode
+   * show "switch to rows", in rows mode show "switch to tiles". Returns the
+   * lang KEY (translate() is identity in tests).
+   */
+  function homeModeLabel(mode) {
+    return mode === 'rows' ? 'cherry_view_tiles' : 'cherry_view_rows';
+  }
+
+  it('tiles mode advertises switch-to-rows', function () {
+    expect(homeModeLabel('tiles')).toBe('cherry_view_rows');
+  });
+
+  it('rows mode advertises switch-to-tiles', function () {
+    expect(homeModeLabel('rows')).toBe('cherry_view_tiles');
+  });
+
+  it('default (undefined) mode advertises switch-to-rows', function () {
+    expect(homeModeLabel(undefined)).toBe('cherry_view_rows');
+  });
+
+  it('label key always matches the target of nextHomeMode', function () {
+    // homeModeLabel must name the mode you would land in after a toggle.
+    function nextHomeMode(c) { return c === 'rows' ? 'tiles' : 'rows'; }
+    var keyForMode = { tiles: 'cherry_view_tiles', rows: 'cherry_view_rows' };
+    ['tiles', 'rows'].forEach(function (m) {
+      expect(homeModeLabel(m)).toBe(keyForMode[nextHomeMode(m)]);
+    });
+  });
+});
+
+describe('UX-A: rowCardsCap — POST behaviour', function () {
+  /**
+   * Mirror of: result.items.slice(0, 12)
+   * Each source row shows at most 12 cards, in adapter order, never sorted.
+   */
+  var CAP = 12;
+  function rowCardsCap(items) {
+    return (items || []).slice(0, CAP);
+  }
+
+  function cards(n) {
+    var arr = [];
+    for (var i = 0; i < n; i++) arr.push({ title: 'v' + i });
+    return arr;
+  }
+
+  it('caps a long row at 12 cards', function () {
+    expect(rowCardsCap(cards(40))).toHaveLength(12);
+  });
+
+  it('keeps the first 12 in adapter order (not sorted)', function () {
+    var titles = rowCardsCap(cards(40)).map(function (c) { return c.title; });
+    expect(titles).toEqual([
+      'v0', 'v1', 'v2', 'v3', 'v4', 'v5',
+      'v6', 'v7', 'v8', 'v9', 'v10', 'v11'
+    ]);
+  });
+
+  it('exactly 12 items are kept intact (boundary)', function () {
+    expect(rowCardsCap(cards(12))).toHaveLength(12);
+  });
+
+  it('fewer than 12 items returns them all', function () {
+    expect(rowCardsCap(cards(5))).toHaveLength(5);
+  });
+
+  it('empty items returns empty', function () {
+    expect(rowCardsCap([])).toHaveLength(0);
+  });
+
+  it('null/undefined items is treated as empty', function () {
+    expect(rowCardsCap(null)).toHaveLength(0);
+    expect(rowCardsCap(undefined)).toHaveLength(0);
+  });
+});
+
+describe('UX-A: allRowsLoaded — POST behaviour', function () {
+  /**
+   * Mirror of the collectionSet gate:
+   *   resolvedCount++;
+   *   if (resolvedCount === SOURCES.length) Lampa.Controller.collectionSet(html);
+   * collectionSet fires exactly ONCE — when the last source resolves (success
+   * OR error, since both branches increment). It must NOT fire early, and the
+   * counter equality (not >=) means it triggers on precisely the last resolve.
+   */
+  function allRowsLoaded(resolvedCount, total) {
+    return resolvedCount === total;
+  }
+
+  it('not all resolved yet: false', function () {
+    expect(allRowsLoaded(1, 3)).toBe(false);
+    expect(allRowsLoaded(2, 3)).toBe(false);
+  });
+
+  it('last source resolves: true', function () {
+    expect(allRowsLoaded(3, 3)).toBe(true);
+  });
+
+  it('zero resolved with sources pending: false', function () {
+    expect(allRowsLoaded(0, 3)).toBe(false);
+  });
+
+  it('exactly one source: fires on first resolve', function () {
+    expect(allRowsLoaded(1, 1)).toBe(true);
+  });
+
+  it('strict equality — does not re-fire past the total', function () {
+    // Counter overshoot must not re-trigger (equality, not >=).
+    expect(allRowsLoaded(4, 3)).toBe(false);
+  });
+
+  it('fires exactly once across a simulated resolve sequence', function () {
+    var total = 4;
+    var fired = 0;
+    for (var c = 1; c <= total; c++) {
+      if (allRowsLoaded(c, total)) fired++;
+    }
+    expect(fired).toBe(1);
+  });
+});
+
+// ============================================================
+// UX-A — plugin.js source assertions (anti-drift)
+// ============================================================
+
+describe('UX-A: plugin.js source assertions (anti-drift)', () => {
+  it('cherry_home_mode storage key referenced', () => {
+    expect(SRC).toContain('cherry_home_mode');
+  });
+
+  it('cherry_home_mode read with default "tiles"', () => {
+    expect(SRC).toMatch(/cherry_home_mode['"]\s*,\s*['"]tiles['"]/);
+  });
+
+  it('cherry_source_row template registered', () => {
+    // Lampa.Template.add('cherry_source_row', ...)
+    expect(SRC).toMatch(/Lampa\.Template\.add\(\s*['"]cherry_source_row['"]/);
+  });
+
+  it('cherry_source_row label/cards classes present', () => {
+    expect(SRC).toContain('cherry-source-row__label');
+    expect(SRC).toContain('cherry-source-row__cards');
+  });
+
+  it('renderRows function defined', () => {
+    expect(SRC).toMatch(/function\s+renderRows\s*\(/);
+  });
+
+  it('renderRows applies the --rows modifier class', () => {
+    expect(SRC).toContain('cherry-main__sources--rows');
+  });
+
+  it('row card sets video.source = src.id before render (Fav 7-field invariant)', () => {
+    expect(SRC).toMatch(/video\.source\s*=\s*src\.id/);
+  });
+
+  it('CherryMain has a destroyed flag', () => {
+    // The guard variable must be declared (and used in async row callbacks).
+    expect(SRC).toMatch(/var\s+destroyed\s*=\s*false/);
+  });
+
+  it('CherryMain.destroy sets destroyed = true', () => {
+    expect(SRC).toMatch(/this\.destroy\s*=\s*function[\s\S]{0,120}destroyed\s*=\s*true/);
+  });
+
+  it('lang key cherry_view_rows registered', () => {
+    expect(SRC).toMatch(/cherry_view_rows\s*:/);
+  });
+
+  it('lang key cherry_view_tiles registered', () => {
+    expect(SRC).toMatch(/cherry_view_tiles\s*:/);
+  });
+
+  it('collectionSet gated by a resolved counter (fires once)', () => {
+    // resolvedCount (or similar) incremented, then compared to SOURCES.length.
+    expect(SRC).toMatch(/resolvedCount/);
+    expect(SRC).toMatch(/resolvedCount\s*===\s*SOURCES\.length/);
+  });
+
+  it('view_toggle action present in the long-press menu', () => {
+    expect(SRC).toMatch(/action:\s*'view_toggle'/);
+  });
+
+  it('view toggle re-pushes cherry_main after backward() with a setTimeout', () => {
+    // Mode switch: Lampa.Activity.backward() then setTimeout(... push cherry_main ...).
+    expect(SRC).toMatch(/Lampa\.Activity\.backward\(\)/);
+    expect(SRC).toMatch(/setTimeout\([\s\S]{0,200}cherry_main/);
+  });
+
+  it('view_toggle guarded by a _toggling re-entrancy flag (no destroyed-guard in re-push)', () => {
+    // The deferred re-push MUST fire even after backward() tears down the
+    // instance, so there is no destroyed-guard in the timer. Fast double-toggle
+    // is instead blocked up-front by a _toggling re-entrancy flag.
+    expect(SRC).toMatch(/var\s+_toggling\s*=\s*false/);
+    expect(SRC).toMatch(/if\s*\(\s*_toggling\s*\)\s*return/);
+    expect(SRC).toMatch(/_toggling\s*=\s*true/);
+  });
+
+  it('row mode wraps src.browse in Promise.resolve (thenable-safe)', () => {
+    // Promise.resolve(src.browse('', 1)) — a sync-throwing / null-returning
+    // adapter must land in .catch, not abort the whole forEach.
+    expect(SRC).toMatch(/Promise\.resolve\(\s*src\.browse\(/);
+  });
+
+  it('both cherry_view_rows and cherry_view_tiles reachable from the menu label branch', () => {
+    // modeLabel selects cherry_view_tiles in rows mode, cherry_view_rows otherwise.
+    expect(SRC).toMatch(/translate\(\s*['"]cherry_view_tiles['"]\s*\)/);
+    expect(SRC).toMatch(/translate\(\s*['"]cherry_view_rows['"]\s*\)/);
+  });
+
+  it('row card cap is slice(0, 12)', () => {
+    expect(SRC).toMatch(/slice\(\s*0\s*,\s*12\s*\)/);
+  });
+
+  it('row mode browses each source via src.browse with page 1', () => {
+    expect(SRC).toMatch(/src\.browse\(\s*['"]['"]\s*,\s*1\s*\)/);
+  });
+});
