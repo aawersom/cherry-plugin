@@ -2171,7 +2171,8 @@ SOURCES.push({
 
   _parseCards: function(html) {
     var items = [];
-    var blocks = html.split(/<div[^>]+class="[^"]*video-item[^"]*"/);
+    // Lookahead keeps the opening <div> tag (with data-video attr) inside each block
+    var blocks = html.split(/(?=<div[^>]+class="[^"]*video-item[^"]*")/);
     for (var i = 1; i < blocks.length; i++) {
       var block = blocks[i];
       // href pattern: /{id}/video/
@@ -2184,6 +2185,12 @@ SOURCES.push({
                        block.match(/src="(https:\/\/tbi\.sb-cd\.com\/[^"]+)"/) ||
                        block.match(/src="([^"]+\.(?:jpg|webp|jpeg)[^"]*)"/);
       var thumb = thumbMatch ? thumbMatch[1] : '';
+
+      // Preview: data-video on the card div, or <source>/<video> inside card
+      var previewMatch = block.match(/data-video="([^"]+)"/) ||
+                         block.match(/<source[^>]+src="([^"]+\.(?:mp4|webm))"/) ||
+                         block.match(/<video[^>]+src="([^"]+\.(?:mp4|webm))"/);
+      var preview = previewMatch ? previewMatch[1] : '';
 
       // Title: class with "n" or similar label
       var titleMatch = block.match(/<div[^>]*class="[^"]*\bn\b[^"]*"[^>]*>([\s\S]*?)<\/div>/) ||
@@ -2201,6 +2208,7 @@ SOURCES.push({
         source: 'spankbang',
         title: title,
         thumb: thumb,
+        preview: preview,
         url: videoUrl,
         duration: duration,
         views: 0
