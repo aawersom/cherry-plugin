@@ -31,7 +31,9 @@ const PROXY_URL_2_HOSTS = {
   'xnxx.com': 1, 'www.xnxx.com': 1,
   'www.youjizz.com': 1, 'youjizz.com': 1,
   'tv4.tizam.org': 1,
-  // pornone moved to CF Worker SOCKS5 (Deno IP banned)
+  // pornone/porntrex: Deno — KVS IP-bound tokens require page+CDN on same fixed IP
+  'pornone.com': 1, 'www.pornone.com': 1,
+  'porntrex.com': 1, 'www.porntrex.com': 1,
   'www.eporner.com': 1,
   // spankbang ru: Deno for browse; stream broken (needs Playwright)
   'ru.spankbang.com': 1,

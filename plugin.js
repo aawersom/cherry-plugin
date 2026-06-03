@@ -529,6 +529,9 @@
         if (favItems.length) {
           renderCards(favItems, scroll.body());
         } else {
+          // Children first, then parent — avoids a flash of the generic message.
+          html.find('.cherry-grid__empty-generic').hide();
+          html.find('.cherry-grid__empty-fav-hint').show();
           html.find('.cherry-grid__empty').show();
         }
       } else if (object._related_items) {
@@ -767,23 +770,32 @@
           }
         });
 
-        // Long-press: context menu (favorites + similar search).
+        // Long-press: context menu (favorites + similar search + adapter related).
         card.on('hover:long', function () {
-          var isFav = Fav.has(video);
+          var isFav   = Fav.has(video);
+          var cardSrc = sourceById(video.source) || sourceById(object.source_id);
+          var items = [
+            {
+              title: isFav
+                ? Lampa.Lang.translate('cherry_rem_fav_action')
+                : Lampa.Lang.translate('cherry_add_fav_action'),
+              action: 'fav'
+            },
+            {
+              title: Lampa.Lang.translate('cherry_similar'),
+              action: 'similar'
+            }
+          ];
+          // 'similar' = keyword search across all sources; 'related' = adapter.getRelated() curated list.
+          if (cardSrc && cardSrc.getRelated) {
+            items.push({
+              title: Lampa.Lang.translate('cherry_related'),
+              action: 'related'
+            });
+          }
           Lampa.Select.show({
             title: video.title,
-            items: [
-              {
-                title: isFav
-                  ? Lampa.Lang.translate('cherry_rem_fav_action')
-                  : Lampa.Lang.translate('cherry_add_fav_action'),
-                action: 'fav'
-              },
-              {
-                title: Lampa.Lang.translate('cherry_similar'),
-                action: 'similar'
-              }
-            ],
+            items: items,
             onSelect: function (item) {
               if (item.action === 'fav') {
                 var added = Fav.toggle(video);
@@ -793,6 +805,7 @@
                     ? Lampa.Lang.translate('cherry_add_fav')
                     : Lampa.Lang.translate('cherry_rem_fav')
                 );
+                Lampa.Controller.toggle('cherry_grid');
               } else if (item.action === 'similar') {
                 var words = (video.title || '').replace(/[^a-zа-яё0-9\s]/gi, '').trim().split(/\s+/).slice(0, 4);
                 var query = words.join(' ');
@@ -803,6 +816,31 @@
                   query:       query,
                   all_sources: true,
                   page:        1
+                });
+                Lampa.Controller.toggle('cherry_grid');
+              } else if (item.action === 'related') {
+                setLoading(true);
+                cardSrc.getRelated(video).then(function (rel) {
+                  if (destroyed) return;
+                  setLoading(false);
+                  if (rel && rel.length) {
+                    Lampa.Controller.toggle('cherry_grid');
+                    Lampa.Activity.push({
+                      component:      'cherry_grid',
+                      title:          Lampa.Lang.translate('cherry_related') + ': ' + video.title,
+                      source_id:      cardSrc.id,
+                      _related_items: rel,
+                      page:           1
+                    });
+                  } else {
+                    Lampa.Noty.show(Lampa.Lang.translate('cherry_no_results'), { style: 'info' });
+                    Lampa.Controller.toggle('cherry_grid');
+                  }
+                }).catch(function () {
+                  if (destroyed) return;
+                  setLoading(false);
+                  Lampa.Noty.show(Lampa.Lang.translate('cherry_error'), { style: 'warn' });
+                  Lampa.Controller.toggle('cherry_grid');
                 });
               }
             },
@@ -1031,7 +1069,8 @@
         '</div>',
         '<div class="cherry-grid__empty" style="display:none">',
           '<div class="cherry-grid__empty-icon">&#9785;</div>',
-          '<div>#{cherry_no_results}</div>',
+          '<div class="cherry-grid__empty-generic">#{cherry_no_results}</div>',
+          '<div class="cherry-grid__empty-fav-hint" style="display:none">#{cherry_fav_empty_hint}</div>',
         '</div>',
       '</div>'
     ].join(''));
@@ -1257,6 +1296,15 @@
       '  line-height: 1;',
       '}',
 
+      '.cherry-grid__empty-fav-hint {',
+      '  font-size: .9em;',
+      '  opacity: .75;',
+      '  text-align: center;',
+      '  max-width: 24em;',
+      '  line-height: 1.5;',
+      '  margin: 0 auto;',
+      '}',
+
       /* ---- Video card ------------------------------------------ */
       /*
        * Target 4 cards per row on 1920px with sidebar ~260px ≈ 1660px wide.
@@ -1426,6 +1474,7 @@
       cherry_sources:     { ru: 'Источники',           en: 'Sources'            },
       cherry_favorites:   { ru: 'Избранное',           en: 'Favorites'          },
       cherry_no_results:  { ru: 'Нет результатов',     en: 'No results'         },
+      cherry_fav_empty_hint: { ru: 'Удерживайте ОК на видео чтобы добавить в избранное', en: 'Hold OK on a video to add it to favorites' },
       cherry_loading:     { ru: 'Загрузка…',           en: 'Loading…'           },
       cherry_error:       { ru: 'Ошибка загрузки',     en: 'Load error'         },
       cherry_add_fav:        { ru: 'Добавлено в избранное',  en: 'Added to favorites'    },
@@ -1460,6 +1509,25 @@
     addLang();
     addTemplates();
     addStyles();
+
+    // UX-C: register preview toggle in Lampa settings. Long-press on the main
+    // title remains as a fallback when SettingsApi is unavailable.
+    if (Lampa.SettingsApi && Lampa.SettingsApi.addComponent && Lampa.SettingsApi.addParam) {
+      Lampa.SettingsApi.addComponent({
+        component: 'cherry',
+        name: 'Cherry',
+        icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 21s-7-4.35-9.5-8.5C0.5 9 2 5 5.5 5c2 0 3.5 1.5 4 2.5C10 6.5 11.5 5 13.5 5 17 5 18.5 9 16.5 12.5 14 16.65 12 21 12 21z" fill="#e75480"/></svg>'
+      });
+      Lampa.SettingsApi.addParam({
+        component: 'cherry',
+        param: { name: 'cherry_preview_enabled', type: 'trigger', default: true },
+        field: { name: Lampa.Lang.translate('cherry_preview_setting'), description: '' }
+        // 'trigger' params auto-persist to Lampa.Storage under param.name (== our storage key),
+        // so no onChange handler is needed — read path Lampa.Storage.get('cherry_preview_enabled') works.
+      });
+    } else if (Lampa.SettingsApi) {
+      console.warn('[Cherry] SettingsApi present but addComponent/addParam unavailable — using long-press fallback');
+    }
 
     Lampa.Component.add('cherry_main', CherryMain);
     Lampa.Component.add('cherry_grid', CherryGrid);

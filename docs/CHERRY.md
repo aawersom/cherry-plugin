@@ -445,9 +445,10 @@ SpankBang previously failed with Cloudflare JS challenge on `spankbang.com` and 
 | `Lampa.Storage.get('cherry_preview_enabled', true)` | REQ-2: read preview toggle state |
 | `Lampa.Storage.set('cherry_preview_enabled', bool)` | REQ-2: write preview toggle via CherryMain settings |
 
-### Lampa.SettingsApi (not used — CherryMain long-press instead)
-Preview toggle exposed via `hover:long` on `.cherry-main__title` → `Lampa.Select.show(...)`.
-Global `Lampa.SettingsApi` registration deliberately avoided (avoids polluting global settings page).
+### Lampa.SettingsApi
+Preview toggle (`cherry_preview_enabled`) registered via `Lampa.SettingsApi.addParam || Lampa.SettingsApi.add` (guarded — falls back gracefully on forks without this API).
+Long-press on `.cherry-main__title` kept as secondary fallback for Lampa forks without SettingsApi.
+**Decision change (cherry-ux-v2, 2026-06-03):** Previously avoided to not pollute global settings page. Changed because toggle was undiscoverable behind a hidden long-press gesture.
 
 ### Lampa.Reguest (class)
 | Call | Purpose |

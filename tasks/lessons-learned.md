@@ -54,3 +54,41 @@ Pool-based residential proxies assign DIFFERENT exit IPs per port. Our assumptio
 
 ### L11: Regex optional quotes needed for unquoted JS object keys
 Pattern `['"]src['"]` requires quotes around key name — fails on `{src:"url"}` (unquoted key, common in FluidPlayer/JWPlayer config). Required `['"]?src['"]?` (optional quotes). **Rule:** When matching JS object keys in HTML, make surrounding quotes optional unless you're certain the source always uses JSON-style quoted keys.
+
+---
+
+## cherry-ux-v2 (2026-06-03) — Mode: full
+
+### L13: Lampa.Keyboard vs Lampa.Select have different callback naming conventions
+`Lampa.Keyboard.show` uses **lowercase** keys: `onenter`, `onchange`. `Lampa.Select.show` uses **camelCase**: `onBack`, `onSelect`. Mixing them causes silent runtime failures — wrong-case callbacks are ignored without any JS error. **Rule:** When speccing any Lampa API call that takes callbacks, copy exact key names from an existing usage in the codebase rather than inferring from camelCase conventions.
+- Caught by: tech reviewer (spec stage)
+
+### L14: Spec code examples must set `video.source` on all synthesized card objects
+Adapters set `video.source = src.id` on every card they produce. When UX code creates synthetic card arrays (e.g. row-mode browse results injected into `hover:enter`), it must also set `video.source` before the card is passed to `playVideo` or `Fav.toggle`. Otherwise the 7-field Fav serialisation captures `source: undefined`.
+- Caught by: arch reviewer (spec stage)
+
+### L18: `Lampa.SettingsApi.addParam` requires `addComponent` first; boolean type is `trigger`
+A custom-component param needs `Lampa.SettingsApi.addComponent({component, name, icon})` registered BEFORE `addParam`, otherwise the param has no settings page to attach to and never renders. Boolean toggle type is `'trigger'` (not `'toggle'`). `trigger` params auto-persist to Storage under the param `name`, so the param name should equal the storage key and `onChange` Storage.set is redundant. There is no `Lampa.SettingsApi.add` method — only `addComponent` + `addParam`. **Rule:** when calling an unfamiliar Lampa API, verify the exact contract against a real working plugin, not against a plausible-looking shape. A passing mirror-test can encode a wrong API contract.
+- Caught by: arch reviewer (code stage)
+
+### L19: Mirror-tests can be silently rewritten to tautologies — guard the RED phase
+A code-writer "fixed failing TDD tests" by editing the PRE/before-state fixtures to equal the POST/after-state, turning red→green guards into PRE==POST tautologies. Implementation happened to be correct, so no gap was hidden — but the test suite lost all diagnostic value, and the justification ("unsatisfiable hardcoded snapshots") was false. Compounded by the fact that mirror-tests never execute `plugin.js` (they assert against copied logic). **Rule:** (1) PRE fixtures encode the genuine before-state and must stay red until implementation; never edit them to match POST. (2) Every feature needs at least one assertion that reads the real `plugin.js` source (`fs.readFileSync` + grep for the load-bearing construct) so mirror-drift is caught. (3) Be skeptical of "I fixed the tests" — verify what changed.
+- Caught by: tech reviewer (code stage)
+
+### Phase 1 review batch (code stage) — reviewer attribution
+- L18 (SettingsApi addComponent): arch reviewer — HIGH, toggle would never render
+- L19 (mirror-test tautology): tech reviewer — HIGH, caught code-writer's misleading "test fix"
+- Security: APPROVE — only pre-existing XSS/scheme findings → bugs-backlog BL-1/2/3
+- MEDIUM (empty-related noty key/style), LOW (source_id fallback), nit (CSS) — all applied
+
+### L16: `Lampa.Controller.collectionSet` inside async callbacks causes focus resets
+Calling `collectionSet(html)` inside each of N parallel `browse().then()` callbacks fires N times as rows load, resetting D-pad focus each time. For row-mode async loading, call `collectionSet` once — either after all promises settle or only in `start()`. **Rule:** `collectionSet` belongs in component lifecycle hooks (`start`, or once after all async work completes), never inside individual promise callbacks that fire in bursts.
+- Caught by: arch reviewer (plan stage)
+
+### L17: `overflow-x: hidden` on TV horizontal strip hides cards without scroll mechanism
+A horizontal card strip with `overflow-x: hidden` clips cards that don't fit in the viewport. On TV, D-pad focus correctly advances to out-of-view cards, but they are invisible. Fix: either use `overflow-x: scroll; scrollbar-width: none` + `scroll-behavior: smooth` so focus causes programmatic scroll, or limit the strip to exactly the number of visible cards. **Rule:** never use `overflow: hidden` on a D-pad-navigable element unless the entire collection is visible within the container.
+- Caught by: tech reviewer (plan stage)
+
+### L15: `_reloadFromStart` must clear ALL custom grid elements, not just `.cherry-card`
+When new element classes are added to `scroll.body()` (e.g. `.cherry-group-label` for P2 grouped search), `_reloadFromStart` must explicitly remove them. jQuery `.find('.cherry-card').remove()` leaves custom elements in place, causing stale content to appear after sort/category changes.
+- Caught by: both reviewers (spec stage)
