@@ -2171,8 +2171,8 @@ SOURCES.push({
 
   _parseCards: function(html) {
     var items = [];
-    // Lookahead keeps the opening <div> tag (with data-video attr) inside each block
-    var blocks = html.split(/(?=<div[^>]+class="[^"]*video-item[^"]*")/);
+    // Splits AFTER class="...video-item..." quote — data-video attr remains in each block
+    var blocks = html.split(/<div[^>]+class="[^"]*video-item[^"]*"/);
     for (var i = 1; i < blocks.length; i++) {
       var block = blocks[i];
       // href pattern: /{id}/video/
