@@ -21,7 +21,8 @@
     'www.youjizz.com': 1, 'youjizz.com': 1,
     // tizam.org: rate-limits rapid sequential CF datacenter requests
     'tv4.tizam.org': 1,
-    // pornone: moved to CF Worker SOCKS5 (Deno IP banned by pornone). See RESIDENTIAL in index.js.
+    // pornone: Deno (all subdomains via regex in buildProxyUrl — page + CDN same Deno IP for token affinity)
+    'pornone.com': 1, 'www.pornone.com': 1,
     // eporner: SOCKS5 instability — revert to Deno
     'www.eporner.com': 1,
     // spankbang ru: Deno for browse (SOCKS5 blocks even browse); stream remains broken (needs Playwright)
@@ -57,7 +58,7 @@
     if (base === PROXY_URL && PROXY_URL_2) {
       try {
         var h = new URL(url).hostname;
-        if (PROXY_URL_2_HOSTS[h] || /\.bigcdn\.cc$/.test(h)) base = PROXY_URL_2;
+        if (PROXY_URL_2_HOSTS[h] || /\.bigcdn\.cc$/.test(h) || /(?:^|\.)pornone\.com$/.test(h)) base = PROXY_URL_2;
       } catch (e) {}
     }
     var p = base + '/proxy?url=' + encodeURIComponent(url);
@@ -2603,35 +2604,26 @@ SOURCES.push({
     },
 
     getStream: function (video) {
-        function _parse(html) {
+        return cherryFetch(video.url).then(function (html) {
+            // Unescape JS-escaped slashes/quotes (WP JSON embed patterns)
             var clean = html.replace(/\\\//g, '/').replace(/\\"/g, '"');
-            var fpM = /sources\s*[=:]\s*\[[\s\S]{0,2000}?['"]?src['"]?\s*:\s*['"]([^'"]+\.(?:mp4|m3u8)[^'"]{0,200})['"]/i.exec(clean);
-            if (fpM) return { url: fpM[1], quality: {} };
-            var r = extractStreams(clean);
-            if (r.url) return { url: r.url, quality: r.quality };
+            // FluidPlayer uses {src:"url"} (unquoted key) — extractStreams only finds "file" key
+            var fpRx = /sources\s*[=:]\s*\[[\s\S]{0,2000}?['"]?src['"]?\s*:\s*['"]([^'"]+\.(?:mp4|m3u8)[^'"]{0,200})['"]/i;
+            var fpM = fpRx.exec(clean);
+            if (fpM) return { url: buildProxyUrl(fpM[1], 'https://pornone.com/'), quality: {} };
+            var result = extractStreams(clean);
+            if (result.url) {
+                var q = {};
+                Object.keys(result.quality).forEach(function(k) {
+                    q[k] = buildProxyUrl(result.quality[k], 'https://pornone.com/');
+                });
+                return { url: buildProxyUrl(result.url, 'https://pornone.com/'), quality: q };
+            }
             var m = clean.match(/['"](?:file|src|source|video_url|videoUrl)['"][\s:,]+['"]([^'"]+\.(?:mp4|m3u8)[^'"]*)['"]/i) ||
                     clean.match(/["'](https?:\/\/[^"'\s]+\.mp4[^"'\s]*)['"]/i);
-            if (m) return { url: m[1], quality: {} };
-            return null;
-        }
-        // Native fetch uses the device's real IP → token in the MP4 URL is bound to that IP →
-        // player streams from the same IP without needing a proxy (works on Android/SmartTV).
-        return _nativeFetch(video.url).then(function (html) {
-            var p = _parse(html);
-            if (!p || !p.url) throw new Error('no-url');
-            return p; // raw URLs — no buildProxyUrl, device IP matches token IP
-        }).catch(function () {
-            // Fallback: fetch via proxy (desktop browser or native fetch failed)
-            return cherryFetch(video.url).then(function (html) {
-                var p = _parse(html);
-                if (!p || !p.url) return { url: '', quality: {} };
-                var q = {};
-                Object.keys(p.quality).forEach(function (k) {
-                    q[k] = buildProxyUrl(p.quality[k], 'https://pornone.com/');
-                });
-                return { url: buildProxyUrl(p.url, 'https://pornone.com/'), quality: q };
-            }).catch(function () { return { url: '', quality: {} }; });
-        });
+            if (m) return { url: buildProxyUrl(m[1], 'https://pornone.com/'), quality: {} };
+            return { url: '', quality: {} };
+        }).catch(function () { return { url: '', quality: {} }; });
     }
 });
 
