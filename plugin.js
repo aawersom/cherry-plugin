@@ -3259,28 +3259,29 @@ SOURCES.push({
 
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
-            // Primary: fetch iframe player page and extract direct stream URL
             var m = /src="(https?:\/\/videos\.porndig\.com\/player\/index\/[^"]+)"/i.exec(html);
             if (m) {
                 return cherryFetch(m[1]).then(function (ihtml) {
-                    // Porndig-specific patterns before generic fallback
-                    // P2 first (more specific: targets JWPlayer/FluidPlayer sources array)
-                    // P1 second (generic file/src key — could match preview URLs if run first)
-                    var directUrl = '', dm;
-                    // Pattern 2: sources array object-literal: sources:[{file:"url"}] or sources=[{src:"url"}]
-                    dm = /sources\s*[=:]\s*\[[\s\S]*?(?:file|src)\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))/i.exec(ihtml);
-                    if (dm) directUrl = dm[1];
-                    // Pattern 1: generic file/src key (fallback — may match preview if run first)
-                    if (!directUrl) { dm = /(?:file|src)\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))/i.exec(ihtml); if (dm) directUrl = dm[1]; }
-                    // Pattern 3: data-src on <video>/<source> tag
-                    if (!directUrl) { dm = /<(?:video|source)[^>]+data-src="([^"]+\.(?:mp4|m3u8))"/i.exec(ihtml); if (dm) directUrl = dm[1]; }
-                    if (directUrl) return { url: directUrl, quality: {} };
-                    var result = extractStreams(ihtml);
-                    if (result.url || Object.keys(result.quality).length) {
-                        var qKeys = Object.keys(result.quality);
-                        var best  = qKeys.length ? bestQualityUrl(result.quality) : result.url;
-                        return { url: best, quality: result.quality };
+                    // Iterate all {…} entries in sources block; keep only numeric-labelled resolutions.
+                    // Preview entries have no label or label="Preview" — both are skipped.
+                    var quality = {};
+                    var bm = /sources\s*[=:]\s*\[([\s\S]{0,4000}?)\]/i.exec(ihtml);
+                    if (bm) {
+                        var eRx = /\{([^{}]{0,600})\}/g, em;
+                        while ((em = eRx.exec(bm[1])) !== null) {
+                            var ent = em[1];
+                            var fm = /(?:file|src)\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))['"]/i.exec(ent);
+                            var lm = /label\s*:\s*['"]?(\d+)/i.exec(ent);
+                            if (fm && lm) {
+                                var u = fm[1];
+                                if (u.indexOf('//') === 0) u = 'https:' + u;
+                                quality[lm[1]] = u;
+                            }
+                        }
                     }
+                    if (Object.keys(quality).length) return { url: bestQualityUrl(quality), quality: quality };
+                    var result = extractStreams(ihtml);
+                    if (result.url || Object.keys(result.quality).length) return result;
                     return extractStreams(html);
                 }).catch(function () { return extractStreams(html); });
             }
