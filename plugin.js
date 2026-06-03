@@ -3259,11 +3259,10 @@ SOURCES.push({
 
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
-            var m = /src="(https?:\/\/videos\.porndig\.com\/player\/index\/[^"]+)"/i.exec(html);
+            // Match any player iframe on videos.porndig.com (path may vary across versions)
+            var m = /src="(https?:\/\/videos\.porndig\.com\/[^"]+)"/i.exec(html);
             if (m) {
                 return cherryFetch(m[1]).then(function (ihtml) {
-                    // Iterate all {…} entries in sources block; keep only numeric-labelled resolutions.
-                    // Preview entries have no label or label="Preview" — both are skipped.
                     var quality = {};
                     var bm = /sources\s*[=:]\s*\[([\s\S]{0,4000}?)\]/i.exec(ihtml);
                     if (bm) {
@@ -3271,21 +3270,23 @@ SOURCES.push({
                         while ((em = eRx.exec(bm[1])) !== null) {
                             var ent = em[1];
                             var fm = /(?:file|src)\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))['"]/i.exec(ent);
-                            var lm = /label\s*:\s*['"]?(\d+)/i.exec(ent);
-                            if (fm && lm) {
-                                var u = fm[1];
-                                if (u.indexOf('//') === 0) u = 'https:' + u;
-                                quality[lm[1]] = u;
-                            }
+                            if (!fm) continue;
+                            var u = fm[1];
+                            if (u.indexOf('//') === 0) u = 'https:' + u;
+                            if (/previewclip/i.test(u)) continue; // skip preview clips
+                            // Accept label/resolution/height/size/quality property; fall back to res from URL
+                            var lm = /(?:label|resolution|height|size|quality)\s*:\s*['"]?(\d+)/i.exec(ent);
+                            var resFromUrl = /[_\/](\d{3,4})p/i.exec(u);
+                            var key = lm ? lm[1] : (resFromUrl ? resFromUrl[1] : 'mp4');
+                            if (!quality[key]) quality[key] = u;
                         }
                     }
                     if (Object.keys(quality).length) return { url: bestQualityUrl(quality), quality: quality };
-                    var result = extractStreams(ihtml);
-                    if (result.url || Object.keys(result.quality).length) return result;
-                    return extractStreams(html);
-                }).catch(function () { return extractStreams(html); });
+                    return extractStreams(ihtml);
+                    // No fallback to extractStreams(html) — main page only contains preview clips
+                }).catch(function () { return { url: '', quality: {} }; });
             }
-            return extractStreams(html);
+            return { url: '', quality: {} };
         }).catch(function () { return { url: '', quality: {} }; });
     }
 });
