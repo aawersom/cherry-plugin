@@ -644,44 +644,46 @@ describe('P0: buildPerSourceSearchActivity — POST behaviour', function () {
 // ============================================================
 
 describe('P0: plugin.js source assertions (anti-drift)', () => {
-  it('template/handlers reference all three action button classes', () => {
-    expect(SRC).toContain('cherry-grid__action-search');
-    expect(SRC).toContain('cherry-grid__action-sort');
-    expect(SRC).toContain('cherry-grid__action-cat');
+  it('right-edge action menu is implemented via openActionsMenu()', () => {
+    expect(SRC).toMatch(/function openActionsMenu\(\)/);
   });
 
-  it('canSearch excludes is_favorites, all_sources, _related_items AND model_url', () => {
-    // All four exclusions must appear in a single canSearch assignment.
+  it('action menu items are ordered Поиск → Сортировка → Категории', () => {
+    // The three pushes must appear in this order inside openActionsMenu.
     expect(SRC).toMatch(
-      /canSearch\s*=\s*!object\.is_favorites[\s\S]{0,120}!object\.all_sources[\s\S]{0,120}!object\._related_items[\s\S]{0,120}!object\.model_url/
+      /openActionsMenu[\s\S]{0,400}action:\s*'search'[\s\S]{0,200}action:\s*'sort'[\s\S]{0,200}action:\s*'cat'/
     );
   });
 
-  it('action-search handler opens Lampa.Keyboard.show with lowercase onenter', () => {
-    // onenter must be wired specifically into the per-source search handler,
-    // i.e. near a cherry-grid__action-search reference (bindSearch already uses
-    // onenter, so a bare /onenter/ check would be a false green).
-    expect(SRC).toMatch(/cherry-grid__action-search[\s\S]{0,400}Lampa\.Keyboard\.show/);
-    expect(SRC).toMatch(/cherry-grid__action-search[\s\S]{0,500}onenter\s*:/);
+  it('_canSearch excludes is_favorites, all_sources, _related_items AND model_url', () => {
+    expect(SRC).toMatch(
+      /_canSearch\s*=\s*!object\.is_favorites[\s\S]{0,120}!object\.all_sources[\s\S]{0,120}!object\._related_items[\s\S]{0,120}!object\.model_url/
+    );
   });
 
-  it('per-source search Activity.push sets source_id but not all_sources', () => {
-    // The action-search onenter handler pushes cherry_grid with source_id and
-    // WITHOUT all_sources: true.
+  it('right handler edge-detects and opens the menu (not a plain move)', () => {
+    // The right controller handler must call openActionsMenu when focus did not
+    // change (right edge), instead of unconditionally moving.
     expect(SRC).toMatch(
-      /cherry-grid__action-search[\s\S]{0,600}Lampa\.Activity\.push\([\s\S]{0,300}source_id/
+      /right:\s*function[\s\S]{0,300}Lampa\.Controller\.move\(['"]right['"]\)[\s\S]{0,200}openActionsMenu\(\)/
     );
+  });
+
+  it('per-source search opens Keyboard and pushes source_id without all_sources', () => {
+    expect(SRC).toMatch(/_openSearch[\s\S]{0,400}Lampa\.Keyboard\.show/);
+    expect(SRC).toMatch(/_openSearch[\s\S]{0,600}Lampa\.Activity\.push\([\s\S]{0,300}source_id/);
+  });
+
+  it('old chip classes (actions bar) are fully removed', () => {
+    expect(SRC).not.toContain('cherry-grid__actions');
+    expect(SRC).not.toContain('cherry-grid__action-search');
+    expect(SRC).not.toContain('cherry-grid__action-sort');
+    expect(SRC).not.toContain('cherry-grid__action-cat');
   });
 
   it('old .cherry-grid__filters bar is removed', () => {
     expect(SRC).not.toContain('cherry-grid__filters');
-  });
-
-  it('old .cherry-grid__filter-sort class is gone (replaced by action-sort)', () => {
     expect(SRC).not.toContain('cherry-grid__filter-sort');
-  });
-
-  it('old .cherry-grid__filter-cat class is gone (replaced by action-cat)', () => {
     expect(SRC).not.toContain('cherry-grid__filter-cat');
   });
 
@@ -808,8 +810,10 @@ describe('P1: plugin.js source assertions (anti-drift)', () => {
     expect(SRC).toMatch(/down\s*:\s*function[\s\S]{0,120}maybeLoadMore\s*\(/);
   });
 
-  it('right handler calls maybeLoadMore', () => {
-    expect(SRC).toMatch(/right\s*:\s*function[\s\S]{0,120}maybeLoadMore\s*\(/);
+  it('right handler calls maybeLoadMore (in the moved-focus branch)', () => {
+    // Right is now edge-detecting: it opens the action menu at the edge, else
+    // moves + maybeLoadMore. maybeLoadMore sits deeper in the handler now.
+    expect(SRC).toMatch(/right\s*:\s*function[\s\S]{0,400}maybeLoadMore\s*\(/);
   });
 
   it('observer disconnect appears in stop()', () => {

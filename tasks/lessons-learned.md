@@ -57,6 +57,11 @@ Pattern `['"]src['"]` requires quotes around key name — fails on `{src:"url"}`
 
 ---
 
+## p0-right-menu (2026-06-04) — Mode: fast
+
+### L28: P0 redesign — header chips → right-edge action menu (user preference)
+Original P0 put Search/Sort/Category as focusable chips under the title. User wanted the AdultJS/Sisi idiom: pressing RIGHT opens a filter menu. For a multi-column grid, repurposing right wholesale breaks access to right columns — so the correct reading of "прокликиваешь направо" is EDGE-triggered: right moves between cards normally, and only when focus can't advance (right edge) does it open the menu. Implemented by comparing the focused `.focus` element before/after `Lampa.Controller.move('right')` — same element ⇒ edge ⇒ `openActionsMenu()`, else `maybeLoadMore()`. Menu order fixed: Поиск → Сортировка → Категории (each shown only when applicable; categories not yet defined on any adapter). **Assumption:** `Lampa.Controller.move` updates the `.focus` class synchronously — verify on device; async would manifest as "right always opens menu". **Rule:** never repurpose a D-pad direction wholesale on a 2D grid; edge-detect instead so spatial navigation survives.
+
 ## android-native-stream (2026-06-04) — Mode: fast
 
 ### L26: On Android, IP-bound CDN tokens need NO proxy — same device IP for page + stream

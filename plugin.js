@@ -409,6 +409,13 @@
     var sentinel          = null;
     var _sentinelObserver = null;
 
+    // Action-menu state (P0): computed in create(), consumed by the right-edge
+    // handler in start() to open the Поиск → Сортировка → Категории menu.
+    var _source    = null;
+    var _canSearch = false;
+    var _hasSorts  = false;
+    var _hasCats   = false;
+
     function _stopCurrentPreview() {
       if (_currentPreviewEl) {
         _currentPreviewEl.pause();
@@ -470,6 +477,87 @@
       return id;
     }
 
+    // ---- P0 right-edge action menu: Поиск → Сортировка → Категории ----------
+
+    function _openSearch() {
+      if (!_source) return;
+      // Guard for forks without Lampa.Keyboard (mirrors bindSearch in CherryMain).
+      if (typeof Lampa.Keyboard === 'undefined' || !Lampa.Keyboard.show) return;
+      Lampa.Keyboard.show({
+        title:   Lampa.Lang.translate('cherry_search'),
+        value:   object.query || '',
+        onenter: function (text) {
+          var q = (text || '').trim();
+          if (!q) { Lampa.Controller.toggle('cherry_grid'); return; }
+          Lampa.Activity.push({
+            component: 'cherry_grid',
+            title:     _source.name + ': ' + q,
+            source_id: object.source_id,
+            query:     q,
+            page:      1
+          });
+        },
+        onback: function () { Lampa.Controller.toggle('cherry_grid'); }
+      });
+    }
+
+    function _openSort() {
+      if (!_source || !_source.cfg || !_source.cfg.sorts) return;
+      var items = _source.cfg.sorts.map(function (s) { return { title: s.label, id: s.id }; });
+      items.unshift({ title: Lampa.Lang.translate('cherry_sort_default'), id: '' });
+      Lampa.Select.show({
+        title: Lampa.Lang.translate('cherry_sort'),
+        items: items,
+        onSelect: function (item) {
+          currentSort = item.id;
+          _reloadFromStart();
+          Lampa.Controller.toggle('cherry_grid');
+        },
+        onBack: function () { Lampa.Controller.toggle('cherry_grid'); }
+      });
+    }
+
+    function _openCat() {
+      if (!_source || !_source.cfg || !_source.cfg.categories) return;
+      var items = _source.cfg.categories.map(function (c) { return { title: c.label, id: c.id }; });
+      items.unshift({ title: Lampa.Lang.translate('cherry_category_default'), id: '' });
+      Lampa.Select.show({
+        title: Lampa.Lang.translate('cherry_category'),
+        items: items,
+        onSelect: function (item) {
+          currentCategory = item.id;
+          _reloadFromStart();
+          Lampa.Controller.toggle('cherry_grid');
+        },
+        onBack: function () { Lampa.Controller.toggle('cherry_grid'); }
+      });
+    }
+
+    /**
+     * Right-edge action menu. Opened by pressing RIGHT at the right edge of the
+     * card grid (Lampa's native filter idiom). Items appear in fixed order:
+     * Поиск → Сортировка → Категории, each only when applicable to this screen.
+     * @returns {boolean} true if a menu was shown
+     */
+    function openActionsMenu() {
+      var items = [];
+      if (_canSearch) items.push({ title: Lampa.Lang.translate('cherry_search'),   action: 'search' });
+      if (_hasSorts)  items.push({ title: Lampa.Lang.translate('cherry_sort'),     action: 'sort'   });
+      if (_hasCats)   items.push({ title: Lampa.Lang.translate('cherry_category'), action: 'cat'    });
+      if (!items.length) return false;
+      Lampa.Select.show({
+        title: _source ? _source.name : 'Cherry',
+        items: items,
+        onSelect: function (item) {
+          if      (item.action === 'search') _openSearch();
+          else if (item.action === 'sort')   _openSort();
+          else if (item.action === 'cat')    _openCat();
+        },
+        onBack: function () { Lampa.Controller.toggle('cherry_grid'); }
+      });
+      return true;
+    }
+
     // ---- lifecycle --------------------------------------------------
 
     this.create = function () {
@@ -512,84 +600,14 @@
         _sentinelObserver.observe(sentinel[0]);
       }
 
-      // P0: action bar — Search / Sort / Category buttons + visibility + handlers.
-      // model_url excluded: model browse is already filtered to a performer — per-source search does not apply here
-      var canSearch = !object.is_favorites && !object.all_sources && !object._related_items && !object.model_url;
-      var hasSorts  = source && source.cfg && source.cfg.sorts   && source.cfg.sorts.length;
-      var hasCats   = source && source.cfg && source.cfg.categories && source.cfg.categories.length;
-
-      if (canSearch) html.find('.cherry-grid__action-search').show();
-      if (hasSorts)  html.find('.cherry-grid__action-sort').show();
-      if (hasCats)   html.find('.cherry-grid__action-cat').show();
-
-      html.find('.cherry-grid__action-search').on('hover:enter', function () {
-        if (!source) return;
-        // Guard for forks without Lampa.Keyboard (mirrors bindSearch in CherryMain).
-        if (typeof Lampa.Keyboard === 'undefined' || !Lampa.Keyboard.show) return;
-        Lampa.Keyboard.show({
-          title:   Lampa.Lang.translate('cherry_search'),
-          value:   object.query || '',
-          onenter: function (text) {
-            var q = (text || '').trim();
-            if (!q) {
-              Lampa.Controller.toggle('cherry_grid');
-              return;
-            }
-            Lampa.Activity.push({
-              component: 'cherry_grid',
-              title:     source.name + ': ' + q,
-              source_id: object.source_id,
-              query:     q,
-              page:      1
-            });
-          },
-          onback: function () { Lampa.Controller.toggle('cherry_grid'); }
-        });
-      });
-
-      html.find('.cherry-grid__action-sort').on('hover:enter', function () {
-        if (!source || !source.cfg || !source.cfg.sorts) return;
-        var items = source.cfg.sorts.map(function (s) {
-          return { title: s.label, id: s.id };
-        });
-        items.unshift({ title: Lampa.Lang.translate('cherry_sort_default'), id: '' });
-        Lampa.Select.show({
-          title: Lampa.Lang.translate('cherry_sort'),
-          items: items,
-          onSelect: function (item) {
-            currentSort = item.id;
-            var sortLabel = currentSort
-              ? _findLabel(source.cfg.sorts, currentSort)
-              : Lampa.Lang.translate('cherry_sort');
-            html.find('.cherry-grid__action-sort').text(sortLabel);
-            _reloadFromStart();
-            Lampa.Controller.toggle('cherry_grid');
-          },
-          onBack: function () { Lampa.Controller.toggle('cherry_grid'); }
-        });
-      });
-
-      html.find('.cherry-grid__action-cat').on('hover:enter', function () {
-        if (!source || !source.cfg || !source.cfg.categories) return;
-        var items = source.cfg.categories.map(function (c) {
-          return { title: c.label, id: c.id };
-        });
-        items.unshift({ title: Lampa.Lang.translate('cherry_category_default'), id: '' });
-        Lampa.Select.show({
-          title: Lampa.Lang.translate('cherry_category'),
-          items: items,
-          onSelect: function (item) {
-            currentCategory = item.id;
-            var catLabel = currentCategory
-              ? _findLabel(source.cfg.categories, currentCategory)
-              : Lampa.Lang.translate('cherry_category');
-            html.find('.cherry-grid__action-cat').text(catLabel);
-            _reloadFromStart();
-            Lampa.Controller.toggle('cherry_grid');
-          },
-          onBack: function () { Lampa.Controller.toggle('cherry_grid'); }
-        });
-      });
+      // P0: right-edge action menu state. The menu (Поиск → Сортировка →
+      // Категории) opens when RIGHT is pressed at the grid's right edge — see
+      // openActionsMenu() and the `right` controller handler in start().
+      // model_url excluded: model browse is already filtered to a performer.
+      _source    = source;
+      _canSearch = !object.is_favorites && !object.all_sources && !object._related_items && !object.model_url;
+      _hasSorts  = !!(source && source.cfg && source.cfg.sorts && source.cfg.sorts.length);
+      _hasCats   = !!(source && source.cfg && source.cfg.categories && source.cfg.categories.length);
 
       if (object.is_favorites) {
         var favItems = Fav.all();
@@ -625,7 +643,19 @@
         up:    function () { Lampa.Controller.move('up'); },
         down:  function () { Lampa.Controller.move('down'); maybeLoadMore(); },
         left:  function () { Lampa.Controller.move('left'); },
-        right: function () { Lampa.Controller.move('right'); maybeLoadMore(); },
+        // Right moves between cards; at the right edge (focus can't advance) it
+        // opens the Поиск → Сортировка → Категории action menu. Edge-detected
+        // by checking whether the focused .selector changed after the move.
+        right: function () {
+          var before = html.find('.focus')[0];
+          Lampa.Controller.move('right');
+          var after = html.find('.focus')[0];
+          if (before && before === after) {
+            openActionsMenu();
+          } else {
+            maybeLoadMore();
+          }
+        },
         back:  function () { Lampa.Activity.backward(); }
       });
       Lampa.Controller.toggle('cherry_grid');
@@ -1228,11 +1258,6 @@
       '<div class="cherry-grid layer--wheight">',
         '<div class="cherry-grid__head">',
           '<div class="cherry-grid__title">{title}</div>',
-          '<div class="cherry-grid__actions">',
-            '<div class="cherry-grid__action-search selector" style="display:none">#{cherry_search}</div>',
-            '<div class="cherry-grid__action-sort selector" style="display:none">#{cherry_sort}</div>',
-            '<div class="cherry-grid__action-cat selector" style="display:none">#{cherry_category}</div>',
-          '</div>',
         '</div>',
         '<div class="cherry-grid__body"></div>',
         '<div class="cherry-grid__loading">',
@@ -1616,29 +1641,6 @@
       '  outline: 1px solid #e75480;',
       '}',
 
-      /* P0: action bar */
-      '.cherry-grid__actions {',
-      '  display: flex;',
-      '  gap: .6em;',
-      '  padding: .4em 0 .2em;',
-      '  flex-wrap: wrap;',
-      '}',
-      '.cherry-grid__action-search,',
-      '.cherry-grid__action-sort,',
-      '.cherry-grid__action-cat {',
-      '  background: rgba(255,255,255,.1);',
-      '  color: rgba(255,255,255,.85);',
-      '  font-size: .82em;',
-      '  padding: .25em .7em;',
-      '  border-radius: .4em;',
-      '  cursor: pointer;',
-      '  border: 1px solid transparent;',
-      '}',
-      '.cherry-grid__action-search.focus,',
-      '.cherry-grid__action-sort.focus,',
-      '.cherry-grid__action-cat.focus {',
-      '  border-color: #e75480;',
-      '}',
       '.cherry-group-label {',
       '  grid-column: 1 / -1;',
       '  font-size: .8em;',
