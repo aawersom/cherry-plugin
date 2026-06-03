@@ -150,51 +150,80 @@ Adapters route requests through one of three proxies depending on the target hos
 
 ### Primary proxy — Cloudflare Worker + SOCKS5
 `PROXY_URL = https://cherry-proxy.aawersom.workers.dev`
-Default for all adapters. For domains in `PROXY_URL_3_HOSTS` (pornhub, eporner, spankbang),
-the CF Worker tunnels the outbound request through **rotating Dutch residential SOCKS5 proxies**
-(`45.91.209.155:11750–11756`) using the `cloudflare:sockets` `connect()` API. Time-based
-rotation every 30 s. Fallback: direct CF fetch if all 5 proxies fail.
 
-The CF Worker also performs **server-side M3U8 rewriting**: any response whose Content-Type
-or path ends in `.m3u8` has all segment/sub-playlist URLs rewritten to go through the proxy.
-This means adapters should pass the raw M3U8 URL to `buildProxyUrl()` directly — **not**
-through `proxyM3u8()`.
+Default for all adapters. For domains in `RESIDENTIAL` set in `index.js`, the CF Worker
+tunnels the outbound request through **rotating Dutch residential SOCKS5 proxies**
+(`45.91.209.155:11750–11756`) using the `cloudflare:sockets` `connect()` API.
+
+**RESIDENTIAL set (current):**
+- `www.pornhub.com`, `rt.pornhub.com` — phncdn IP-bound tokens require consistent egress IP
+- `pornone.com`, `www.pornone.com` — Deno IP banned by PornOne
+- `gallery.vcmdiawe.com`, `galleryn2.vcmdiawe.com` — pornone CDN
+- Wildcard `/\.pornone\.com$/` — covers all pornone CDN subdomains
+- Wildcard `/\.phncdn\.com$/` — covers all phncdn CDN subdomains (segments, thumbnails)
+
+**DJB2 domain-hash affinity:** SOCKS5 port is selected by DJB2 hash of the request's
+`referer` domain (or target hostname if no referer). Since all 5 ports exit from
+`45.91.209.155` with **different residential exit IPs**, consistent port selection
+is critical for IP-bound tokens. Key rule: all requests in a session that share
+a token must carry the same `referer` domain so DJB2 selects the same port.
+
+**M3U8 rewriting:** Any response whose Content-Type or path ends in `.m3u8` has all
+segment/sub-playlist URLs rewritten to go through the proxy. The `referer` is now
+**propagated into rewritten segment URLs** (fix 2026-06-03) so DJB2 selects the
+same SOCKS5 port for M3U8 and segments — previously, different domain hashes
+(`www.pornhub.com` vs `ev-h.phncdn.com`) selected different ports (different exit
+IPs), causing `ipa=1` token failures on segments.
 
 ### Secondary proxy — Deno Deploy
 `PROXY_URL_2 = https://cherry-proxy.aawersom.deno.net`
-Used for hostnames in `PROXY_URL_2_HOSTS`:
-- `xnxx.com`, `youjizz.com` — CF ASN-blocked
-- `tv4.tizam.org` — CF rate-limited
-- `pornone.com`, `*.pornone.com` — IP-bound KVS token (page + CDN must share IP)
-- `*.bigcdn.cc` — LeaseWeb NL CDN (should be matched by regex, not hardcoded list)
-- `www.perfektdamen.co` — IP-bound KVS token
+
+Used for hostnames in `PROXY_URL_2_HOSTS` or matching `/\.bigcdn\.cc$/`:
+
+| Hostname | Reason |
+|----------|--------|
+| `xnxx.com`, `www.xnxx.com` | CF datacenter ASN-blocked |
+| `www.youjizz.com`, `youjizz.com` | CF rate-limited |
+| `tv4.tizam.org` | CF rate-limited |
+| `www.eporner.com` | SOCKS5 instability — Deno stable |
+| `ru.spankbang.com` | Deno bypasses Spankbang bot-check for listing+video pages |
+| `mydaddy.cc` | bigcdn IP-bound token — must use same IP as bigcdn CDN fetch |
+| `www.perfektdamen.co` | KVS IP-bound tokens — consistent Deno GCP IP |
+| `/\.bigcdn\.cc$/` (regex) | All bigcdn subdomains; IP-bound to mydaddy.cc fetch IP |
+
+**Critical pairing rule:** domains whose CDN uses IP-bound tokens must be in the
+SAME proxy tier as the page that generates those tokens.
+- `mydaddy.cc` (embed page) and `*.bigcdn.cc` (CDN) — both via Deno ✓
+- `www.pornhub.com` (page) and `*.phncdn.com` (CDN) — both via CF SOCKS5 ✓
+- `pornone.com` (page) and `*.pornone.com` (CDN) — both via CF SOCKS5 ✓
 
 ### Tertiary proxy — VPS (optional)
 `PROXY_URL_3 = ''` (empty by default; fill with Beget VPS IP:PORT after deploying
-`workers/cherry-proxy-vps/index.js`). Currently unused. Would override `PROXY_URL` for
-`PROXY_URL_3_HOSTS` if set.
+`workers/cherry-proxy-vps/index.js`). Currently unused.
 
 ### buildProxyUrl(url, referer?)
 ```
 GET {base}/proxy?url={encoded}&key={PROXY_KEY}[&referer={encoded}]
 ```
-Routing priority: `PROXY_URL_3` (if set + hostname in `PROXY_URL_3_HOSTS`) → `PROXY_URL_2`
-(if hostname in `PROXY_URL_2_HOSTS` or matches `/\.pornone\.com$/`) → `PROXY_URL` (default).
+Routing priority: `PROXY_URL_3` (if set + hostname in `PROXY_URL_3_HOSTS`) →
+`PROXY_URL_2` (if hostname in `PROXY_URL_2_HOSTS` or matches `/\.bigcdn\.cc$/`) →
+`PROXY_URL` (default, CF Worker).
 
 ### cherryFetch(url, referer?)
-Wrapper around native `fetch(buildProxyUrl(...))`. Returns `Promise<string>` (response text).
-On Android, tries `Lampa.Reguest.native()` first (bypasses CORS), falls back to fetch+proxy.
+Wrapper around `fetch(buildProxyUrl(...))`. Returns `Promise<string>`.
+On Android: tries `Lampa.Reguest.native()` first, falls back to fetch+proxy.
 
 ### cherryPost(url, body)
-POST variant for `application/x-www-form-urlencoded` bodies (used by Spankbang stream API).
-`Lampa.Reguest` does not expose POST, hence native `fetch` directly.
+POST via native `fetch` directly (no proxy wrapper). Used by Spankbang stream API
+(`/api/videos/stream`). Note: CF Worker SOCKS5 path is GET-only — POST requests to
+RESIDENTIAL domains still exit via CF datacenter. For Spankbang, this is acceptable
+since Phase 2 (streamkey POST) is a fallback and Phase 1 (quality map regex) covers most videos.
 
-### proxyM3u8(m3u8Url, referer?)
-**⚠ Deprecated for CF Worker usage.** Fetches HLS playlist via proxy, rewrites segment URLs
-client-side, returns a `blob:` URL. Causes **double-proxy** when CF Worker's server-side
-`rewriteM3u8()` is also active — segments end up as `proxy?url=proxy?url=...`.
-Only safe for use with plain pass-through proxies (Deno) that do not rewrite M3U8.
-Currently called only by the `pornhub` adapter — **that call should be removed** (see Iteration 2).
+### proxyM3u8(url, referer?)
+**⚠ Deprecated.** Fetches M3U8 client-side and returns a `blob:` URL.
+Causes **double-proxy** when CF Worker's server-side `rewriteM3u8()` is also active.
+No longer called by any adapter (removed from `pornhub` in Iteration 2).
+Only safe for plain pass-through proxies that do NOT rewrite M3U8.
 
 ---
 
@@ -214,43 +243,47 @@ Currently called only by the `pornhub` adapter — **that call should be removed
 
 ---
 
-## Source Adapters — Full List (25 adapters)
+## Source Adapters — Full List (24 active, 1 disabled)
 
-| # | id | name | host | Protocol type | UX extras |
-|---|---|---|---|---|---|
-| 1 | `pornhub` | Pornhub | pornhub.com | JSON API (`/webmasters/search`) | `cfg.sorts` (mv/tr/mr), `browseByModel` (HTML scrape `/pornstar/`), `getRelated` (relatedVideosJSON) |
-| 2 | `xvideos` | Xvideos | xvideos.com | HTML scraping (thumb-block divs) | `cfg.sorts` (new/views), `browseByModel` (model profile page), `getRelated` (_parseCards on video page) |
-| 3 | `xnxx` | Xnxx | xnxx.com | HTML scraping (mozaique / thumb-under) | — |
-| 4 | `eporner` | Eporner | eporner.com | JSON API (`/api/v2/video/search/`) + Deno for video pages | — |
-| 5 | `spankbang` | Spankbang | ru.spankbang.com | HTML scraping (`ru.` subdomain) + quality regex + streamkey POST fallback | — |
-| 6 | `hqporner` | HQPorner | hqporner.com | HTML → mydaddy.cc → bigcdn.cc **(stream broken permanently)** | — |
-| 7 | `youjizz` | YouJizz | youjizz.com | HTML scraping (video-block divs) | — |
-| 8 | `pornone` | PornOne | pornone.com | WP REST API; CDN via Deno Deploy | — |
-| 9 | `porntrex` | Porntrex | porntrex.com | KVS get_file + HTML | — |
-| 10 | `xozilla` | Xozilla | xozilla.com | KVS (_kvsEngine) | — |
-| 11 | `3movs` | 3Movs | 3movs.com | HTML scraping (href scan + context window) | — |
-| 12 | `analdin` | Analdin | analdin.com | KVS (_kvsEngine) | — |
-| 13 | `pornve` | PornVe | pornve.com | SisiStyle (`videoUrl:` JS var) + HTML fallback | — |
-| 14 | `familyporn` | FamilyPorn | familyporn.tv | SisiStyle (contents/videos_screenshots CDN) | — |
-| 15 | `porndig` | Porndig | porndig.com | iframe player URL extraction | — |
-| 16 | `tizam` | Tizam | tv4.tizam.org | HTML scraping (anchor scan) | — |
-| 17 | `perfektdamen` | PerfektDamen | perfektdamen.co | KVS/HTML scraping | — |
-| 18 | `hellporno` | HellPorno | hellporno.com | KVS (_kvsEngine: `chs_object` + `<source>` tags) | — |
-| 19 | `pornobolt` | Pornobolt | sex.pornobolt.in | KVS (_kvsEngine: pbcdn.tv CDN) | — |
-| 20 | `crocotube` | CrocoTube | crocotube.com | KVS (_kvsEngine: alphaxcdn.com CDN) | — |
-| 21 | `huyamba` | Huyamba | fuq.huyamba.mobi | KVS get_file | **Disabled 2026-06-03 (site dead)** |
-| 22 | `ebun` | Ebun | www1.ebun.tv | HTML scraping | — |
-| 23 | `lenporno` | LenPorno | www.lenporno.net | Custom upload path reconstruction | — |
-| 24 | `24rolika` | 24Rolika | w2.huyalkino.com | DLE + JWPlayer | — |
-| 25 | `jopaonline` | JopaOnline | jopaonline.mobi | DLE + JWPlayer | — |
+| # | id | name | host | Proxy tier | Stream method | Status |
+|---|---|---|---|---|---|---|
+| 1 | `pornhub` | Pornhub | pornhub.com | CF SOCKS5 (RESIDENTIAL) | HLS via phncdn CDN; referer propagated in M3U8 rewrite for IP-affinity | ✅ Working |
+| 2 | `xvideos` | Xvideos | xvideos.com | CF datacenter | HLS from CDN | ✅ Working |
+| 3 | `xnxx` | Xnxx | xnxx.com | Deno | MP4/HLS from CDN | ✅ Working |
+| 4 | `eporner` | Eporner | eporner.com | Deno (video pages) | JSON API browse; video page via Deno | ✅ Working |
+| 5 | `spankbang` | Spankbang | ru.spankbang.com | Deno | Quality map regex + streamkey POST fallback; `ru.` subdomain bypasses bot-check | ✅ Working |
+| 6 | `hqporner` | HQPorner | hqporner.com | CF (page) → Deno (mydaddy.cc + bigcdn) | hqporner.com page via CF; embed `mydaddy.cc` + CDN `*.bigcdn.cc` both via Deno (same GCP IP for IP-bound token) | ✅ Working |
+| 7 | `youjizz` | YouJizz | youjizz.com | Deno | Direct MP4 | ✅ Working |
+| 8 | `pornone` | PornOne | pornone.com | CF SOCKS5 (RESIDENTIAL) | FluidPlayer `{src:"url"}` extraction first, then `extractStreams` fallback | ✅ Working |
+| 9 | `porntrex` | Porntrex | porntrex.com | CF datacenter | KVS `get_file/` URL extraction; trailing slash stripped | ✅ Working |
+| 10 | `xozilla` | Xozilla | xozilla.com | CF datacenter | KVS `_kvsEngine` | ✅ Working |
+| 11 | `3movs` | 3Movs | 3movs.com | CF datacenter | KVS signed-token | ✅ Working (token may expire) |
+| 12 | `analdin` | Analdin | analdin.com | CF datacenter | KVS `_kvsEngine` | ✅ Working |
+| 13 | `pornve` | PornVe | pornve.com | CF datacenter | `videoUrl:` JS var | ✅ Working (token may expire) |
+| 14 | `familyporn` | FamilyPorn | familyporn.tv | CF datacenter | KVS CDN | ✅ Working (token may expire) |
+| 15 | `porndig` | Porndig | porndig.com | CF datacenter | iframe player: sources array pattern first, then generic `file/src` fallback | ✅ Working |
+| 16 | `tizam` | Tizam | tv4.tizam.org | Deno | Direct MP4 | ✅ Working |
+| 17 | `perfektdamen` | PerfektDamen | perfektdamen.co | Deno | KVS CDN, IP-bound | ✅ Working |
+| 18 | `hellporno` | HellPorno | hellporno.com | CF datacenter | KVS `_kvsEngine` | ✅ Working |
+| 19 | `pornobolt` | Pornobolt | sex.pornobolt.in | CF datacenter | KVS pbcdn.tv CDN | ✅ Working |
+| 20 | `crocotube` | CrocoTube | crocotube.com | CF datacenter | KVS alphaxcdn.com CDN | ✅ Working |
+| 21 | `huyamba` | Huyamba | fuq.huyamba.mobi | — | — | ❌ Disabled (site dead 2026-06) |
+| 22 | `ebun` | Ebun | www1.ebun.tv | CF datacenter | HTML scraping | ✅ Working (token may expire) |
+| 23 | `lenporno` | LenPorno | www.lenporno.net | CF datacenter | Custom CDN path | ✅ Working |
+| 24 | `24rolika` | 24Rolika | w2.huyalkino.com | CF datacenter | DLE + JWPlayer; category regex supports `/cat-name/` with hyphens and digits | ✅ Working |
+| 25 | `jopaonline` | JopaOnline | jopaonline.mobi | CF datacenter | DLE + JWPlayer | ✅ Working |
 
-**Adapter type legend:**
-- **JSON API** — adapter parses structured JSON from official or semi-official API endpoint
-- **HTML scraping** — adapter splits raw HTML into card-sized chunks using string.split() on class names
-- **KVS** — uses `_kvsEngine` factory (5 adapters); targets KVS platform `get_file/` URL pattern
-- **DLE** — DataLife Engine CMS: search `?do=search`, pagination `/page/N/`
-- **SisiStyle** — tube script: `videoUrl:` JS variable + `contents/videos_screenshots/` CDN
-- **JWPlayer** — parses `jwplayer(...).setup({...})` block for file/sources
+**Proxy tier legend:**
+- **CF datacenter** — CF Worker direct fetch; consistent within a CF PoP but may vary across PoPs
+- **CF SOCKS5** — CF Worker tunnels through Dutch residential proxies (45.91.209.155:11750–11756); use for domains where IP-bound tokens require consistent egress IP
+- **Deno** — Deno Deploy GCP proxy; use when CF ASN is blocked or when bigcdn/perfektdamen IP-bound tokens need consistent GCP IP
+- **Deno paired** — page fetch AND CDN fetch both via Deno to share the same GCP exit IP (critical for IP-bound CDN tokens)
+
+**IP-bound token pairing rule (critical):**
+When a CDN generates tokens bound to the requesting IP, the page that generates the token and the CDN that validates it must use the SAME proxy tier. Violating this causes 404/403 on media requests. Current pairs:
+- `mydaddy.cc` + `*.bigcdn.cc` → both Deno
+- `www.pornhub.com` + `*.phncdn.com` → both CF SOCKS5 (+ referer propagation in M3U8 rewrite)
+- `pornone.com` + `*.pornone.com` → both CF SOCKS5
 
 **UX extras** (REQ-2/3/4/5 features, see cherry-ux-features):
 - `cfg.sorts/categories` — filter bar in CherryGrid (REQ-5)
@@ -494,6 +527,42 @@ Supported sources in sisi.js ecosystem: Pornhub, Xvideos, Xhamster, Ebalovo, Hqp
 ### PROXY_URL_2_HOSTS hardcoded bigcdn list is incomplete
 
 Current list covers 14 bigcdn subdomains (s1, s4, s16, s18, s25, s30, s33, s38, s39, s41, s43, s47, s50, s61). `s24.bigcdn.cc` (used by HQPorner) and potentially other subdomains are missing. Replace with `/\.bigcdn\.cc$/` regex in `buildProxyUrl`.
+
+---
+
+## Source Status — Iteration 3 (live test 2026-06-03)
+
+Live testing session. All originally-reported broken channels fixed.
+
+### Fixes applied in this iteration
+
+| id | was broken | root cause | fix |
+|---|---|---|---|
+| `pornhub` | Segments 404 (`ipa=1`) | Different SOCKS5 ports for M3U8 (`www.pornhub.com` hash) vs segments (no referer → `ev-h.phncdn.com` hash) → different exit IPs → token mismatch | Add `/\.phncdn\.com$/` to RESIDENTIAL; propagate `referer` through `rewriteM3u8` so all phncdn requests hash the same domain → same SOCKS5 port → same exit IP |
+| `hqporner` | bigcdn 404 | `mydaddy.cc` embed fetched via CF datacenter (IP A); `*.bigcdn.cc` CDN fetched via Deno (IP B); bigcdn token bound to IP A → rejects IP B | Add `mydaddy.cc` to `PROXY_URL_2_HOSTS` → both embed fetch and CDN fetch via Deno (same GCP IP) |
+| `spankbang` | No cards or previews | Previous fix (stream-fix-2) moved to CF SOCKS5 — Dutch IP also blocked by Spankbang for browse | Revert to Deno (`ru.spankbang.com` in `PROXY_URL_2_HOSTS`); fix thumbnail regex to skip `data:` placeholders from lazy-loaders; add `preview` field to cards |
+| `pornone` | CDN 403 | `extractStreams` looks for `"file"` key in sources array; FluidPlayer uses unquoted `src:` key → extraction missed main video, fell through to restricted preview URL | Insert FluidPlayer-specific regex before `extractStreams`: `/sources\s*[=:]\s*\[[\s\S]{0,2000}?['"]?src['"]?\s*:\s*['"]([^'"]+\.(?:mp4\|m3u8))/i` |
+| `porntrex` | "interrupted by new load" | Trailing `/` in `get_file` URL not stripped by existing regex `/['">\s]+$/` | Extend strip regex to `/['">\/\s]+$/` |
+| `porndig` | Preview clip instead of main video | Pattern 1 (generic `file/src` key) fires first, matches a preview URL; sources array pattern (more specific) never runs | Swap pattern order: sources array (P2) first, generic `file/src` (P1) as fallback |
+| `24rolika` | Some category pages empty | `_rolikaCards` href regex used `[a-z]+` for category slug — excluded hyphens and digits (e.g. `/film-porno/`, `/xxx-18/`) | Change to `[a-z0-9][a-z0-9\-]*` |
+
+### Known limitations after Iteration 3
+
+| id | limitation | notes |
+|---|---|---|
+| `spankbang` | Some video pages may 403 (Spankbang bot-protection varies per video) | `ru.spankbang.com` bypasses most checks; heavily-protected videos require Playwright |
+| `hqporner` | ~55–110 hours/month via Deno free tier (100 GiB bandwidth) | bigcdn MP4 files stream through Deno; upgrade to paid tier if limit reached |
+| All KVS sources | Tokens expire; E2E test may fail if > token TTL elapses between getStream and play | In live Lampa usage (immediate playback) reliable |
+
+### Channels with no issues (not reported, confirmed working)
+
+`xvideos`, `xnxx`, `eporner`, `youjizz`, `xozilla`, `3movs`, `analdin`, `pornve`,
+`familyporn`, `tizam`, `perfektdamen`, `hellporno`, `pornobolt`, `crocotube`, `ebun`,
+`lenporno`, `jopaonline`
+
+### Key architectural lesson (L12)
+
+**Residential proxy ports ≠ same exit IP.** Pool-based residential proxies (e.g. 45.91.209.155:11750–11756) assign different residential exit IPs per port. DJB2 domain-hash must produce the same port for all requests sharing an IP-bound token. Fix: ensure all requests in a session propagate the same `referer` domain so DJB2 consistently selects the same port.
 
 ---
 

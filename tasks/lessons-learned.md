@@ -49,5 +49,8 @@ Unbounded `[\s\S]*?` in a multiline regex scanning a 200KB+ page is O(n²) in wo
 - L9: tech reviewer (spec stage)
 - L10: tech reviewer (spec stage)
 
+### L12: Residential proxy ports ≠ same exit IP — DJB2 affinity must hash same domain for all HLS requests
+Pool-based residential proxies assign DIFFERENT exit IPs per port. Our assumption "all 5 ports share 45.91.209.155 as egress" was wrong — each port is a different residential IP from the provider's pool. When `rewriteM3u8` didn't propagate `referer`, DJB2 picked port via `ev-h.phncdn.com` for segments (different from `www.pornhub.com` for M3U8) → different exit IP → phncdn `ipa=1` token validation → 404. Fix: pass `referer` into `rewriteM3u8` so all HLS sub-requests hash the same domain. **Rule:** for IP-affinity guarantees with any proxy pool, ensure ALL requests in a session propagate the same referer so DJB2 selects the same pool member.
+
 ### L11: Regex optional quotes needed for unquoted JS object keys
 Pattern `['"]src['"]` requires quotes around key name — fails on `{src:"url"}` (unquoted key, common in FluidPlayer/JWPlayer config). Required `['"]?src['"]?` (optional quotes). **Rule:** When matching JS object keys in HTML, make surrounding quotes optional unless you're certain the source always uses JSON-style quoted keys.
