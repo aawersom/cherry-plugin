@@ -401,6 +401,9 @@
     var currentSort     = '';
     var currentCategory = '';
 
+    var sentinel          = null;
+    var _sentinelObserver = null;
+
     function _stopCurrentPreview() {
       if (_currentPreviewEl) {
         _currentPreviewEl.pause();
@@ -431,8 +434,28 @@
       currentPage = 1;
       totalPages  = 1;
       loading     = false;
-      scroll.body().find('.cherry-card').remove();
+      scroll.body().find('.cherry-card, .cherry-group-label').remove();
+      if (sentinel) scroll.body().append(sentinel);
       loadPage(1);
+    }
+
+    /**
+     * D-pad infinite-scroll fallback. The IntersectionObserver is the primary
+     * trigger for D-pad navigation; this proximity check covers cases where the
+     * observer callback hasn't fired yet (large focus jumps) and is also invoked
+     * directly by the observer callback (it re-checks the loading/page guards).
+     */
+    function maybeLoadMore() {
+      if (loading || currentPage >= totalPages) return;
+      if (!sentinel || !sentinel[0]) return;
+      var rect  = sentinel[0].getBoundingClientRect();
+      var viewH = window.innerHeight || document.documentElement.clientHeight;
+      // 400px lookahead — D-pad focus steps are large, so trigger earlier than
+      // the 300px pointer/scroll listener.
+      if (rect.top < viewH + 400) {
+        currentPage++;
+        loadPage(currentPage);
+      }
     }
 
     function _findLabel(arr, id) {
@@ -457,6 +480,8 @@
 
       scroll = new Lampa.Scroll({ mask: true, over: true });
 
+      // Secondary scroll trigger for pointer/mouse users.
+      // IntersectionObserver is primary for D-pad (see sentinel setup + maybeLoadMore).
       scroll.body().on('scroll', function () {
         var el = this;
         if (el.scrollHeight - el.scrollTop - el.clientHeight < 300) {
@@ -470,17 +495,54 @@
       scroll.body().addClass('cherry-cards-wrap');
       html.find('.cherry-grid__body').append(scroll.render());
 
-      // REQ-5: filter bar visibility + handlers.
-      var hasSorts = source && source.cfg && source.cfg.sorts && source.cfg.sorts.length;
-      var hasCats  = source && source.cfg && source.cfg.categories && source.cfg.categories.length;
-
-      if (hasSorts || hasCats) {
-        html.find('.cherry-grid__filters').show();
+      // P1: sentinel at list bottom + IntersectionObserver as primary D-pad trigger.
+      // Observe against the viewport (root: null) so it works regardless of
+      // Lampa.Scroll's transform-based internals across builds.
+      sentinel = $('<div class="cherry-scroll-sentinel"></div>');
+      scroll.body().append(sentinel);
+      if (typeof IntersectionObserver !== 'undefined') {
+        _sentinelObserver = new IntersectionObserver(function (entries) {
+          if (entries[0] && entries[0].isIntersecting) maybeLoadMore();
+        }, { root: null, rootMargin: '400px' });
+        _sentinelObserver.observe(sentinel[0]);
       }
-      if (!hasSorts) { html.find('.cherry-grid__filter-sort').hide(); }
-      if (!hasCats)  { html.find('.cherry-grid__filter-cat').hide(); }
 
-      html.find('.cherry-grid__filter-sort').on('hover:enter', function () {
+      // P0: action bar — Search / Sort / Category buttons + visibility + handlers.
+      // model_url excluded: model browse is already filtered to a performer — per-source search does not apply here
+      var canSearch = !object.is_favorites && !object.all_sources && !object._related_items && !object.model_url;
+      var hasSorts  = source && source.cfg && source.cfg.sorts   && source.cfg.sorts.length;
+      var hasCats   = source && source.cfg && source.cfg.categories && source.cfg.categories.length;
+
+      if (canSearch) html.find('.cherry-grid__action-search').show();
+      if (hasSorts)  html.find('.cherry-grid__action-sort').show();
+      if (hasCats)   html.find('.cherry-grid__action-cat').show();
+
+      html.find('.cherry-grid__action-search').on('hover:enter', function () {
+        if (!source) return;
+        // Guard for forks without Lampa.Keyboard (mirrors bindSearch in CherryMain).
+        if (typeof Lampa.Keyboard === 'undefined' || !Lampa.Keyboard.show) return;
+        Lampa.Keyboard.show({
+          title:   Lampa.Lang.translate('cherry_search'),
+          value:   object.query || '',
+          onenter: function (text) {
+            var q = (text || '').trim();
+            if (!q) {
+              Lampa.Controller.toggle('cherry_grid');
+              return;
+            }
+            Lampa.Activity.push({
+              component: 'cherry_grid',
+              title:     source.name + ': ' + q,
+              source_id: object.source_id,
+              query:     q,
+              page:      1
+            });
+          },
+          onback: function () { Lampa.Controller.toggle('cherry_grid'); }
+        });
+      });
+
+      html.find('.cherry-grid__action-sort').on('hover:enter', function () {
         if (!source || !source.cfg || !source.cfg.sorts) return;
         var items = source.cfg.sorts.map(function (s) {
           return { title: s.label, id: s.id };
@@ -494,7 +556,7 @@
             var sortLabel = currentSort
               ? _findLabel(source.cfg.sorts, currentSort)
               : Lampa.Lang.translate('cherry_sort');
-            html.find('.cherry-grid__filter-sort').text(sortLabel);
+            html.find('.cherry-grid__action-sort').text(sortLabel);
             _reloadFromStart();
             Lampa.Controller.toggle('cherry_grid');
           },
@@ -502,7 +564,7 @@
         });
       });
 
-      html.find('.cherry-grid__filter-cat').on('hover:enter', function () {
+      html.find('.cherry-grid__action-cat').on('hover:enter', function () {
         if (!source || !source.cfg || !source.cfg.categories) return;
         var items = source.cfg.categories.map(function (c) {
           return { title: c.label, id: c.id };
@@ -516,7 +578,7 @@
             var catLabel = currentCategory
               ? _findLabel(source.cfg.categories, currentCategory)
               : Lampa.Lang.translate('cherry_category');
-            html.find('.cherry-grid__filter-cat').text(catLabel);
+            html.find('.cherry-grid__action-cat').text(catLabel);
             _reloadFromStart();
             Lampa.Controller.toggle('cherry_grid');
           },
@@ -528,11 +590,16 @@
         var favItems = Fav.all();
         if (favItems.length) {
           renderCards(favItems, scroll.body());
+          if (sentinel) scroll.body().append(sentinel);
         } else {
+          // Children first, then parent — avoids a flash of the generic message.
+          html.find('.cherry-grid__empty-generic').hide();
+          html.find('.cherry-grid__empty-fav-hint').show();
           html.find('.cherry-grid__empty').show();
         }
       } else if (object._related_items) {
         renderCards(object._related_items, scroll.body());
+        if (sentinel) scroll.body().append(sentinel);
         totalPages  = 1;
         currentPage = 1;
       } else if (object.all_sources && object.query) {
@@ -551,9 +618,9 @@
           Lampa.Controller.collectionFocus(false, html);
         },
         up:    function () { Lampa.Controller.move('up'); },
-        down:  function () { Lampa.Controller.move('down'); },
+        down:  function () { Lampa.Controller.move('down'); maybeLoadMore(); },
         left:  function () { Lampa.Controller.move('left'); },
-        right: function () { Lampa.Controller.move('right'); },
+        right: function () { Lampa.Controller.move('right'); maybeLoadMore(); },
         back:  function () { Lampa.Activity.backward(); }
       });
       Lampa.Controller.toggle('cherry_grid');
@@ -563,10 +630,12 @@
     this.pause   = function () {};
     this.stop    = function () {
       if (scroll) scroll.body().off('scroll');
+      if (_sentinelObserver) { _sentinelObserver.disconnect(); _sentinelObserver = null; }
       _stopCurrentPreview();
     };
 
     this.destroy = function () {
+      if (_sentinelObserver) { _sentinelObserver.disconnect(); _sentinelObserver = null; }
       _stopCurrentPreview();
       destroyed = true;
       if (html) html.remove();
@@ -611,6 +680,7 @@
         if (result && result.items && result.items.length) {
           totalPages = result.total_pages || 1;
           renderCards(result.items, scroll.body());
+          if (sentinel) scroll.body().append(sentinel);
           Lampa.Controller.collectionSet(html);
         } else if (page === 1) {
           html.find('.cherry-grid__empty').show();
@@ -653,33 +723,34 @@
         loading = false;
         setLoading(false);
 
-        // Flatten all result sets.
-        var all = [];
-        results.forEach(function (r) {
-          if (r && r.items) {
-            r.items.forEach(function (item) { all.push(item); });
-          }
+        // Group results per source (SOURCES order), capped at 10 cards each.
+        // results[i] aligns with SOURCES[i] because promises was built via SOURCES.map(...).
+        var groups = [];
+        SOURCES.forEach(function (src, i) {
+          var r = results[i];
+          if (!r || !r.items || !r.items.length) return;
+          groups.push({ src: src, items: r.items.slice(0, 10) });
         });
 
-        if (!all.length) {
+        if (!groups.length) {
           html.find('.cherry-grid__empty').show();
           return;
         }
-
-        // Sort alphabetically by title for consistent ordering.
-        all.sort(function (a, b) {
-          var ta = (a.title || '').toLowerCase();
-          var tb = (b.title || '').toLowerCase();
-          if (ta < tb) return -1;
-          if (ta > tb) return  1;
-          return 0;
-        });
 
         // Disable infinite scroll — we already have everything.
         totalPages  = 1;
         currentPage = 1;
 
-        renderCards(all, scroll.body());
+        // Render label + its cards sequentially so order is:
+        // label A, A-cards, label B, B-cards, ...
+        groups.forEach(function (g) {
+          var label = Lampa.Template.get('cherry_group_label', { name: g.src.name });
+          scroll.body().append(label);
+          renderCards(g.items, scroll.body());
+        });
+
+        if (sentinel) scroll.body().append(sentinel);
+
         Lampa.Controller.collectionSet(html);
       }).catch(function (err) {
         if (destroyed) return;
@@ -767,23 +838,32 @@
           }
         });
 
-        // Long-press: context menu (favorites + similar search).
+        // Long-press: context menu (favorites + similar search + adapter related).
         card.on('hover:long', function () {
-          var isFav = Fav.has(video);
+          var isFav   = Fav.has(video);
+          var cardSrc = sourceById(video.source) || sourceById(object.source_id);
+          var items = [
+            {
+              title: isFav
+                ? Lampa.Lang.translate('cherry_rem_fav_action')
+                : Lampa.Lang.translate('cherry_add_fav_action'),
+              action: 'fav'
+            },
+            {
+              title: Lampa.Lang.translate('cherry_similar'),
+              action: 'similar'
+            }
+          ];
+          // 'similar' = keyword search across all sources; 'related' = adapter.getRelated() curated list.
+          if (cardSrc && cardSrc.getRelated) {
+            items.push({
+              title: Lampa.Lang.translate('cherry_related'),
+              action: 'related'
+            });
+          }
           Lampa.Select.show({
             title: video.title,
-            items: [
-              {
-                title: isFav
-                  ? Lampa.Lang.translate('cherry_rem_fav_action')
-                  : Lampa.Lang.translate('cherry_add_fav_action'),
-                action: 'fav'
-              },
-              {
-                title: Lampa.Lang.translate('cherry_similar'),
-                action: 'similar'
-              }
-            ],
+            items: items,
             onSelect: function (item) {
               if (item.action === 'fav') {
                 var added = Fav.toggle(video);
@@ -793,6 +873,7 @@
                     ? Lampa.Lang.translate('cherry_add_fav')
                     : Lampa.Lang.translate('cherry_rem_fav')
                 );
+                Lampa.Controller.toggle('cherry_grid');
               } else if (item.action === 'similar') {
                 var words = (video.title || '').replace(/[^a-zа-яё0-9\s]/gi, '').trim().split(/\s+/).slice(0, 4);
                 var query = words.join(' ');
@@ -803,6 +884,31 @@
                   query:       query,
                   all_sources: true,
                   page:        1
+                });
+                Lampa.Controller.toggle('cherry_grid');
+              } else if (item.action === 'related') {
+                setLoading(true);
+                cardSrc.getRelated(video).then(function (rel) {
+                  if (destroyed) return;
+                  setLoading(false);
+                  if (rel && rel.length) {
+                    Lampa.Controller.toggle('cherry_grid');
+                    Lampa.Activity.push({
+                      component:      'cherry_grid',
+                      title:          Lampa.Lang.translate('cherry_related') + ': ' + video.title,
+                      source_id:      cardSrc.id,
+                      _related_items: rel,
+                      page:           1
+                    });
+                  } else {
+                    Lampa.Noty.show(Lampa.Lang.translate('cherry_no_results'), { style: 'info' });
+                    Lampa.Controller.toggle('cherry_grid');
+                  }
+                }).catch(function () {
+                  if (destroyed) return;
+                  setLoading(false);
+                  Lampa.Noty.show(Lampa.Lang.translate('cherry_error'), { style: 'warn' });
+                  Lampa.Controller.toggle('cherry_grid');
                 });
               }
             },
@@ -829,23 +935,40 @@
   function CherryMain(object) {
     /** @type {jQuery} */
     var html;
+    var destroyed = false;
+    var _toggling = false; // re-entrancy guard for view_toggle re-render
+    var mode; // 'tiles' | 'rows'
 
     // ---- lifecycle --------------------------------------------------
 
     this.create = function () {
+      mode = Lampa.Storage.get('cherry_home_mode', 'tiles');
       html = Lampa.Template.get('cherry_main', {});
-      renderSources();
-      bindSearch();
 
-      // REQ-2: preview toggle via long-press on the title/logo area.
+      if (mode === 'rows') {
+        renderRows();
+      } else {
+        renderSources();
+        bindSearch();
+      }
+
+      // Long-press on title: preview toggle + view mode toggle.
+      // SettingsApi fallback — primary toggle is in Lampa settings page if SettingsApi is available.
       html.find('.cherry-main__title').on('hover:long', function () {
-        var current = Lampa.Storage.get('cherry_preview_enabled', true);
+        var previewVal = Lampa.Storage.get('cherry_preview_enabled', true);
+        var modeLabel  = mode === 'rows'
+          ? Lampa.Lang.translate('cherry_view_tiles')
+          : Lampa.Lang.translate('cherry_view_rows');
         Lampa.Select.show({
           title: 'Cherry',
           items: [
             {
-              title: Lampa.Lang.translate('cherry_preview_setting') + ': ' + (current ? 'ON' : 'OFF'),
+              title: Lampa.Lang.translate('cherry_preview_setting') + ': ' + (previewVal ? 'ON' : 'OFF'),
               action: 'preview_toggle'
+            },
+            {
+              title: modeLabel,
+              action: 'view_toggle'
             }
           ],
           onSelect: function (item) {
@@ -853,6 +976,18 @@
               var val = !Lampa.Storage.get('cherry_preview_enabled', true);
               Lampa.Storage.set('cherry_preview_enabled', val);
               Lampa.Noty.show(Lampa.Lang.translate('cherry_preview_setting') + ': ' + (val ? 'ON' : 'OFF'));
+            } else if (item.action === 'view_toggle') {
+              if (_toggling) return;          // re-entrancy: ignore fast double-toggle
+              _toggling = true;
+              Lampa.Storage.set('cherry_home_mode', mode === 'rows' ? 'tiles' : 'rows');
+              // backward() + re-push is the established Lampa re-render idiom.
+              // No destroyed-guard here: the re-push MUST fire even though backward()
+              // tears down this instance; Lampa.Activity.push is a global call, safe
+              // to invoke from a torn-down component's timer.
+              Lampa.Activity.backward();
+              setTimeout(function () {
+                Lampa.Activity.push({ component: 'cherry_main', title: 'Cherry', page: 1 });
+              }, 50); // 50ms for the activity stack to settle after backward() — do not reduce.
             }
             Lampa.Controller.toggle('cherry_main');
           },
@@ -881,7 +1016,7 @@
     this.render  = function () { return html; };
     this.pause   = function () {};
     this.stop    = function () {};
-    this.destroy = function () { if (html) html.remove(); };
+    this.destroy = function () { destroyed = true; if (html) html.remove(); };
 
     // ---- source tiles -----------------------------------------------
 
@@ -920,6 +1055,75 @@
           });
         });
         grid.append(card);
+      });
+    }
+
+    // ---- source rows (row mode) -------------------------------------
+
+    /**
+     * Row mode: one horizontal strip of popular cards per source.
+     * Async — each source's browse('', 1) resolves independently.
+     */
+    function renderRows() {
+      var container     = html.find('.cherry-main__sources');
+      var resolvedCount = 0; // Counter gate: collectionSet fires once when the last source resolves.
+      container.addClass('cherry-main__sources--rows');
+      html.find('.cherry-main__search').hide();
+      html.find('.cherry-main__sources-label').hide();
+
+      if (!SOURCES.length) { Lampa.Controller.collectionSet(html); return; }
+
+      SOURCES.forEach(function (src) {
+        var rowEl = Lampa.Template.get('cherry_source_row', { name: src.name });
+
+        // Row label → push the full grid for this source.
+        rowEl.find('.cherry-source-row__label').on('hover:enter', function () {
+          Lampa.Activity.push({
+            component: 'cherry_grid',
+            title:     src.name,
+            source_id: src.id,
+            page:      1
+          });
+        });
+
+        container.append(rowEl);
+        rowEl.find('.cherry-source-row__loading').show();
+
+        // Promise.resolve wraps adapters that throw synchronously or return a
+        // non-thenable (null) — such a source lands in .catch instead of aborting
+        // the whole forEach, so the resolvedCount gate keeps progressing.
+        Promise.resolve(src.browse('', 1)).then(function (result) {
+          if (destroyed) return;
+          rowEl.find('.cherry-source-row__loading').hide();
+          if (result && result.items && result.items.length) {
+            var cardsEl = rowEl.find('.cherry-source-row__cards');
+            result.items.slice(0, 12).forEach(function (video) {
+              video.source = src.id; // Required: 7-field Fav invariant — source field must be set.
+              var card = Lampa.Template.get('cherry_card', {
+                title:    video.title    || '',
+                duration: video.duration ? secToTime(video.duration) : '',
+                views:    formatViews(video.views)
+              });
+              if (video.thumb) card.find('.cherry-card__img').attr('src', video.thumb);
+              // Row cards intentionally minimal: no fav badge, no preview, no long-press (v1 scope).
+              card.on('hover:enter', function () {
+                if (destroyed) return;
+                playVideo(video, src);
+              });
+              cardsEl.append(card);
+            });
+          }
+          // ONE collectionSet call, fired when the last source resolves (success or empty).
+          resolvedCount++;
+          if (resolvedCount === SOURCES.length) Lampa.Controller.collectionSet(html);
+        }).catch(function (err) {
+          if (destroyed) return;
+          rowEl.find('.cherry-source-row__loading').hide();
+          console.warn('[Cherry] rows browse error for ' + src.id + ':', err);
+          // Count errors toward resolution so collectionSet is not permanently deferred.
+          resolvedCount++;
+          if (resolvedCount === SOURCES.length) Lampa.Controller.collectionSet(html);
+        });
       });
     }
 
@@ -1019,9 +1223,10 @@
       '<div class="cherry-grid layer--wheight">',
         '<div class="cherry-grid__head">',
           '<div class="cherry-grid__title">{title}</div>',
-          '<div class="cherry-grid__filters" style="display:none">',
-            '<div class="cherry-grid__filter-sort selector">#{cherry_sort}</div>',
-            '<div class="cherry-grid__filter-cat selector">#{cherry_category}</div>',
+          '<div class="cherry-grid__actions">',
+            '<div class="cherry-grid__action-search selector" style="display:none">#{cherry_search}</div>',
+            '<div class="cherry-grid__action-sort selector" style="display:none">#{cherry_sort}</div>',
+            '<div class="cherry-grid__action-cat selector" style="display:none">#{cherry_category}</div>',
           '</div>',
         '</div>',
         '<div class="cherry-grid__body"></div>',
@@ -1031,7 +1236,8 @@
         '</div>',
         '<div class="cherry-grid__empty" style="display:none">',
           '<div class="cherry-grid__empty-icon">&#9785;</div>',
-          '<div>#{cherry_no_results}</div>',
+          '<div class="cherry-grid__empty-generic">#{cherry_no_results}</div>',
+          '<div class="cherry-grid__empty-fav-hint" style="display:none">#{cherry_fav_empty_hint}</div>',
         '</div>',
       '</div>'
     ].join(''));
@@ -1049,6 +1255,16 @@
           '<div class="cherry-card__title">{title}</div>',
           '<div class="cherry-card__views">{views}</div>',
         '</div>',
+      '</div>'
+    ].join(''));
+
+    Lampa.Template.add('cherry_group_label', '<div class="cherry-group-label">{name}</div>');
+
+    Lampa.Template.add('cherry_source_row', [
+      '<div class="cherry-source-row">',
+        '<div class="cherry-source-row__label selector">{name}</div>',
+        '<div class="cherry-source-row__cards"></div>',
+        '<div class="cherry-source-row__loading">#{cherry_loading}</div>',
       '</div>'
     ].join(''));
   }
@@ -1257,6 +1473,15 @@
       '  line-height: 1;',
       '}',
 
+      '.cherry-grid__empty-fav-hint {',
+      '  font-size: .9em;',
+      '  opacity: .75;',
+      '  text-align: center;',
+      '  max-width: 24em;',
+      '  line-height: 1.5;',
+      '  margin: 0 auto;',
+      '}',
+
       /* ---- Video card ------------------------------------------ */
       /*
        * Target 4 cards per row on 1920px with sidebar ~260px ≈ 1660px wide.
@@ -1386,16 +1611,16 @@
       '  outline: 1px solid #e75480;',
       '}',
 
-      /* REQ-5: Filter bar */
-      '.cherry-grid__filters {',
+      /* P0: action bar */
+      '.cherry-grid__actions {',
       '  display: flex;',
+      '  gap: .6em;',
       '  padding: .4em 0 .2em;',
+      '  flex-wrap: wrap;',
       '}',
-      '.cherry-grid__filter-sort + .cherry-grid__filter-cat {',
-      '  margin-left: .6em;',
-      '}',
-      '.cherry-grid__filter-sort,',
-      '.cherry-grid__filter-cat {',
+      '.cherry-grid__action-search,',
+      '.cherry-grid__action-sort,',
+      '.cherry-grid__action-cat {',
       '  background: rgba(255,255,255,.1);',
       '  color: rgba(255,255,255,.85);',
       '  font-size: .82em;',
@@ -1404,9 +1629,73 @@
       '  cursor: pointer;',
       '  border: 1px solid transparent;',
       '}',
-      '.cherry-grid__filter-sort.focus,',
-      '.cherry-grid__filter-cat.focus {',
+      '.cherry-grid__action-search.focus,',
+      '.cherry-grid__action-sort.focus,',
+      '.cherry-grid__action-cat.focus {',
       '  border-color: #e75480;',
+      '}',
+      '.cherry-group-label {',
+      '  grid-column: 1 / -1;',
+      '  font-size: .8em;',
+      '  text-transform: uppercase;',
+      '  letter-spacing: .1em;',
+      '  color: rgba(255,255,255,.4);',
+      '  padding: .8em 0 .3em;',
+      '  border-bottom: 1px solid rgba(255,255,255,.08);',
+      '  margin-bottom: .3em;',
+      '}',
+      '.cherry-scroll-sentinel {',
+      '  width: 100%;',
+      '  height: 1px;',
+      '  grid-column: 1 / -1;',
+      '  pointer-events: none;',
+      '}',
+      /* ---- Row mode (UX-A) ------------------------------------- */
+      '.cherry-main__sources--rows {',
+      '  flex-direction: column;',
+      '  gap: 2em;',
+      '}',
+      '.cherry-source-row {',
+      '  display: flex;',
+      '  flex-direction: column;',
+      '  gap: .6em;',
+      '}',
+      '.cherry-source-row__label {',
+      '  font-size: .85em;',
+      '  font-weight: 600;',
+      '  text-transform: uppercase;',
+      '  letter-spacing: .1em;',
+      '  color: rgba(255,255,255,.5);',
+      '  cursor: pointer;',
+      '  border: 1px solid transparent;',
+      '  border-radius: .3em;',
+      '  padding: .2em .4em;',
+      '  align-self: flex-start;',
+      '}',
+      '.cherry-source-row__label.focus {',
+      '  border-color: #e75480;',
+      '  color: #fff;',
+      '}',
+      // overflow-x:scroll (not hidden) makes the strip scrollable so D-pad focus on
+      // out-of-view cards causes the browser to auto-scroll the element into view.
+      '.cherry-source-row__cards {',
+      '  display: flex;',
+      '  gap: .7em;',
+      '  overflow-x: scroll;',
+      '  scrollbar-width: none;',
+      '  -ms-overflow-style: none;',
+      '  padding: .3em 0;',
+      '}',
+      '.cherry-source-row__cards::-webkit-scrollbar { display: none; }',
+      '.cherry-source-row__cards .cherry-card {',
+      '  width: 12em;',
+      '  flex-shrink: 0;',
+      '}',
+      '.cherry-source-row__loading {',
+      '  display: none;',
+      '  font-size: .8em;',
+      '  color: rgba(255,255,255,.4);',
+      '  padding: .4em 0;',
       '}',
     ];
 
@@ -1426,6 +1715,7 @@
       cherry_sources:     { ru: 'Источники',           en: 'Sources'            },
       cherry_favorites:   { ru: 'Избранное',           en: 'Favorites'          },
       cherry_no_results:  { ru: 'Нет результатов',     en: 'No results'         },
+      cherry_fav_empty_hint: { ru: 'Удерживайте ОК на видео чтобы добавить в избранное', en: 'Hold OK on a video to add it to favorites' },
       cherry_loading:     { ru: 'Загрузка…',           en: 'Loading…'           },
       cherry_error:       { ru: 'Ошибка загрузки',     en: 'Load error'         },
       cherry_add_fav:        { ru: 'Добавлено в избранное',  en: 'Added to favorites'    },
@@ -1441,6 +1731,8 @@
       cherry_model_videos:     { ru: 'Видео модели',        en: 'Model videos'       },
       cherry_preview_setting:  { ru: 'Предпросмотр',        en: 'Preview'            },
       cherry_related:          { ru: 'Похожее',             en: 'Related'            },
+      cherry_view_rows:        { ru: 'Вид: Ряды',           en: 'View: Rows'         },
+      cherry_view_tiles:       { ru: 'Вид: Тайлы',          en: 'View: Tiles'        },
       cherry_proxy_key_init:   { ru: 'Cherry: ключ прокси — 1206. Для смены — измените cherry_proxy_key в хранилище Lampa.', en: 'Cherry: proxy key — 1206. To change, update cherry_proxy_key in Lampa Storage.' }
     });
   }
@@ -1460,6 +1752,25 @@
     addLang();
     addTemplates();
     addStyles();
+
+    // UX-C: register preview toggle in Lampa settings. Long-press on the main
+    // title remains as a fallback when SettingsApi is unavailable.
+    if (Lampa.SettingsApi && Lampa.SettingsApi.addComponent && Lampa.SettingsApi.addParam) {
+      Lampa.SettingsApi.addComponent({
+        component: 'cherry',
+        name: 'Cherry',
+        icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 21s-7-4.35-9.5-8.5C0.5 9 2 5 5.5 5c2 0 3.5 1.5 4 2.5C10 6.5 11.5 5 13.5 5 17 5 18.5 9 16.5 12.5 14 16.65 12 21 12 21z" fill="#e75480"/></svg>'
+      });
+      Lampa.SettingsApi.addParam({
+        component: 'cherry',
+        param: { name: 'cherry_preview_enabled', type: 'trigger', default: true },
+        field: { name: Lampa.Lang.translate('cherry_preview_setting'), description: '' }
+        // 'trigger' params auto-persist to Lampa.Storage under param.name (== our storage key),
+        // so no onChange handler is needed — read path Lampa.Storage.get('cherry_preview_enabled') works.
+      });
+    } else if (Lampa.SettingsApi) {
+      console.warn('[Cherry] SettingsApi present but addComponent/addParam unavailable — using long-press fallback');
+    }
 
     Lampa.Component.add('cherry_main', CherryMain);
     Lampa.Component.add('cherry_grid', CherryGrid);
