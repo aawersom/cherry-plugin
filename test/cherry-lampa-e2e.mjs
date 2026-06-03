@@ -35,6 +35,8 @@ const PROXY_URL_2_HOSTS = {
   'www.eporner.com': 1,
   // spankbang ru: Deno for browse; stream broken (needs Playwright)
   'ru.spankbang.com': 1,
+  // mydaddy.cc: bigcdn tokens IP-bound to mydaddy.cc fetch IP — must match bigcdn proxy
+  'mydaddy.cc': 1,
   'www.perfektdamen.co': 1,
 };
 const VIDEO_TIMEOUT_MS = 35000;
