@@ -415,6 +415,11 @@
     var _canSearch = false;
     var _hasSorts  = false;
     var _hasCats   = false;
+    // Re-entrancy guard: Lampa.Controller.move('right') re-dispatches into the
+    // 'right' handler at the grid's right edge. Without this flag that recurses
+    // infinitely. When the nested call sees the flag set, it returns immediately;
+    // the outer call then detects "focus didn't change" and opens the menu.
+    var _inRightMove = false;
 
     function _stopCurrentPreview() {
       if (_currentPreviewEl) {
@@ -644,11 +649,16 @@
         down:  function () { Lampa.Controller.move('down'); maybeLoadMore(); },
         left:  function () { Lampa.Controller.move('left'); },
         // Right moves between cards; at the right edge (focus can't advance) it
-        // opens the Поиск → Сортировка → Категории action menu. Edge-detected
-        // by checking whether the focused .selector changed after the move.
+        // opens the Поиск → Сортировка → Категории action menu. Lampa's move()
+        // re-dispatches into this handler at the edge, so a re-entrancy guard
+        // both prevents infinite recursion AND signals the edge: if the nested
+        // call fired, focus didn't change → open the menu.
         right: function () {
+          if (_inRightMove) return;          // nested edge re-dispatch — bail out
           var before = html.find('.focus')[0];
+          _inRightMove = true;
           Lampa.Controller.move('right');
+          _inRightMove = false;
           var after = html.find('.focus')[0];
           if (before && before === after) {
             openActionsMenu();
