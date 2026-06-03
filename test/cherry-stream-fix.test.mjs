@@ -159,14 +159,14 @@ describe('REQ-2 eporner routing reverted to Deno', function () {
 });
 
 // ============================================================
-// REQ-3 spankbang routing: ru.spankbang.com → CF Worker SOCKS5
-// (stream-fix-2: moved from Deno to CF Worker residential — Deno GCP IP blocked)
+// REQ-3 spankbang routing: Deno (reverted from SOCKS5 — Dutch IP also blocks browse)
+// SOCKS5 tried in stream-fix-2 but broke even browse. Back to Deno: cards show,
+// stream stays broken (requires Playwright / server-side browser).
 // ============================================================
-describe('REQ-3 spankbang routing — CF Worker (SOCKS5 residential)', function () {
-  it('routes ru.spankbang.com to PROXY_URL (CF Worker), not Deno', function () {
+describe('REQ-3 spankbang routing — Deno (browse works, stream blocked)', function () {
+  it('routes ru.spankbang.com to PROXY_URL_2 (Deno) for browse', function () {
     var result = buildProxyUrl('https://ru.spankbang.com/new/1/');
-    expect(result.indexOf(PROXY_URL)).toBe(0);
-    expect(result.indexOf(PROXY_URL_2)).toBe(-1);
+    expect(result.indexOf(PROXY_URL_2)).toBe(0);
   });
 });
 
@@ -242,13 +242,13 @@ describe('REQ-9 24rolika — JWPlayer URL proxy-wrapped', function () {
 // sync with plugin.js PROXY_URL_2_HOSTS (post Phase-A state)
 // ============================================================
 
-// PROXY_URL_2_HOSTS post-Phase-A: ru.spankbang.com removed
+// PROXY_URL_2_HOSTS post-Phase-A: spankbang reverted to Deno (SOCKS5 also blocks browse)
 var PROXY_URL_2_HOSTS_A = {
   'xnxx.com': 1, 'www.xnxx.com': 1,
   'www.youjizz.com': 1, 'youjizz.com': 1,
   'tv4.tizam.org': 1,
   'www.eporner.com': 1,
-  // ru.spankbang.com REMOVED — moved to CF Worker SOCKS5
+  'ru.spankbang.com': 1,
   'www.perfektdamen.co': 1
 };
 
@@ -267,11 +267,10 @@ function buildProxyUrlA(url, referer) {
   return p;
 }
 
-describe('Phase-A REQ-3 spankbang — moved from Deno to CF Worker', function () {
-  it('ru.spankbang.com routes to PROXY_URL (CF Worker), not Deno', function () {
+describe('Phase-A REQ-3 spankbang — reverted to Deno (SOCKS5 broke browse)', function () {
+  it('ru.spankbang.com routes to PROXY_URL_2 (Deno) for browse', function () {
     var result = buildProxyUrlA('https://ru.spankbang.com/abc/video/');
-    expect(result.indexOf(PROXY_URL)).toBe(0);
-    expect(result.indexOf(PROXY_URL_2)).toBe(-1);
+    expect(result.indexOf(PROXY_URL_2)).toBe(0);
   });
   it('regressions: eporner still routes to PROXY_URL_2', function () {
     var result = buildProxyUrlA('https://www.eporner.com/hd-porn/123/');
