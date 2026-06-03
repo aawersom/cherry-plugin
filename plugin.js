@@ -21,16 +21,12 @@
     'www.youjizz.com': 1, 'youjizz.com': 1,
     // tizam.org: rate-limits rapid sequential CF datacenter requests
     'tv4.tizam.org': 1,
-    // pornone: page + CDN must share same proxy IP so KVS token stays valid
-    'pornone.com': 1, 'www.pornone.com': 1,
-    'gallery.vcmdiawe.com': 1, 'galleryn2.vcmdiawe.com': 1,
-    // NOTE: pornhub/eporner/spankbang intentionally NOT here —
-    //       they go to CF Worker which routes them via SOCKS5 Dutch residential proxies
-    // bigcdn.cc — LeaseWeb NL CDN used by KVS-based sites; 13 confirmed subdomains
-    's1.bigcdn.cc': 1, 's4.bigcdn.cc': 1, 's16.bigcdn.cc': 1, 's18.bigcdn.cc': 1,
-    's25.bigcdn.cc': 1, 's30.bigcdn.cc': 1, 's33.bigcdn.cc': 1, 's38.bigcdn.cc': 1,
-    's39.bigcdn.cc': 1, 's41.bigcdn.cc': 1, 's43.bigcdn.cc': 1, 's47.bigcdn.cc': 1,
-    's50.bigcdn.cc': 1, 's61.bigcdn.cc': 1,
+    // pornone: moved to CF Worker SOCKS5 (Deno IP banned by pornone). See RESIDENTIAL in index.js.
+    // eporner: SOCKS5 instability — revert to Deno
+    'www.eporner.com': 1,
+    // spankbang ru: SOCKS5 403 on ru subdomain; Deno works (www remains JS-challenge gated)
+    'ru.spankbang.com': 1,
+    // bigcdn.cc all subdomains covered by /\.bigcdn\.cc$/ regex in buildProxyUrl
     // perfektdamen KVS CDN — IP-bound tokens require consistent egress IP
     'www.perfektdamen.co': 1
   };
@@ -38,10 +34,7 @@
   // Domains that need residential IP — routed via PROXY_URL_3 when available
   var PROXY_URL_3_HOSTS = {
     'www.pornhub.com': 1,
-    'rt.pornhub.com': 1,
-    'www.eporner.com': 1,
-    'ru.spankbang.com': 1,
-    'www.spankbang.com': 1
+    'rt.pornhub.com': 1
   };
 
   function getProxyKey() {
@@ -62,7 +55,8 @@
     if (base === PROXY_URL && PROXY_URL_2) {
       try {
         var h = new URL(url).hostname;
-        if (PROXY_URL_2_HOSTS[h] || /\.pornone\.com$/.test(h)) base = PROXY_URL_2;
+        // bigcdn wildcard covers all *.bigcdn.cc CDN subdomains
+        if (PROXY_URL_2_HOSTS[h] || /\.bigcdn\.cc$/.test(h)) base = PROXY_URL_2;
       } catch (e) {}
     }
     var p = base + '/proxy?url=' + encodeURIComponent(url);
@@ -331,8 +325,9 @@
       function px(u) {
         if (!u) return u;
         if (u.indexOf('blob:') === 0) return u;
-        if (u.indexOf(PROXY_URL) === 0) return u; // already proxied with custom referer — skip
-        if (PROXY_URL_2 && u.indexOf(PROXY_URL_2) === 0) return u; // also skip Deno-proxied URLs
+        if (PROXY_URL_3 && u.indexOf(PROXY_URL_3) === 0) return u; // skip VPS-proxied URLs
+        if (PROXY_URL_2 && u.indexOf(PROXY_URL_2) === 0) return u; // skip Deno-proxied URLs
+        if (u.indexOf(PROXY_URL) === 0) return u; // skip CF Worker-proxied URLs
         // Normalize protocol-relative URLs (e.g. YouJizz returns //cdne-mobile.youjizz.com/...)
         if (u.indexOf('//') === 0) u = 'https:' + u;
         return buildProxyUrl(u);
@@ -1861,16 +1856,11 @@ SOURCES.push({
       }
 
       if (Object.keys(hlsUrls).length) {
-        var labels = Object.keys(hlsUrls);
-        return Promise.all(labels.map(function(lbl) {
-          return proxyM3u8(hlsUrls[lbl], 'https://www.pornhub.com/').then(function(blob) {
-            return { lbl: lbl, blob: blob };
-          }).catch(function() { return { lbl: lbl, blob: hlsUrls[lbl] }; });
-        })).then(function(results) {
-          var quality = {};
-          results.forEach(function(r) { quality[r.lbl] = r.blob; });
-          return { url: bestQualityUrl(quality), quality: quality };
+        var quality = {};
+        Object.keys(hlsUrls).forEach(function(lbl) {
+          quality[lbl] = buildProxyUrl(hlsUrls[lbl], 'https://www.pornhub.com/');
         });
+        return { url: bestQualityUrl(quality), quality: quality };
       }
 
       return { url: '', quality: {} };
@@ -2712,7 +2702,12 @@ SOURCES.push({
                     : 'https://www.porntrex.com/' + candidate.replace(/^\//, '');
                 if (found.indexOf(full) === -1) found.push(full);
             }
-            if (found.length) return _kvsPickBest(found);
+            if (found.length) {
+                var r1 = _kvsPickBest(found);
+                var q1 = {};
+                Object.keys(r1.quality).forEach(function(k) { q1[k] = buildProxyUrl(r1.quality[k], 'https://www.porntrex.com/'); });
+                return { url: buildProxyUrl(r1.url, 'https://www.porntrex.com/'), quality: q1 };
+            }
 
             // Fallback: JS variable assignment
             var varRx = /(video_url|video_alt_url)\s*[=:]\s*['"]([^'"]+)['"]/g;
@@ -2720,7 +2715,12 @@ SOURCES.push({
             while ((m = varRx.exec(html)) !== null) {
                 if (varUrls.indexOf(m[2]) === -1) varUrls.push(m[2]);
             }
-            if (varUrls.length) return _kvsPickBest(varUrls);
+            if (varUrls.length) {
+                var r2 = _kvsPickBest(varUrls);
+                var q2 = {};
+                Object.keys(r2.quality).forEach(function(k) { q2[k] = buildProxyUrl(r2.quality[k], 'https://www.porntrex.com/'); });
+                return { url: buildProxyUrl(r2.url, 'https://www.porntrex.com/'), quality: q2 };
+            }
 
             return extractStreams(html);
         }).catch(function () { return { url: '', quality: {} }; });
@@ -3250,6 +3250,16 @@ SOURCES.push({
             var m = /src="(https?:\/\/videos\.porndig\.com\/player\/index\/[^"]+)"/i.exec(html);
             if (m) {
                 return cherryFetch(m[1]).then(function (ihtml) {
+                    // Porndig-specific patterns before generic fallback
+                    var directUrl = '', dm;
+                    // Pattern 1: file/src key in JS object literal or assignment
+                    dm = /(?:file|src)\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))/i.exec(ihtml);
+                    if (dm) directUrl = dm[1];
+                    // Pattern 2: sources array object-literal form: sources:[{file:"url"}] or sources=[{file:"url"}]
+                    if (!directUrl) { dm = /sources\s*[=:]\s*\[[\s\S]*?(?:file|src)\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))/i.exec(ihtml); if (dm) directUrl = dm[1]; }
+                    // Pattern 3: data-src on <video>/<source> tag
+                    if (!directUrl) { dm = /<(?:video|source)[^>]+data-src="([^"]+\.(?:mp4|m3u8))"/i.exec(ihtml); if (dm) directUrl = dm[1]; }
+                    if (directUrl) return { url: directUrl, quality: {} };
                     var result = extractStreams(ihtml);
                     if (result.url || Object.keys(result.quality).length) {
                         var qKeys = Object.keys(result.quality);
@@ -3947,7 +3957,7 @@ SOURCES.push({
             // DLE + JWPlayer: file: "url.mp4"
             var jwRx = /jwplayer\s*\(\s*['"]?\w+['"]?\s*\)\s*\.setup\s*\(\s*\{[\s\S]*?['"]?file['"]?\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))['"]/;
             var m = jwRx.exec(html);
-            if (m) return { url: m[1], quality: {} };
+            if (m) return { url: buildProxyUrl(m[1], 'https://w2.huyalkino.com/'), quality: {} };
 
             return extractStreams(html);
         }).catch(function () { return { url: '', quality: {} }; });

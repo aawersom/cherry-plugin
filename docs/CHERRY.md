@@ -146,34 +146,55 @@ Fields `preview` and `model` are silently dropped on favourite — intentional (
 
 ## Proxy Layer
 
-Adapters route requests through one of two proxies depending on the target hostname.
+Adapters route requests through one of three proxies depending on the target hostname.
 
-### Primary proxy — Cloudflare Worker
+### Primary proxy — Cloudflare Worker + SOCKS5
 `PROXY_URL = https://cherry-proxy.aawersom.workers.dev`
-Used by default for all adapters.
+Default for all adapters. For domains in `PROXY_URL_3_HOSTS` (pornhub, eporner, spankbang),
+the CF Worker tunnels the outbound request through **rotating Dutch residential SOCKS5 proxies**
+(`45.91.209.155:11750–11756`) using the `cloudflare:sockets` `connect()` API. Time-based
+rotation every 30 s. Fallback: direct CF fetch if all 5 proxies fail.
+
+The CF Worker also performs **server-side M3U8 rewriting**: any response whose Content-Type
+or path ends in `.m3u8` has all segment/sub-playlist URLs rewritten to go through the proxy.
+This means adapters should pass the raw M3U8 URL to `buildProxyUrl()` directly — **not**
+through `proxyM3u8()`.
 
 ### Secondary proxy — Deno Deploy
 `PROXY_URL_2 = https://cherry-proxy.aawersom.deno.net`
-Used for hostnames in `PROXY_URL_2_HOSTS` (`xnxx.com`, `ru.spankbang.com`, `www.eporner.com` for video pages, `gallery.vcmdiawe.com` pornone CDN) that block Cloudflare datacenter IPs at ASN level or return unusable responses from the CF Worker.
+Used for hostnames in `PROXY_URL_2_HOSTS`:
+- `xnxx.com`, `youjizz.com` — CF ASN-blocked
+- `tv4.tizam.org` — CF rate-limited
+- `pornone.com`, `*.pornone.com` — IP-bound KVS token (page + CDN must share IP)
+- `*.bigcdn.cc` — LeaseWeb NL CDN (should be matched by regex, not hardcoded list)
+- `www.perfektdamen.co` — IP-bound KVS token
+
+### Tertiary proxy — VPS (optional)
+`PROXY_URL_3 = ''` (empty by default; fill with Beget VPS IP:PORT after deploying
+`workers/cherry-proxy-vps/index.js`). Currently unused. Would override `PROXY_URL` for
+`PROXY_URL_3_HOSTS` if set.
 
 ### buildProxyUrl(url, referer?)
 ```
 GET {base}/proxy?url={encoded}&key={PROXY_KEY}[&referer={encoded}]
 ```
-Selects `PROXY_URL_2` if the target hostname is in `PROXY_URL_2_HOSTS`, otherwise `PROXY_URL`. Key authenticates the Worker.
+Routing priority: `PROXY_URL_3` (if set + hostname in `PROXY_URL_3_HOSTS`) → `PROXY_URL_2`
+(if hostname in `PROXY_URL_2_HOSTS` or matches `/\.pornone\.com$/`) → `PROXY_URL` (default).
 
 ### cherryFetch(url, referer?)
 Wrapper around native `fetch(buildProxyUrl(...))`. Returns `Promise<string>` (response text).
-Used by all adapters for GET requests.
+On Android, tries `Lampa.Reguest.native()` first (bypasses CORS), falls back to fetch+proxy.
 
 ### cherryPost(url, body)
 POST variant for `application/x-www-form-urlencoded` bodies (used by Spankbang stream API).
 `Lampa.Reguest` does not expose POST, hence native `fetch` directly.
 
 ### proxyM3u8(m3u8Url, referer?)
-Fetches an HLS master/media playlist via the proxy, rewrites every non-comment line
-(resolving relative URLs to absolute first) through `buildProxyUrl`, then returns a
-`blob:` URL the Lampa player can consume without CORS issues.
+**⚠ Deprecated for CF Worker usage.** Fetches HLS playlist via proxy, rewrites segment URLs
+client-side, returns a `blob:` URL. Causes **double-proxy** when CF Worker's server-side
+`rewriteM3u8()` is also active — segments end up as `proxy?url=proxy?url=...`.
+Only safe for use with plain pass-through proxies (Deno) that do not rewrite M3U8.
+Currently called only by the `pornhub` adapter — **that call should be removed** (see Iteration 2).
 
 ---
 
@@ -217,7 +238,7 @@ Fetches an HLS master/media playlist via the proxy, rewrites every non-comment l
 | 18 | `hellporno` | HellPorno | hellporno.com | KVS (_kvsEngine: `chs_object` + `<source>` tags) | — |
 | 19 | `pornobolt` | Pornobolt | sex.pornobolt.in | KVS (_kvsEngine: pbcdn.tv CDN) | — |
 | 20 | `crocotube` | CrocoTube | crocotube.com | KVS (_kvsEngine: alphaxcdn.com CDN) | — |
-| 21 | `huyamba` | Huyamba | fuq.huyamba.mobi | KVS get_file | — |
+| 21 | `huyamba` | Huyamba | fuq.huyamba.mobi | KVS get_file | **Disabled 2026-06-03 (site dead)** |
 | 22 | `ebun` | Ebun | www1.ebun.tv | HTML scraping | — |
 | 23 | `lenporno` | LenPorno | www.lenporno.net | Custom upload path reconstruction | — |
 | 24 | `24rolika` | 24Rolika | w2.huyalkino.com | DLE + JWPlayer | — |
@@ -253,7 +274,7 @@ Discovered 2026-05-29 by comparing with AdultJS implementation.
 
 ---
 
-## Source Status (as of 2026-05-29)
+## Source Status — Iteration 1 (2026-05-29)
 
 Results from `node test/cherry-lampa-e2e.mjs` — Playwright/Chromium with real CORS enforcement.
 
@@ -292,13 +313,13 @@ edge IP rotation. In real Lampa usage (immediate playback after selection), they
 | `ebun` | 30 | KVS signed-token issue |
 | `lenporno` | 24 | Custom CDN, occasionally slow |
 | `perfektdamen` | 60 | KVS signed-token, get_file CDN |
-| `huyamba` | 20 | KVS get_file CDN |
+| `huyamba` | 20 | KVS get_file CDN. **Disabled 2026-06-03**: `fuq.huyamba.mobi` returns 404, site dead. Adapter commented out. |
 
 ### Browse works, video broken (CDN architecture limitation)
 
 | id | cards | root cause |
 |---|---|---|
-| `hqporner` | 50 | **bigcdn.cc blocks all Cloudflare datacenter IPs — permanently broken.** CDN returns 404 from CF Worker, Deno Deploy, and residential IPs alike. Browse remains functional. Stream is unrecoverable without a self-hosted FlareSolverr or residential relay; not fixable at the proxy tier. |
+| `hqporner` | 50 | **CDN routing bug** (not permanently broken — see Iteration 2): `s24.bigcdn.cc` not in `PROXY_URL_2_HOSTS` list, routes to CF Worker → 404. Fix: add `/\.bigcdn\.cc$/` regex. |
 | `pornone` | 49 | **IP-locked CDN tokens** on `gallery.vcmdiawe.com`. Strategy A implemented: CDN routes through Deno Deploy (same-POP delivery likely via Anycast). If Strategy A fails in E2E, escalate to Strategy B (`pornone.com` + CDN both through Deno). |
 
 ### Previously unfixable — now repaired
@@ -416,6 +437,63 @@ Global `Lampa.SettingsApi` registration deliberately avoided (avoids polluting g
 | Call | Purpose |
 |---|---|
 | `Lampa.Keyboard.show({title, value, onchange, onenter})` | TV keyboard for search input (presence-checked before use) |
+
+---
+
+---
+
+## Source Status — Iteration 2 (live test 2026-06-03)
+
+Live testing via Lampa web player (`lampa.mx`) with the deployed plugin
+`https://aawersom.github.io/cherry-plugin/plugin.js`.
+
+### Confirmed broken — root cause diagnosed
+
+| id | symptom | root cause | fix plan |
+|---|---|---|---|
+| `pornhub` | preview OK, video 404 | **Double-proxy**: `proxyM3u8()` rewrites M3U8 client-side, but CF Worker's `rewriteM3u8()` already rewrites segments server-side → `proxy?url=proxy?url=ev-h.phncdn.com/...` | Remove `proxyM3u8` call; return `buildProxyUrl(m3u8Url, referer)` directly |
+| `hqporner` | preview OK, video 404 | **Missing bigcdn subdomain**: `s24.bigcdn.cc` not in `PROXY_URL_2_HOSTS` (hardcoded list has only 14 specific subdomains) → goes to CF Worker → 404 | Add `/\.bigcdn\.cc$/` regex to `buildProxyUrl` routing |
+| `pornone` | browse 404, CDN 504 | **Deno proxy blocked**: both `pornone.com/wp-json/...` and `s1002.pornone.com` return 404/timeout through Deno Deploy → Deno IP banned by PornOne | Move pornone to CF Worker SOCKS5; add `pornone.com` + `*.pornone.com` to RESIDENTIAL in CF Worker |
+| `spankbang` | browse 403 | **SOCKS5 blocked by Spankbang**: all 5 Dutch residential proxies return 403; direct CF fetch also 403. Spankbang has aggressive bot-protection (per xsena: requires Playwright headless) | Try `www.spankbang.com` fallback; otherwise mark as requires-server-side |
+| `eporner` | preview OK, video silent fail | **SOCKS5 instability** for XHR API (`/xhr/video/ID?hash=...`) or CDN missing referer in `playVideo`'s `px()` call | Debug XHR response; pass referer when building quality map |
+| `porntrex` | play interrupted | KVS `get_file` redirect chain: CF Worker follows redirect, but CDN may return non-video response or require token validation at same IP | Test `_kvsPickBest` redirect path; add referer to stream URL |
+| `porndig` | only preview plays | `extractStreams(ihtml)` on `videos.porndig.com/player/index/ID` returns preview/teaser URL; player format likely changed | Update player page parser for new iframe format |
+| `24rolika` | play interrupted | `videosdrop.com` CDN serves content that triggers HLS race; JWPlayer URL may require direct access | Test without proxy; compare with direct fetch |
+
+### Architecture comparison — sisi.js / xsena.red (2026-06-03)
+
+Investigated two competing Lampa adult plugins:
+- **sisi.js** (`bylampa.github.io/sisi.js`) — thin bootstrapper that loads the real plugin from mirrors (ab2024.ru). Works in Lampa UNCENSORED fork only.
+- **xsena.red** / Клубничка — Lampac C#/.NET backend (`api.xsena.red`). Client JS is a dumb shell. Sources: Pornhub, Xvideos, Xhamster, Spankbang, Eporner, Porntrex, Xnxx, Hqporner, Chaturbate, Ebalovo.
+
+**Key architectural difference:**
+
+| Aspect | Cherry (this plugin) | sisi.js / xsena (Lampac) |
+|---|---|---|
+| Scraping location | Client-side JS via CF Worker proxy | Server-side C#/.NET |
+| Bot-protected sites | SOCKS5 Dutch residential via CF Worker | Playwright headless browser (server) |
+| Blocked domains | Proxy routing table in plugin.js | Server-side proxy config |
+| CORS issues | `buildProxyUrl` wrapping | None (server makes requests) |
+| Stream URLs to player | Proxied or blob M3U8 | Direct CDN URL (no proxy in stream) |
+| IP-bound tokens | Needs consistent egress IP per session | Managed by backend cache |
+| Resilience | CF Worker SOCKS5 outage = broken | Server admin replaces proxies |
+
+**Takeaway for Cherry:** For Spankbang (and potentially Eporner/Pornhub) the fundamental bottleneck is bot-protection that requires a headless browser. Cherry's proxy approach hits a ceiling here. All other issues (double-proxy, wrong CDN routing, Deno block) are mechanical bugs fixable in JS.
+
+**tv-ch.ru reference (`https://tv-ch.ru/lampa-plugins-with-strawberry/`):**
+Lists two working plugin addresses as of 2026:
+- `https://lam.maxvol.pro/sisi.js` — broken since 2026-02-07
+- `https://bylampa.github.io/sisi.js` — works (Lampa UNCENSORED only)
+
+Supported sources in sisi.js ecosystem: Pornhub, Xvideos, Xhamster, Ebalovo, Hqporner, Spankbang, Eporner, Porntrex, Xnxx, Chaturbate.
+
+### proxyM3u8 deprecation note
+
+`proxyM3u8()` was designed for a dumb pass-through proxy. Now that the CF Worker runs `rewriteM3u8()` server-side, `proxyM3u8` causes double-wrapping for any source that returns HLS. It should only be called on platforms where the proxy does NOT rewrite M3U8 (e.g. plain Deno proxy). Currently `proxyM3u8` is called only by `pornhub` adapter — that call should be removed.
+
+### PROXY_URL_2_HOSTS hardcoded bigcdn list is incomplete
+
+Current list covers 14 bigcdn subdomains (s1, s4, s16, s18, s25, s30, s33, s38, s39, s41, s43, s47, s50, s61). `s24.bigcdn.cc` (used by HQPorner) and potentially other subdomains are missing. Replace with `/\.bigcdn\.cc$/` regex in `buildProxyUrl`.
 
 ---
 

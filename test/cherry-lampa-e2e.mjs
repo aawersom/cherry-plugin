@@ -29,16 +29,12 @@ const PROXY_BASE_2     = 'https://cherry-proxy.aawersom.deno.net';
 // Mirror of plugin.js PROXY_URL_2_HOSTS — sync-check assertion in plugin-helpers.test.js enforces parity.
 const PROXY_URL_2_HOSTS = {
   'xnxx.com': 1, 'www.xnxx.com': 1,
-  'ru.spankbang.com': 1,
-  'www.pornhub.com': 1,
   'www.youjizz.com': 1, 'youjizz.com': 1,
   'tv4.tizam.org': 1,
+  // pornone moved to CF Worker SOCKS5 (Deno IP banned)
   'www.eporner.com': 1,
-  'gallery.vcmdiawe.com': 1, 'galleryn2.vcmdiawe.com': 1,
-  's1.bigcdn.cc': 1, 's4.bigcdn.cc': 1, 's16.bigcdn.cc': 1, 's25.bigcdn.cc': 1,
-  's30.bigcdn.cc': 1, 's33.bigcdn.cc': 1, 's38.bigcdn.cc': 1, 's39.bigcdn.cc': 1,
-  's41.bigcdn.cc': 1, 's43.bigcdn.cc': 1, 's47.bigcdn.cc': 1, 's50.bigcdn.cc': 1,
-  's61.bigcdn.cc': 1,
+  'ru.spankbang.com': 1,
+  'www.perfektdamen.co': 1,
 };
 const VIDEO_TIMEOUT_MS = 35000;
 const CONCURRENCY      = 3;
