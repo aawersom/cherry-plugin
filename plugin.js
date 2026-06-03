@@ -775,8 +775,8 @@
             items: [
               {
                 title: isFav
-                  ? Lampa.Lang.translate('cherry_rem_fav')
-                  : Lampa.Lang.translate('cherry_add_fav'),
+                  ? Lampa.Lang.translate('cherry_rem_fav_action')
+                  : Lampa.Lang.translate('cherry_add_fav_action'),
                 action: 'fav'
               },
               {
@@ -1428,8 +1428,10 @@
       cherry_no_results:  { ru: 'Нет результатов',     en: 'No results'         },
       cherry_loading:     { ru: 'Загрузка…',           en: 'Loading…'           },
       cherry_error:       { ru: 'Ошибка загрузки',     en: 'Load error'         },
-      cherry_add_fav:     { ru: 'Добавлено в избранное', en: 'Added to favorites' },
-      cherry_rem_fav:     { ru: 'Убрано из избранного',  en: 'Removed from favorites' },
+      cherry_add_fav:        { ru: 'Добавлено в избранное',  en: 'Added to favorites'    },
+      cherry_rem_fav:        { ru: 'Убрано из избранного',   en: 'Removed from favorites' },
+      cherry_add_fav_action: { ru: 'Добавить в избранное',   en: 'Add to favorites'       },
+      cherry_rem_fav_action: { ru: 'Убрать из избранного',   en: 'Remove from favorites'  },
       cherry_quality:     { ru: 'Выбор качества',      en: 'Select quality'     },
       cherry_similar:          { ru: 'Похожие видео',       en: 'Similar videos'     },
       cherry_sort:             { ru: 'Сортировка',          en: 'Sort'               },
@@ -1438,7 +1440,8 @@
       cherry_category_default: { ru: 'Все категории',       en: 'All categories'     },
       cherry_model_videos:     { ru: 'Видео модели',        en: 'Model videos'       },
       cherry_preview_setting:  { ru: 'Предпросмотр',        en: 'Preview'            },
-      cherry_related:          { ru: 'Похожее',             en: 'Related'            }
+      cherry_related:          { ru: 'Похожее',             en: 'Related'            },
+      cherry_proxy_key_init:   { ru: 'Cherry: ключ прокси — 1206. Для смены — измените cherry_proxy_key в хранилище Lampa.', en: 'Cherry: proxy key — 1206. To change, update cherry_proxy_key in Lampa Storage.' }
     });
   }
 
@@ -1450,7 +1453,7 @@
     if (Lampa.Storage.get('cherry_proxy_key', null) === null) {
       Lampa.Storage.set('cherry_proxy_key', '1206');
       setTimeout(function () {
-        Lampa.Noty.show('Cherry: ключ прокси — 1206. Чтобы изменить — обновите значение cherry_proxy_key в хранилище Lampa.', { time: 7000 });
+        Lampa.Noty.show(Lampa.Lang.translate('cherry_proxy_key_init'), { time: 7000 });
       }, 1500);
     }
 
