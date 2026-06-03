@@ -691,3 +691,147 @@ describe('P0: plugin.js source assertions (anti-drift)', () => {
     expect(SRC).toMatch(/cherry_category\s*:/);
   });
 });
+
+// ============================================================
+// P1 — D-pad Infinite Scroll via IntersectionObserver sentinel
+// (behaviour documentation)
+//
+// Mirrors the three pure decisions that drive the sentinel/maybeLoadMore
+// logic in CherryGrid after Phase 4. No DOM, no Lampa, no observer — only
+// the load-gate predicate and the D-pad proximity test.
+// ============================================================
+
+describe('P1: shouldLoadMore — POST behaviour', function () {
+  /**
+   * Pure mirror of the load-gate shared by all three triggers
+   * (IntersectionObserver callback, scroll listener, maybeLoadMore):
+   *   if (!loading && currentPage < totalPages) { load next }
+   * Returns true iff the next page should be requested.
+   */
+  function shouldLoadMore(loading, currentPage, totalPages) {
+    return !loading && currentPage < totalPages;
+  }
+
+  it('loading true blocks load (no double-load while a request is in flight)', function () {
+    expect(shouldLoadMore(true, 1, 5)).toBe(false);
+  });
+
+  it('loading true blocks even on the last page boundary', function () {
+    expect(shouldLoadMore(true, 4, 5)).toBe(false);
+  });
+
+  it('currentPage === totalPages: no more pages, no load', function () {
+    expect(shouldLoadMore(false, 5, 5)).toBe(false);
+  });
+
+  it('currentPage > totalPages: defensive false', function () {
+    expect(shouldLoadMore(false, 6, 5)).toBe(false);
+  });
+
+  it('not loading and currentPage < totalPages: load', function () {
+    expect(shouldLoadMore(false, 1, 5)).toBe(true);
+  });
+
+  it('not loading, one page left (currentPage = totalPages - 1): load', function () {
+    expect(shouldLoadMore(false, 4, 5)).toBe(true);
+  });
+
+  it('single-page result (totalPages = 1): never loads', function () {
+    // Favorites / _related_items / grouped search all set totalPages = 1.
+    expect(shouldLoadMore(false, 1, 1)).toBe(false);
+  });
+});
+
+describe('P1: isSentinelNear — POST behaviour', function () {
+  /**
+   * Pure mirror of the maybeLoadMore() proximity test:
+   *   var rect  = sentinel.getBoundingClientRect();
+   *   var viewH = window.innerHeight;
+   *   if (rect.top < viewH + threshold) { ... }
+   * D-pad uses a 400px lookahead. Returns true iff the sentinel's top edge
+   * is within viewportH + threshold of the top of the viewport.
+   */
+  function isSentinelNear(rectTop, viewportH, threshold) {
+    return rectTop < viewportH + threshold;
+  }
+
+  it('sentinel just inside the viewport: near', function () {
+    expect(isSentinelNear(500, 1000, 400)).toBe(true);
+  });
+
+  it('sentinel exactly at viewport bottom: near (below viewportH but within threshold)', function () {
+    expect(isSentinelNear(1000, 1000, 400)).toBe(true);
+  });
+
+  it('sentinel within the 400px lookahead band below the fold: near', function () {
+    expect(isSentinelNear(1399, 1000, 400)).toBe(true);
+  });
+
+  it('sentinel exactly at the threshold edge (viewportH + threshold): NOT near (strict <)', function () {
+    expect(isSentinelNear(1400, 1000, 400)).toBe(false);
+  });
+
+  it('sentinel far below the lookahead band: not near', function () {
+    expect(isSentinelNear(5000, 1000, 400)).toBe(false);
+  });
+
+  it('sentinel above the fold (negative top, already scrolled past): near', function () {
+    expect(isSentinelNear(-200, 1000, 400)).toBe(true);
+  });
+
+  it('threshold widens the trigger band (0 vs 400)', function () {
+    // top=1200, viewportH=1000: out of range at threshold 0, in range at 400.
+    expect(isSentinelNear(1200, 1000, 0)).toBe(false);
+    expect(isSentinelNear(1200, 1000, 400)).toBe(true);
+  });
+});
+
+// ============================================================
+// P1 — plugin.js source assertions (anti-drift)
+// ============================================================
+
+describe('P1: plugin.js source assertions (anti-drift)', () => {
+  it('sentinel element class cherry-scroll-sentinel present', () => {
+    expect(SRC).toContain('cherry-scroll-sentinel');
+  });
+
+  it('IntersectionObserver is referenced (primary D-pad trigger)', () => {
+    expect(SRC).toMatch(/IntersectionObserver/);
+  });
+
+  it('maybeLoadMore function is defined', () => {
+    expect(SRC).toMatch(/function\s+maybeLoadMore\s*\(/);
+  });
+
+  it('down handler calls maybeLoadMore', () => {
+    // down: function () { Lampa.Controller.move('down'); maybeLoadMore(); }
+    expect(SRC).toMatch(/down\s*:\s*function[\s\S]{0,120}maybeLoadMore\s*\(/);
+  });
+
+  it('right handler calls maybeLoadMore', () => {
+    expect(SRC).toMatch(/right\s*:\s*function[\s\S]{0,120}maybeLoadMore\s*\(/);
+  });
+
+  it('observer disconnect appears in stop()', () => {
+    expect(SRC).toMatch(/this\.stop\s*=\s*function[\s\S]{0,300}disconnect\s*\(/);
+  });
+
+  it('observer disconnect appears in destroy()', () => {
+    expect(SRC).toMatch(/this\.destroy\s*=\s*function[\s\S]{0,300}disconnect\s*\(/);
+  });
+
+  it('sentinel is re-appended after renderCards (kept at list bottom)', () => {
+    // Each renderCards(...) call site re-appends the sentinel via append(sentinel).
+    expect(SRC).toMatch(/append\(\s*sentinel\s*\)/);
+  });
+
+  it('sentinel re-append follows a renderCards call in loadPage path', () => {
+    // renderCards(result.items, scroll.body()); ... scroll.body().append(sentinel);
+    expect(SRC).toMatch(/renderCards\([\s\S]{0,200}append\(\s*sentinel\s*\)/);
+  });
+
+  it('existing 300px scroll listener kept as secondary trigger', () => {
+    // The pointer/mouse scroll fallback remains (300px threshold).
+    expect(SRC).toMatch(/clientHeight\s*<\s*300/);
+  });
+});

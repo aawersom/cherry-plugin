@@ -401,6 +401,9 @@
     var currentSort     = '';
     var currentCategory = '';
 
+    var sentinel          = null;
+    var _sentinelObserver = null;
+
     function _stopCurrentPreview() {
       if (_currentPreviewEl) {
         _currentPreviewEl.pause();
@@ -432,7 +435,27 @@
       totalPages  = 1;
       loading     = false;
       scroll.body().find('.cherry-card, .cherry-group-label').remove();
+      if (sentinel) scroll.body().append(sentinel);
       loadPage(1);
+    }
+
+    /**
+     * D-pad infinite-scroll fallback. The IntersectionObserver is the primary
+     * trigger for D-pad navigation; this proximity check covers cases where the
+     * observer callback hasn't fired yet (large focus jumps) and is also invoked
+     * directly by the observer callback (it re-checks the loading/page guards).
+     */
+    function maybeLoadMore() {
+      if (loading || currentPage >= totalPages) return;
+      if (!sentinel || !sentinel[0]) return;
+      var rect  = sentinel[0].getBoundingClientRect();
+      var viewH = window.innerHeight || document.documentElement.clientHeight;
+      // 400px lookahead — D-pad focus steps are large, so trigger earlier than
+      // the 300px pointer/scroll listener.
+      if (rect.top < viewH + 400) {
+        currentPage++;
+        loadPage(currentPage);
+      }
     }
 
     function _findLabel(arr, id) {
@@ -457,6 +480,8 @@
 
       scroll = new Lampa.Scroll({ mask: true, over: true });
 
+      // Secondary scroll trigger for pointer/mouse users.
+      // IntersectionObserver is primary for D-pad (see sentinel setup + maybeLoadMore).
       scroll.body().on('scroll', function () {
         var el = this;
         if (el.scrollHeight - el.scrollTop - el.clientHeight < 300) {
@@ -469,6 +494,18 @@
 
       scroll.body().addClass('cherry-cards-wrap');
       html.find('.cherry-grid__body').append(scroll.render());
+
+      // P1: sentinel at list bottom + IntersectionObserver as primary D-pad trigger.
+      // Observe against the viewport (root: null) so it works regardless of
+      // Lampa.Scroll's transform-based internals across builds.
+      sentinel = $('<div class="cherry-scroll-sentinel"></div>');
+      scroll.body().append(sentinel);
+      if (typeof IntersectionObserver !== 'undefined') {
+        _sentinelObserver = new IntersectionObserver(function (entries) {
+          if (entries[0] && entries[0].isIntersecting) maybeLoadMore();
+        }, { root: null, rootMargin: '400px' });
+        _sentinelObserver.observe(sentinel[0]);
+      }
 
       // P0: action bar — Search / Sort / Category buttons + visibility + handlers.
       // model_url excluded: model browse is already filtered to a performer — per-source search does not apply here
@@ -553,6 +590,7 @@
         var favItems = Fav.all();
         if (favItems.length) {
           renderCards(favItems, scroll.body());
+          if (sentinel) scroll.body().append(sentinel);
         } else {
           // Children first, then parent — avoids a flash of the generic message.
           html.find('.cherry-grid__empty-generic').hide();
@@ -561,6 +599,7 @@
         }
       } else if (object._related_items) {
         renderCards(object._related_items, scroll.body());
+        if (sentinel) scroll.body().append(sentinel);
         totalPages  = 1;
         currentPage = 1;
       } else if (object.all_sources && object.query) {
@@ -579,9 +618,9 @@
           Lampa.Controller.collectionFocus(false, html);
         },
         up:    function () { Lampa.Controller.move('up'); },
-        down:  function () { Lampa.Controller.move('down'); },
+        down:  function () { Lampa.Controller.move('down'); maybeLoadMore(); },
         left:  function () { Lampa.Controller.move('left'); },
-        right: function () { Lampa.Controller.move('right'); },
+        right: function () { Lampa.Controller.move('right'); maybeLoadMore(); },
         back:  function () { Lampa.Activity.backward(); }
       });
       Lampa.Controller.toggle('cherry_grid');
@@ -591,10 +630,12 @@
     this.pause   = function () {};
     this.stop    = function () {
       if (scroll) scroll.body().off('scroll');
+      if (_sentinelObserver) { _sentinelObserver.disconnect(); _sentinelObserver = null; }
       _stopCurrentPreview();
     };
 
     this.destroy = function () {
+      if (_sentinelObserver) { _sentinelObserver.disconnect(); _sentinelObserver = null; }
       _stopCurrentPreview();
       destroyed = true;
       if (html) html.remove();
@@ -639,6 +680,7 @@
         if (result && result.items && result.items.length) {
           totalPages = result.total_pages || 1;
           renderCards(result.items, scroll.body());
+          if (sentinel) scroll.body().append(sentinel);
           Lampa.Controller.collectionSet(html);
         } else if (page === 1) {
           html.find('.cherry-grid__empty').show();
@@ -706,6 +748,8 @@
           scroll.body().append(label);
           renderCards(g.items, scroll.body());
         });
+
+        if (sentinel) scroll.body().append(sentinel);
 
         Lampa.Controller.collectionSet(html);
       }).catch(function (err) {
@@ -1493,6 +1537,12 @@
       '  padding: .8em 0 .3em;',
       '  border-bottom: 1px solid rgba(255,255,255,.08);',
       '  margin-bottom: .3em;',
+      '}',
+      '.cherry-scroll-sentinel {',
+      '  width: 100%;',
+      '  height: 1px;',
+      '  grid-column: 1 / -1;',
+      '  pointer-events: none;',
       '}',
     ];
 
