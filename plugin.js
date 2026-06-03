@@ -54,8 +54,7 @@
     if (base === PROXY_URL && PROXY_URL_2) {
       try {
         var h = new URL(url).hostname;
-        // bigcdn wildcard covers all *.bigcdn.cc CDN subdomains
-        if (PROXY_URL_2_HOSTS[h] || /\.bigcdn\.cc$/.test(h)) base = PROXY_URL_2;
+        if (PROXY_URL_2_HOSTS[h]) base = PROXY_URL_2;
       } catch (e) {}
     }
     var p = base + '/proxy?url=' + encodeURIComponent(url);
@@ -2594,6 +2593,10 @@ SOURCES.push({
         return cherryFetch(video.url).then(function (html) {
             // Unescape JS-escaped slashes/quotes (WP JSON embed patterns)
             var clean = html.replace(/\\\//g, '/').replace(/\\"/g, '"');
+            // FluidPlayer uses {src:"url"} (unquoted key) — extractStreams only finds "file" key
+            var fpRx = /sources\s*[=:]\s*\[[\s\S]{0,2000}?['"]?src['"]?\s*:\s*['"]([^'"]+\.(?:mp4|m3u8)[^'"]{0,200})['"]/i;
+            var fpM = fpRx.exec(clean);
+            if (fpM) return { url: buildProxyUrl(fpM[1], 'https://pornone.com/'), quality: {} };
             var result = extractStreams(clean);
             if (result.url) {
                 // Pre-proxy with pornone.com referer so CDN accepts the request
@@ -2694,7 +2697,7 @@ SOURCES.push({
             var found = [];
             var m;
             while ((m = kvsRx.exec(html)) !== null) {
-                var candidate = m[0].replace(/['">\s]+$/, '');
+                var candidate = m[0].replace(/['">\/\s]+$/, '');
                 // Reconstruct absolute URL if the match lacks scheme
                 var full = /^https?:\/\//i.test(candidate)
                     ? candidate
@@ -3250,12 +3253,14 @@ SOURCES.push({
             if (m) {
                 return cherryFetch(m[1]).then(function (ihtml) {
                     // Porndig-specific patterns before generic fallback
+                    // P2 first (more specific: targets JWPlayer/FluidPlayer sources array)
+                    // P1 second (generic file/src key — could match preview URLs if run first)
                     var directUrl = '', dm;
-                    // Pattern 1: file/src key in JS object literal or assignment
-                    dm = /(?:file|src)\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))/i.exec(ihtml);
+                    // Pattern 2: sources array object-literal: sources:[{file:"url"}] or sources=[{src:"url"}]
+                    dm = /sources\s*[=:]\s*\[[\s\S]*?(?:file|src)\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))/i.exec(ihtml);
                     if (dm) directUrl = dm[1];
-                    // Pattern 2: sources array object-literal form: sources:[{file:"url"}] or sources=[{file:"url"}]
-                    if (!directUrl) { dm = /sources\s*[=:]\s*\[[\s\S]*?(?:file|src)\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))/i.exec(ihtml); if (dm) directUrl = dm[1]; }
+                    // Pattern 1: generic file/src key (fallback — may match preview if run first)
+                    if (!directUrl) { dm = /(?:file|src)\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))/i.exec(ihtml); if (dm) directUrl = dm[1]; }
                     // Pattern 3: data-src on <video>/<source> tag
                     if (!directUrl) { dm = /<(?:video|source)[^>]+data-src="([^"]+\.(?:mp4|m3u8))"/i.exec(ihtml); if (dm) directUrl = dm[1]; }
                     if (directUrl) return { url: directUrl, quality: {} };
@@ -3965,7 +3970,7 @@ SOURCES.push({
 
 function _rolikaCards(html) {
     var items = [];
-    var hrefRx = /href="((?:https?:\/\/w2\.huyalkino\.com)?\/[a-z]+\/\d+[^"]+\.html)"/g;
+    var hrefRx = /href="((?:https?:\/\/w2\.huyalkino\.com)?\/[a-z0-9][a-z0-9\-]*\/\d+[^"]+\.html)"/g;
     var seen = {};
     var m;
     while ((m = hrefRx.exec(html)) !== null) {
