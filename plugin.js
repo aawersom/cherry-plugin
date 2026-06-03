@@ -3966,11 +3966,13 @@ SOURCES.push({
 
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
-            // DLE + JWPlayer: file: "url.mp4"
-            var jwRx = /jwplayer\s*\(\s*['"]?\w+['"]?\s*\)\s*\.setup\s*\(\s*\{[\s\S]*?['"]?file['"]?\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))['"]/;
-            var m = jwRx.exec(html);
+            var m;
+            // Playerjs (DLE plugin): new Playerjs({file:"url"})
+            m = /Playerjs\s*\(\s*\{[^{}]*['"]?file['"]?\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))['"]/i.exec(html);
             if (m) return { url: buildProxyUrl(m[1], 'https://w2.huyalkino.com/'), quality: {} };
-
+            // JWPlayer fallback
+            m = /jwplayer\s*\([^)]*\)\s*\.setup\s*\(\s*\{[\s\S]{0,500}?['"]?file['"]?\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))['"]/i.exec(html);
+            if (m) return { url: buildProxyUrl(m[1], 'https://w2.huyalkino.com/'), quality: {} };
             return extractStreams(html);
         }).catch(function () { return { url: '', quality: {} }; });
     }
