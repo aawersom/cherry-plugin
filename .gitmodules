@@ -1,0 +1,3 @@
+[submodule "workers/cherry-proxy"]
+	path = workers/cherry-proxy
+	url = https://github.com/aawersom/cherry-proxy.git
