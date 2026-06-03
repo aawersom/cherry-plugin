@@ -1104,3 +1104,18 @@ describe('UX-A: plugin.js source assertions (anti-drift)', () => {
     expect(SRC).toMatch(/src\.browse\(\s*['"]['"]\s*,\s*1\s*\)/);
   });
 });
+
+// ── Android native stream (no-proxy) — px() + pornhub HLS ──────────────────────
+// On Android, the native player loads streams from the device home IP; the page
+// was also fetched natively from that IP, so IP-bound CDN tokens stay valid with
+// no proxy. px() must short-circuit to raw on Android, and pornhub must not
+// pre-proxy its HLS fallback on Android.
+describe('Android native stream — plugin.js source assertions (anti-drift)', () => {
+  it('px() returns the raw url on Android before any proxy wrapping', () => {
+    // The Android short-circuit must appear inside px(), ahead of the blob/proxy checks.
+    expect(SRC).toMatch(/function px\(u\)\s*\{[\s\S]{0,500}?if \(_isAndroid\(\)\) return u;/);
+  });
+  it('pornhub HLS fallback is raw on Android, proxied otherwise', () => {
+    expect(SRC).toMatch(/_isAndroid\(\)\s*\?\s*hlsUrls\[lbl\]\s*:\s*buildProxyUrl\(hlsUrls\[lbl\]/);
+  });
+});

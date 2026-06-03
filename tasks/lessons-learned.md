@@ -57,6 +57,14 @@ Pattern `['"]src['"]` requires quotes around key name — fails on `{src:"url"}`
 
 ---
 
+## android-native-stream (2026-06-04) — Mode: fast
+
+### L26: On Android, IP-bound CDN tokens need NO proxy — same device IP for page + stream
+The whole residential-proxy apparatus exists to keep page-fetch and CDN-fetch on the same exit IP (phncdn ipa, KVS get_file tokens). On a single Android device this is automatic: `cherryFetch` already fetches pages natively (`Lampa.Reguest.native`, home IP), and the native player loads the stream from the SAME home IP. So `px()` must short-circuit to the raw URL on Android — proxying there is pure overhead and breaks when the proxy is down. Browser still needs the proxy (CORS + datacenter-IP block). **Rule:** proxy decisions must be platform-aware; the native-app path and the browser path have opposite optimal answers.
+
+### L27: A stream that's pre-proxied IN THE ADAPTER bypasses px()'s platform logic
+Pornhub's HLS branch called `buildProxyUrl(...)` inside `getStream` itself (not via px). So fixing only `px()` left the HLS fallback still proxied on Android. Any adapter that pre-proxies a stream URL must also honor `_isAndroid()`. **Rule:** keep proxy-wrapping in ONE place (px at play time), or every pre-proxying adapter must replicate the platform guard. Audited: pornhub HLS was the only stream pre-proxier; MP4 path returns raw (correct).
+
 ## cherry-ux-v2 (2026-06-03) — Mode: full
 
 ### L13: Lampa.Keyboard vs Lampa.Select have different callback naming conventions
