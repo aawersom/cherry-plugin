@@ -21,7 +21,8 @@
     'www.youjizz.com': 1, 'youjizz.com': 1,
     // tizam.org: rate-limits rapid sequential CF datacenter requests
     'tv4.tizam.org': 1,
-    // pornone: moved to CF Worker SOCKS5 (Deno IP banned by pornone). See RESIDENTIAL in index.js.
+    // pornone: Deno (all subdomains via regex in buildProxyUrl — page + CDN same Deno IP for token affinity)
+    'pornone.com': 1, 'www.pornone.com': 1,
     // eporner: SOCKS5 instability — revert to Deno
     'www.eporner.com': 1,
     // spankbang ru: Deno for browse (SOCKS5 blocks even browse); stream remains broken (needs Playwright)
@@ -57,7 +58,7 @@
     if (base === PROXY_URL && PROXY_URL_2) {
       try {
         var h = new URL(url).hostname;
-        if (PROXY_URL_2_HOSTS[h] || /\.bigcdn\.cc$/.test(h)) base = PROXY_URL_2;
+        if (PROXY_URL_2_HOSTS[h] || /\.bigcdn\.cc$/.test(h) || /(?:^|\.)pornone\.com$/.test(h)) base = PROXY_URL_2;
       } catch (e) {}
     }
     var p = base + '/proxy?url=' + encodeURIComponent(url);
@@ -2604,25 +2605,15 @@ SOURCES.push({
 
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
-            // Unescape JS-escaped slashes/quotes (WP JSON embed patterns)
             var clean = html.replace(/\\\//g, '/').replace(/\\"/g, '"');
-            // FluidPlayer uses {src:"url"} (unquoted key) — extractStreams only finds "file" key
             var fpRx = /sources\s*[=:]\s*\[[\s\S]{0,2000}?['"]?src['"]?\s*:\s*['"]([^'"]+\.(?:mp4|m3u8)[^'"]{0,200})['"]/i;
             var fpM = fpRx.exec(clean);
-            if (fpM) return { url: buildProxyUrl(fpM[1], 'https://pornone.com/'), quality: {} };
+            if (fpM) return { url: fpM[1], quality: {} };
             var result = extractStreams(clean);
-            if (result.url) {
-                // Pre-proxy with pornone.com referer so CDN accepts the request
-                var q = {};
-                Object.keys(result.quality).forEach(function(k) {
-                    q[k] = buildProxyUrl(result.quality[k], 'https://pornone.com/');
-                });
-                return { url: buildProxyUrl(result.url, 'https://pornone.com/'), quality: q };
-            }
-            // Pornone-specific: FluidPlayer sources array or plain video URL in script
+            if (result.url) return { url: result.url, quality: result.quality };
             var m = clean.match(/['"](?:file|src|source|video_url|videoUrl)['"][\s:,]+['"]([^'"]+\.(?:mp4|m3u8)[^'"]*)['"]/i) ||
                     clean.match(/["'](https?:\/\/[^"'\s]+\.mp4[^"'\s]*)['"]/i);
-            if (m) return { url: buildProxyUrl(m[1], 'https://pornone.com/'), quality: {} };
+            if (m) return { url: m[1], quality: {} };
             return { url: '', quality: {} };
         }).catch(function () { return { url: '', quality: {} }; });
     }
