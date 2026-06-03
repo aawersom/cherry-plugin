@@ -2604,24 +2604,23 @@ SOURCES.push({
     },
 
     getStream: function (video) {
+        var ref = video.url; // KVS hotlink protection requires exact video page URL as Referer
         return cherryFetch(video.url).then(function (html) {
-            // Unescape JS-escaped slashes/quotes (WP JSON embed patterns)
             var clean = html.replace(/\\\//g, '/').replace(/\\"/g, '"');
-            // FluidPlayer uses {src:"url"} (unquoted key) — extractStreams only finds "file" key
             var fpRx = /sources\s*[=:]\s*\[[\s\S]{0,2000}?['"]?src['"]?\s*:\s*['"]([^'"]+\.(?:mp4|m3u8)[^'"]{0,200})['"]/i;
             var fpM = fpRx.exec(clean);
-            if (fpM) return { url: buildProxyUrl(fpM[1], 'https://pornone.com/'), quality: {} };
+            if (fpM) return { url: buildProxyUrl(fpM[1], ref), quality: {} };
             var result = extractStreams(clean);
             if (result.url) {
                 var q = {};
                 Object.keys(result.quality).forEach(function(k) {
-                    q[k] = buildProxyUrl(result.quality[k], 'https://pornone.com/');
+                    q[k] = buildProxyUrl(result.quality[k], ref);
                 });
-                return { url: buildProxyUrl(result.url, 'https://pornone.com/'), quality: q };
+                return { url: buildProxyUrl(result.url, ref), quality: q };
             }
             var m = clean.match(/['"](?:file|src|source|video_url|videoUrl)['"][\s:,]+['"]([^'"]+\.(?:mp4|m3u8)[^'"]*)['"]/i) ||
                     clean.match(/["'](https?:\/\/[^"'\s]+\.mp4[^"'\s]*)['"]/i);
-            if (m) return { url: buildProxyUrl(m[1], 'https://pornone.com/'), quality: {} };
+            if (m) return { url: buildProxyUrl(m[1], ref), quality: {} };
             return { url: '', quality: {} };
         }).catch(function () { return { url: '', quality: {} }; });
     }
