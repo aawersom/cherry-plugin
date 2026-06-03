@@ -55,7 +55,7 @@
     if (base === PROXY_URL && PROXY_URL_2) {
       try {
         var h = new URL(url).hostname;
-        if (PROXY_URL_2_HOSTS[h]) base = PROXY_URL_2;
+        if (PROXY_URL_2_HOSTS[h] || /\.bigcdn\.cc$/.test(h)) base = PROXY_URL_2;
       } catch (e) {}
     }
     var p = base + '/proxy?url=' + encodeURIComponent(url);
