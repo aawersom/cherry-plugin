@@ -569,6 +569,36 @@ Live testing session. All originally-reported broken channels fixed.
 
 ---
 
+## UX v2 (cherry-ux-v2, 2026-06-04)
+
+Seven UI/UX features added in full-pipeline mode. No card-parsing / stream / proxy logic touched.
+
+| Feature | What | Key mechanism |
+|---|---|---|
+| **UX-E** | Empty favorites screen shows "hold OK to add" hint | `cherry_fav_empty_hint`; child-before-parent show order |
+| **UX-G** | "Похожие" item in card long-press menu | guarded by `source.getRelated`; action `'related'` → `_related_items` grid |
+| **UX-C** | Preview toggle in Lampa Settings | `SettingsApi.addComponent('cherry')` + `addParam` type `trigger`; long-press fallback kept |
+| **P0** | Three header buttons: Search / Sort / Category | `.cherry-grid__actions`; visible per `canSearch`/`hasSorts`/`hasCats`; replaces old `.cherry-grid__filters` |
+| **P1** | D-pad infinite scroll | `IntersectionObserver` sentinel (root:null, 400px) + `maybeLoadMore()` in down/right handlers (survives stop→start) + 300px scroll listener |
+| **P2** | Grouped search results | `loadAllSources` groups by source (SOURCES order, max 10 each) under `.cherry-group-label`; was alphabetical merge |
+| **UX-A** | Home screen row mode | `cherry_home_mode` (tiles\|rows); rows = one `browse('',1)` strip per source; in-place toggle via long-press menu |
+
+**New i18n keys:** `cherry_fav_empty_hint`, `cherry_view_rows`, `cherry_view_tiles` (+ reused `cherry_related`, `cherry_search`, `cherry_sort`, `cherry_category`).
+**New templates:** `cherry_group_label`, `cherry_source_row`.
+**New storage keys:** `cherry_home_mode` (default `'tiles'`).
+
+**Key invariants enforced this iteration (see lessons L13–L25):**
+- `Lampa.Keyboard` callbacks are lowercase (`onenter`/`onback`); `Lampa.Select` camelCase (`onSelect`/`onBack`).
+- `SettingsApi.addComponent` MUST precede `addParam`; boolean type is `trigger` (auto-persists by param name).
+- `video.source = src.id` set on every synthesized row card (Fav 7-field invariant).
+- Infinite-scroll's survivable trigger is the D-pad `maybeLoadMore()` in controller handlers (observer/scroll die on first `stop()`).
+- A `destroyed`-guard inside a re-push `setTimeout` is an anti-guard — it blocks the intended re-render; use a `_toggling` re-entrancy flag instead.
+- `Promise.resolve(src.browse(...))` wraps adapter calls in row mode (non-thenable safety across 24 adapters).
+
+**Row-mode v1 scope:** cards are play-only (no fav badge, no preview, no long-press) — see backlog BL-4.
+
+---
+
 ## Source Status — Iteration 4 (live test 2026-06-03)
 
 Second live session. Iteration 3 fixes for porntrex/porndig/pornone/24rolika were incomplete or had wrong root causes. Full re-diagnosis and re-fix.
