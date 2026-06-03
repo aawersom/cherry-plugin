@@ -26,6 +26,8 @@
     'www.eporner.com': 1,
     // spankbang ru: Deno for browse (SOCKS5 blocks even browse); stream remains broken (needs Playwright)
     'ru.spankbang.com': 1,
+    // mydaddy.cc: bigcdn tokens IP-bound to mydaddy.cc fetch IP — must use same proxy as bigcdn
+    'mydaddy.cc': 1,
     // bigcdn.cc all subdomains covered by /\.bigcdn\.cc$/ regex in buildProxyUrl
     // perfektdamen KVS CDN — IP-bound tokens require consistent egress IP
     'www.perfektdamen.co': 1

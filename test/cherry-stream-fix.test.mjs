@@ -23,6 +23,8 @@ var PROXY_URL_2_HOSTS = {
   'www.eporner.com': 1,
   // spankbang ru: Deno for browse; stream broken (needs Playwright)
   'ru.spankbang.com': 1,
+  // mydaddy.cc: bigcdn tokens IP-bound to mydaddy.cc fetch IP
+  'mydaddy.cc': 1,
   'www.perfektdamen.co': 1
 };
 
@@ -249,6 +251,7 @@ var PROXY_URL_2_HOSTS_A = {
   'tv4.tizam.org': 1,
   'www.eporner.com': 1,
   'ru.spankbang.com': 1,
+  'mydaddy.cc': 1,
   'www.perfektdamen.co': 1
 };
 
