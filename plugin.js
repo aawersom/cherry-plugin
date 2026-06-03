@@ -2608,12 +2608,18 @@ SOURCES.push({
             var clean = html.replace(/\\\//g, '/').replace(/\\"/g, '"');
             var fpRx = /sources\s*[=:]\s*\[[\s\S]{0,2000}?['"]?src['"]?\s*:\s*['"]([^'"]+\.(?:mp4|m3u8)[^'"]{0,200})['"]/i;
             var fpM = fpRx.exec(clean);
-            if (fpM) return { url: fpM[1], quality: {} };
+            if (fpM) return { url: buildProxyUrl(fpM[1], 'https://pornone.com/'), quality: {} };
             var result = extractStreams(clean);
-            if (result.url) return { url: result.url, quality: result.quality };
+            if (result.url) {
+                var q = {};
+                Object.keys(result.quality).forEach(function(k) {
+                    q[k] = buildProxyUrl(result.quality[k], 'https://pornone.com/');
+                });
+                return { url: buildProxyUrl(result.url, 'https://pornone.com/'), quality: q };
+            }
             var m = clean.match(/['"](?:file|src|source|video_url|videoUrl)['"][\s:,]+['"]([^'"]+\.(?:mp4|m3u8)[^'"]*)['"]/i) ||
                     clean.match(/["'](https?:\/\/[^"'\s]+\.mp4[^"'\s]*)['"]/i);
-            if (m) return { url: m[1], quality: {} };
+            if (m) return { url: buildProxyUrl(m[1], 'https://pornone.com/'), quality: {} };
             return { url: '', quality: {} };
         }).catch(function () { return { url: '', quality: {} }; });
     }
