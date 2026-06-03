@@ -2181,10 +2181,12 @@ SOURCES.push({
       var id = hrefMatch[1];
       var videoUrl = 'https://ru.spankbang.com/' + id + '/video/';
 
-      var thumbMatch = block.match(/data-src="([^"]+)"/) ||
-                       block.match(/src="(https:\/\/tbi\.sb-cd\.com\/[^"]+)"/) ||
-                       block.match(/src="([^"]+\.(?:jpg|webp|jpeg)[^"]*)"/);
-      var thumb = thumbMatch ? thumbMatch[1] : '';
+      // Only accept absolute https:// URLs — skips data: placeholders from lazy-loaders
+      var thumb = '';
+      var tM = block.match(/data-(?:src|original|lazy|thumb)="(https?:\/\/[^"]+\.(?:jpg|jpeg|webp|png)[^"]*)"/i) ||
+               block.match(/src="(https?:\/\/tbi\.sb-cd\.com\/[^"]+)"/i) ||
+               block.match(/src="(https?:\/\/[^"]+\.(?:jpg|jpeg|webp)(?:\?[^"]*)?)"/i);
+      if (tM) thumb = tM[1];
 
       // Preview: data-video on the card div, or <source>/<video> inside card
       var previewMatch = block.match(/data-video="([^"]+)"/) ||
