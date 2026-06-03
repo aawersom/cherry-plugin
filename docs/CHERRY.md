@@ -189,6 +189,8 @@ Used for hostnames in `PROXY_URL_2_HOSTS` or matching `/\.bigcdn\.cc$/`:
 | `ru.spankbang.com` | Deno bypasses Spankbang bot-check for listing+video pages |
 | `mydaddy.cc` | bigcdn IP-bound token — must use same IP as bigcdn CDN fetch |
 | `www.perfektdamen.co` | KVS IP-bound tokens — consistent Deno GCP IP |
+| `pornone.com`, `www.pornone.com` | KVS IP-bound tokens — CF edge drift causes 403/410; Deno GCP fixed IP |
+| `porntrex.com`, `www.porntrex.com` | KVS IP-bound tokens — CF edge drift causes 410; Deno GCP fixed IP |
 | `/\.bigcdn\.cc$/` (regex) | All bigcdn subdomains; IP-bound to mydaddy.cc fetch IP |
 
 **Critical pairing rule:** domains whose CDN uses IP-bound tokens must be in the
@@ -254,14 +256,14 @@ Only safe for plain pass-through proxies that do NOT rewrite M3U8.
 | 5 | `spankbang` | Spankbang | ru.spankbang.com | Deno | Quality map regex + streamkey POST fallback; `ru.` subdomain bypasses bot-check | ✅ Working |
 | 6 | `hqporner` | HQPorner | hqporner.com | CF (page) → Deno (mydaddy.cc + bigcdn) | hqporner.com page via CF; embed `mydaddy.cc` + CDN `*.bigcdn.cc` both via Deno (same GCP IP for IP-bound token) | ✅ Working |
 | 7 | `youjizz` | YouJizz | youjizz.com | Deno | Direct MP4 | ✅ Working |
-| 8 | `pornone` | PornOne | pornone.com | CF SOCKS5 (RESIDENTIAL) | FluidPlayer `{src:"url"}` extraction first, then `extractStreams` fallback | ✅ Working |
-| 9 | `porntrex` | Porntrex | porntrex.com | CF datacenter | KVS `get_file/` URL extraction; trailing slash stripped | ✅ Working |
+| 8 | `pornone` | PornOne | pornone.com | Deno | KVS IP-bound tokens — page + CDN both via Deno GCP IP for token affinity | ✅ Working |
+| 9 | `porntrex` | Porntrex | porntrex.com | Deno | KVS IP-bound tokens — page + CDN both via Deno GCP IP; 410 on CF edge drift | ✅ Working |
 | 10 | `xozilla` | Xozilla | xozilla.com | CF datacenter | KVS `_kvsEngine` | ✅ Working |
 | 11 | `3movs` | 3Movs | 3movs.com | CF datacenter | KVS signed-token | ✅ Working (token may expire) |
 | 12 | `analdin` | Analdin | analdin.com | CF datacenter | KVS `_kvsEngine` | ✅ Working |
 | 13 | `pornve` | PornVe | pornve.com | CF datacenter | `videoUrl:` JS var | ✅ Working (token may expire) |
 | 14 | `familyporn` | FamilyPorn | familyporn.tv | CF datacenter | KVS CDN | ✅ Working (token may expire) |
-| 15 | `porndig` | Porndig | porndig.com | CF datacenter | iframe player: sources array pattern first, then generic `file/src` fallback | ✅ Working |
+| 15 | `porndig` | Porndig | porndig.com | CF datacenter | Custom VHS player (videos.porndig.com); `"srcSet"` JSON extraction with `\/`-unescape; skips preview entries | ✅ Working |
 | 16 | `tizam` | Tizam | tv4.tizam.org | Deno | Direct MP4 | ✅ Working |
 | 17 | `perfektdamen` | PerfektDamen | perfektdamen.co | Deno | KVS CDN, IP-bound | ✅ Working |
 | 18 | `hellporno` | HellPorno | hellporno.com | CF datacenter | KVS `_kvsEngine` | ✅ Working |
@@ -270,7 +272,7 @@ Only safe for plain pass-through proxies that do NOT rewrite M3U8.
 | 21 | `huyamba` | Huyamba | fuq.huyamba.mobi | — | — | ❌ Disabled (site dead 2026-06) |
 | 22 | `ebun` | Ebun | www1.ebun.tv | CF datacenter | HTML scraping | ✅ Working (token may expire) |
 | 23 | `lenporno` | LenPorno | www.lenporno.net | CF datacenter | Custom CDN path | ✅ Working |
-| 24 | `24rolika` | 24Rolika | w2.huyalkino.com | CF datacenter | DLE + JWPlayer; category regex supports `/cat-name/` with hyphens and digits | ✅ Working |
+| 24 | `24rolika` | 24Rolika | w2.huyalkino.com | CF datacenter | DLE + Playerjs (`new Playerjs({file:"url"})`) → videosdrop.com CDN mp4 | ✅ Working |
 | 25 | `jopaonline` | JopaOnline | jopaonline.mobi | CF datacenter | DLE + JWPlayer | ✅ Working |
 
 **Proxy tier legend:**
@@ -563,6 +565,43 @@ Live testing session. All originally-reported broken channels fixed.
 ### Key architectural lesson (L12)
 
 **Residential proxy ports ≠ same exit IP.** Pool-based residential proxies (e.g. 45.91.209.155:11750–11756) assign different residential exit IPs per port. DJB2 domain-hash must produce the same port for all requests sharing an IP-bound token. Fix: ensure all requests in a session propagate the same `referer` domain so DJB2 consistently selects the same port.
+
+---
+
+## Source Status — Iteration 4 (live test 2026-06-03)
+
+Second live session. Iteration 3 fixes for porntrex/porndig/pornone/24rolika were incomplete or had wrong root causes. Full re-diagnosis and re-fix.
+
+### Fixes applied in this iteration
+
+| id | was broken | actual root cause | fix |
+|---|---|---|---|
+| `pornone` | Still broken after Iter 3 FluidPlayer fix | KVS IP-bound tokens: CF Worker edge nodes have different exit IPs per request → token mismatch → 403 | Add `pornone.com`, `www.pornone.com` to `PROXY_URL_2_HOSTS` → Deno Deploy fixed GCP IP for both page fetch and CDN |
+| `porntrex` | 410 Gone on video | KVS IP-bound tokens: same CF edge drift problem as pornone | Add `porntrex.com`, `www.porntrex.com` to `PROXY_URL_2_HOSTS` → Deno routing |
+| `porndig` | Preview clip played instead of real video | Player uses custom VHS player (not JWPlayer/FluidPlayer). Sources in `"srcSet":[{src,label}]` JSON (not `sources:`). Slashes escaped as `\/`. Previous swap-pattern fix never matched the actual structure. | Rewrite `getStream`: find all `"srcSet"` arrays, iterate `{src,label}` entries, filter numeric labels ≥240, unescape `\/` in URLs. Fallback does NOT call `extractStreams(html)` (main page only has preview clips). |
+| `24rolika` | Couldn't extract video URL | Site uses `Playerjs` player (`new Playerjs({file:"url"})`), not JWPlayer. Old regex matched `jwplayer(...).setup(...)` which never fires. | Add Playerjs regex as primary; keep JWPlayer as fallback |
+| `pornhub` | Intermittent 410 on HLS manifest (not every play) | Race condition in SOCKS5 fallback: if primary port fails for page fetch → fallback to port Y (IP B). Manifest fetch retries primary port (now recovered, IP A). Token was generated for IP B → 410. | Set `maxTries = 1` for phncdn + pornhub in `fetchViaResidential` — no fallback on SOCKS5 failure. Clean error beats silent IP switch. |
+
+### UI fixes applied in this iteration
+
+| location | was wrong | fixed to |
+|---|---|---|
+| Long-press context menu — favorites item | "Добавлено в избранное" / "Убрано из избранного" (past tense — sounds like confirmation, not action) | "Добавить в избранное" / "Убрать из избранного" (infinitive — correct for a menu action) |
+| First-run proxy key notification | Hardcoded Russian string, no i18n | Added `cherry_proxy_key_init` key with ru + en translations |
+
+**Key rule preserved:** toast notifications after the action keep past-tense form ("Добавлено в избранное") — this is correct for a toast confirming a completed action. Menu item labels use infinitive ("Добавить") — this is correct for an available action.
+
+### Known limitations after Iteration 4
+
+| id | limitation | notes |
+|---|---|---|
+| `pornhub` | If DJB2-selected SOCKS5 port is down, pornhub fails completely | Clean failure; retry immediately gets fresh token via same port (once port recovers) |
+| `porndig` | VHS player tokens have expiry (`expires=` param) | Works in live Lampa (immediate playback); may fail if player page fetch is slow |
+| `24rolika` | ~2/6 videos may appear to not load on fast double-click | Race condition: second `hover:enter` fires `playVideo` again, interrupts `video.play()` promise. Not a plugin bug — don't double-click. |
+
+### Channels confirmed working after Iteration 4
+
+`pornone`, `porntrex`, `porndig`, `24rolika`, `pornhub` — all confirmed by live user test.
 
 ---
 
