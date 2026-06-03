@@ -24,8 +24,7 @@
     // pornone: moved to CF Worker SOCKS5 (Deno IP banned by pornone). See RESIDENTIAL in index.js.
     // eporner: SOCKS5 instability — revert to Deno
     'www.eporner.com': 1,
-    // spankbang ru: SOCKS5 403 on ru subdomain; Deno works (www remains JS-challenge gated)
-    'ru.spankbang.com': 1,
+    // spankbang ru: moved to CF Worker SOCKS5 residential (Deno GCP IP blocked by spankbang)
     // bigcdn.cc all subdomains covered by /\.bigcdn\.cc$/ regex in buildProxyUrl
     // perfektdamen KVS CDN — IP-bound tokens require consistent egress IP
     'www.perfektdamen.co': 1

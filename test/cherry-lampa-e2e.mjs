@@ -33,7 +33,7 @@ const PROXY_URL_2_HOSTS = {
   'tv4.tizam.org': 1,
   // pornone moved to CF Worker SOCKS5 (Deno IP banned)
   'www.eporner.com': 1,
-  'ru.spankbang.com': 1,
+  // ru.spankbang.com moved to CF Worker SOCKS5 (Deno GCP IP blocked by spankbang)
   'www.perfektdamen.co': 1,
 };
 const VIDEO_TIMEOUT_MS = 35000;
