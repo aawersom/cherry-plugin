@@ -33,6 +33,7 @@ const PROXY_URL_2_HOSTS = {
   'tv4.tizam.org': 1,
   // pornone moved to CF Worker SOCKS5 (Deno IP banned)
   'www.eporner.com': 1,
+  // spankbang ru: Deno for browse; stream broken (needs Playwright)
   'ru.spankbang.com': 1,
   'www.perfektdamen.co': 1,
 };
