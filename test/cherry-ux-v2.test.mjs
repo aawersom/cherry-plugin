@@ -484,3 +484,210 @@ describe('P2: plugin.js source assertions (anti-drift)', () => {
     expect(SRC).not.toMatch(/all\.sort\(/);
   });
 });
+
+// ============================================================
+// P0 — Three Header Buttons (Search / Sort / Category)
+// (behaviour documentation)
+//
+// Mirrors the visibility rules and per-source search Activity shape from
+// CherryGrid.create() after Phase 3. Pure functions only — no DOM, no Lampa.
+// ============================================================
+
+describe('P0: computeVisibility — POST behaviour', function () {
+  /**
+   * Pure mirror of the canSearch / hasSorts / hasCats rules in CherryGrid.create().
+   *
+   * canSearch  = NOT is_favorites AND NOT all_sources AND NOT _related_items AND NOT model_url
+   *              (model browse is already filtered to a performer, so per-source text
+   *               search does not apply there).
+   * sort       = source.cfg.sorts exists & length > 0
+   * cat        = source.cfg.categories exists & length > 0
+   *
+   * Returns plain booleans so callers can assert exact truthiness.
+   */
+  function computeVisibility(object, source) {
+    object = object || {};
+    var canSearch = !object.is_favorites
+                 && !object.all_sources
+                 && !object._related_items
+                 && !object.model_url;
+    var hasSorts = !!(source && source.cfg && source.cfg.sorts && source.cfg.sorts.length);
+    var hasCats  = !!(source && source.cfg && source.cfg.categories && source.cfg.categories.length);
+    return { search: !!canSearch, sort: hasSorts, cat: hasCats };
+  }
+
+  var fullSource = {
+    id: 'pornhub',
+    name: 'Pornhub',
+    cfg: {
+      sorts:      [{ id: 'mr', label: 'Most recent' }],
+      categories: [{ id: 'milf', label: 'MILF' }]
+    }
+  };
+
+  var bareSource = { id: 'bare', name: 'Bare' }; // no cfg at all
+
+  it('favorites grid: search false', function () {
+    var v = computeVisibility({ is_favorites: true, source_id: 'pornhub' }, fullSource);
+    expect(v.search).toBe(false);
+  });
+
+  it('all_sources grid: search false', function () {
+    var v = computeVisibility({ all_sources: true, query: 'cat' }, fullSource);
+    expect(v.search).toBe(false);
+  });
+
+  it('model_url grid: search false (per-source search N/A for model browse)', function () {
+    var v = computeVisibility({ model_url: 'https://x/model/foo', source_id: 'pornhub' }, fullSource);
+    expect(v.search).toBe(false);
+  });
+
+  it('related-items grid: search false', function () {
+    var v = computeVisibility({ _related_items: [{ title: 'a' }], source_id: 'pornhub' }, fullSource);
+    expect(v.search).toBe(false);
+  });
+
+  it('normal source grid: search true', function () {
+    var v = computeVisibility({ source_id: 'pornhub' }, fullSource);
+    expect(v.search).toBe(true);
+  });
+
+  it('normal source with sorts: sort true', function () {
+    var v = computeVisibility({ source_id: 'pornhub' }, fullSource);
+    expect(v.sort).toBe(true);
+  });
+
+  it('normal source with categories: cat true', function () {
+    var v = computeVisibility({ source_id: 'pornhub' }, fullSource);
+    expect(v.cat).toBe(true);
+  });
+
+  it('source without categories: cat false', function () {
+    var noCat = { id: 's', cfg: { sorts: [{ id: 'mr', label: 'MR' }] } };
+    var v = computeVisibility({ source_id: 's' }, noCat);
+    expect(v.cat).toBe(false);
+    expect(v.sort).toBe(true);
+  });
+
+  it('source without sorts: sort false', function () {
+    var noSort = { id: 's', cfg: { categories: [{ id: 'a', label: 'A' }] } };
+    var v = computeVisibility({ source_id: 's' }, noSort);
+    expect(v.sort).toBe(false);
+    expect(v.cat).toBe(true);
+  });
+
+  it('bare source (no cfg): only search is true', function () {
+    var v = computeVisibility({ source_id: 'bare' }, bareSource);
+    expect(v).toEqual({ search: true, sort: false, cat: false });
+  });
+
+  it('empty sorts/categories arrays count as absent', function () {
+    var empties = { id: 's', cfg: { sorts: [], categories: [] } };
+    var v = computeVisibility({ source_id: 's' }, empties);
+    expect(v.sort).toBe(false);
+    expect(v.cat).toBe(false);
+  });
+
+  it('favorites with full cfg: search false but sort/cat still driven by cfg', function () {
+    var v = computeVisibility({ is_favorites: true }, fullSource);
+    expect(v.search).toBe(false);
+    expect(v.sort).toBe(true);
+    expect(v.cat).toBe(true);
+  });
+});
+
+describe('P0: buildPerSourceSearchActivity — POST behaviour', function () {
+  /**
+   * Pure mirror of the Activity.push payload built by the action-search onenter
+   * handler. The defining property of P0 search is that it stays WITHIN one
+   * source (source_id set, all_sources NOT set) — distinct from the cherry_main
+   * global search which sets all_sources: true.
+   */
+  function buildPerSourceSearchActivity(query, sourceId) {
+    return {
+      component: 'cherry_grid',
+      query:     query,
+      source_id: sourceId,
+      page:      1
+    };
+  }
+
+  it('component is cherry_grid', function () {
+    var a = buildPerSourceSearchActivity('milf', 'pornhub');
+    expect(a.component).toBe('cherry_grid');
+  });
+
+  it('carries the query', function () {
+    var a = buildPerSourceSearchActivity('milf', 'pornhub');
+    expect(a.query).toBe('milf');
+  });
+
+  it('carries source_id (per-source, single source)', function () {
+    var a = buildPerSourceSearchActivity('milf', 'pornhub');
+    expect(a.source_id).toBe('pornhub');
+  });
+
+  it('starts at page 1', function () {
+    var a = buildPerSourceSearchActivity('milf', 'pornhub');
+    expect(a.page).toBe(1);
+  });
+
+  it('does NOT set all_sources (this is per-source, not global search)', function () {
+    var a = buildPerSourceSearchActivity('milf', 'pornhub');
+    expect(a.all_sources).toBeUndefined();
+    expect(a).not.toHaveProperty('all_sources', true);
+  });
+});
+
+// ============================================================
+// P0 — plugin.js source assertions (anti-drift)
+// ============================================================
+
+describe('P0: plugin.js source assertions (anti-drift)', () => {
+  it('template/handlers reference all three action button classes', () => {
+    expect(SRC).toContain('cherry-grid__action-search');
+    expect(SRC).toContain('cherry-grid__action-sort');
+    expect(SRC).toContain('cherry-grid__action-cat');
+  });
+
+  it('canSearch excludes is_favorites, all_sources, _related_items AND model_url', () => {
+    // All four exclusions must appear in a single canSearch assignment.
+    expect(SRC).toMatch(
+      /canSearch\s*=\s*!object\.is_favorites[\s\S]{0,120}!object\.all_sources[\s\S]{0,120}!object\._related_items[\s\S]{0,120}!object\.model_url/
+    );
+  });
+
+  it('action-search handler opens Lampa.Keyboard.show with lowercase onenter', () => {
+    // onenter must be wired specifically into the per-source search handler,
+    // i.e. near a cherry-grid__action-search reference (bindSearch already uses
+    // onenter, so a bare /onenter/ check would be a false green).
+    expect(SRC).toMatch(/cherry-grid__action-search[\s\S]{0,400}Lampa\.Keyboard\.show/);
+    expect(SRC).toMatch(/cherry-grid__action-search[\s\S]{0,500}onenter\s*:/);
+  });
+
+  it('per-source search Activity.push sets source_id but not all_sources', () => {
+    // The action-search onenter handler pushes cherry_grid with source_id and
+    // WITHOUT all_sources: true.
+    expect(SRC).toMatch(
+      /cherry-grid__action-search[\s\S]{0,600}Lampa\.Activity\.push\([\s\S]{0,300}source_id/
+    );
+  });
+
+  it('old .cherry-grid__filters bar is removed', () => {
+    expect(SRC).not.toContain('cherry-grid__filters');
+  });
+
+  it('old .cherry-grid__filter-sort class is gone (replaced by action-sort)', () => {
+    expect(SRC).not.toContain('cherry-grid__filter-sort');
+  });
+
+  it('old .cherry-grid__filter-cat class is gone (replaced by action-cat)', () => {
+    expect(SRC).not.toContain('cherry-grid__filter-cat');
+  });
+
+  it('reused lang keys cherry_search / cherry_sort / cherry_category exist', () => {
+    expect(SRC).toMatch(/cherry_search\s*:/);
+    expect(SRC).toMatch(/cherry_sort\s*:/);
+    expect(SRC).toMatch(/cherry_category\s*:/);
+  });
+});

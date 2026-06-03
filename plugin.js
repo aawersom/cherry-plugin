@@ -470,17 +470,42 @@
       scroll.body().addClass('cherry-cards-wrap');
       html.find('.cherry-grid__body').append(scroll.render());
 
-      // REQ-5: filter bar visibility + handlers.
-      var hasSorts = source && source.cfg && source.cfg.sorts && source.cfg.sorts.length;
-      var hasCats  = source && source.cfg && source.cfg.categories && source.cfg.categories.length;
+      // P0: action bar — Search / Sort / Category buttons + visibility + handlers.
+      // model_url excluded: model browse is already filtered to a performer — per-source search does not apply here
+      var canSearch = !object.is_favorites && !object.all_sources && !object._related_items && !object.model_url;
+      var hasSorts  = source && source.cfg && source.cfg.sorts   && source.cfg.sorts.length;
+      var hasCats   = source && source.cfg && source.cfg.categories && source.cfg.categories.length;
 
-      if (hasSorts || hasCats) {
-        html.find('.cherry-grid__filters').show();
-      }
-      if (!hasSorts) { html.find('.cherry-grid__filter-sort').hide(); }
-      if (!hasCats)  { html.find('.cherry-grid__filter-cat').hide(); }
+      if (canSearch) html.find('.cherry-grid__action-search').show();
+      if (hasSorts)  html.find('.cherry-grid__action-sort').show();
+      if (hasCats)   html.find('.cherry-grid__action-cat').show();
 
-      html.find('.cherry-grid__filter-sort').on('hover:enter', function () {
+      html.find('.cherry-grid__action-search').on('hover:enter', function () {
+        if (!source) return;
+        // Guard for forks without Lampa.Keyboard (mirrors bindSearch in CherryMain).
+        if (typeof Lampa.Keyboard === 'undefined' || !Lampa.Keyboard.show) return;
+        Lampa.Keyboard.show({
+          title:   Lampa.Lang.translate('cherry_search'),
+          value:   object.query || '',
+          onenter: function (text) {
+            var q = (text || '').trim();
+            if (!q) {
+              Lampa.Controller.toggle('cherry_grid');
+              return;
+            }
+            Lampa.Activity.push({
+              component: 'cherry_grid',
+              title:     source.name + ': ' + q,
+              source_id: object.source_id,
+              query:     q,
+              page:      1
+            });
+          },
+          onback: function () { Lampa.Controller.toggle('cherry_grid'); }
+        });
+      });
+
+      html.find('.cherry-grid__action-sort').on('hover:enter', function () {
         if (!source || !source.cfg || !source.cfg.sorts) return;
         var items = source.cfg.sorts.map(function (s) {
           return { title: s.label, id: s.id };
@@ -494,7 +519,7 @@
             var sortLabel = currentSort
               ? _findLabel(source.cfg.sorts, currentSort)
               : Lampa.Lang.translate('cherry_sort');
-            html.find('.cherry-grid__filter-sort').text(sortLabel);
+            html.find('.cherry-grid__action-sort').text(sortLabel);
             _reloadFromStart();
             Lampa.Controller.toggle('cherry_grid');
           },
@@ -502,7 +527,7 @@
         });
       });
 
-      html.find('.cherry-grid__filter-cat').on('hover:enter', function () {
+      html.find('.cherry-grid__action-cat').on('hover:enter', function () {
         if (!source || !source.cfg || !source.cfg.categories) return;
         var items = source.cfg.categories.map(function (c) {
           return { title: c.label, id: c.id };
@@ -516,7 +541,7 @@
             var catLabel = currentCategory
               ? _findLabel(source.cfg.categories, currentCategory)
               : Lampa.Lang.translate('cherry_category');
-            html.find('.cherry-grid__filter-cat').text(catLabel);
+            html.find('.cherry-grid__action-cat').text(catLabel);
             _reloadFromStart();
             Lampa.Controller.toggle('cherry_grid');
           },
@@ -1056,9 +1081,10 @@
       '<div class="cherry-grid layer--wheight">',
         '<div class="cherry-grid__head">',
           '<div class="cherry-grid__title">{title}</div>',
-          '<div class="cherry-grid__filters" style="display:none">',
-            '<div class="cherry-grid__filter-sort selector">#{cherry_sort}</div>',
-            '<div class="cherry-grid__filter-cat selector">#{cherry_category}</div>',
+          '<div class="cherry-grid__actions">',
+            '<div class="cherry-grid__action-search selector" style="display:none">#{cherry_search}</div>',
+            '<div class="cherry-grid__action-sort selector" style="display:none">#{cherry_sort}</div>',
+            '<div class="cherry-grid__action-cat selector" style="display:none">#{cherry_category}</div>',
           '</div>',
         '</div>',
         '<div class="cherry-grid__body"></div>',
@@ -1435,16 +1461,16 @@
       '  outline: 1px solid #e75480;',
       '}',
 
-      /* REQ-5: Filter bar */
-      '.cherry-grid__filters {',
+      /* P0: action bar */
+      '.cherry-grid__actions {',
       '  display: flex;',
+      '  gap: .6em;',
       '  padding: .4em 0 .2em;',
+      '  flex-wrap: wrap;',
       '}',
-      '.cherry-grid__filter-sort + .cherry-grid__filter-cat {',
-      '  margin-left: .6em;',
-      '}',
-      '.cherry-grid__filter-sort,',
-      '.cherry-grid__filter-cat {',
+      '.cherry-grid__action-search,',
+      '.cherry-grid__action-sort,',
+      '.cherry-grid__action-cat {',
       '  background: rgba(255,255,255,.1);',
       '  color: rgba(255,255,255,.85);',
       '  font-size: .82em;',
@@ -1453,8 +1479,9 @@
       '  cursor: pointer;',
       '  border: 1px solid transparent;',
       '}',
-      '.cherry-grid__filter-sort.focus,',
-      '.cherry-grid__filter-cat.focus {',
+      '.cherry-grid__action-search.focus,',
+      '.cherry-grid__action-sort.focus,',
+      '.cherry-grid__action-cat.focus {',
       '  border-color: #e75480;',
       '}',
       '.cherry-group-label {',
