@@ -327,6 +327,11 @@
       // Proxy non-blob stream URLs so that tokens bound to the proxy IP stay valid.
       function px(u) {
         if (!u) return u;
+        // Android: native player loads the stream directly from the device's
+        // home (residential) IP. Since the page was also fetched natively from
+        // the same IP, IP-bound CDN tokens (phncdn, KVS get_file) stay valid
+        // with NO proxy. Hand the raw URL to the native player.
+        if (_isAndroid()) return u;
         if (u.indexOf('blob:') === 0) return u;
         if (PROXY_URL_3 && u.indexOf(PROXY_URL_3) === 0) return u; // skip VPS-proxied URLs
         if (PROXY_URL_2 && u.indexOf(PROXY_URL_2) === 0) return u; // skip Deno-proxied URLs
@@ -2175,7 +2180,10 @@ SOURCES.push({
       if (Object.keys(hlsUrls).length) {
         var quality = {};
         Object.keys(hlsUrls).forEach(function(lbl) {
-          quality[lbl] = buildProxyUrl(hlsUrls[lbl], 'https://www.pornhub.com/');
+          // Android: hand raw HLS m3u8 to the native player — it fetches the
+          // playlist + phncdn segments from the home IP, keeping ipa-bound
+          // tokens valid without a proxy. Browser: proxy (CORS + IP affinity).
+          quality[lbl] = _isAndroid() ? hlsUrls[lbl] : buildProxyUrl(hlsUrls[lbl], 'https://www.pornhub.com/');
         });
         return { url: bestQualityUrl(quality), quality: quality };
       }
