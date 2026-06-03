@@ -21,8 +21,9 @@
     'www.youjizz.com': 1, 'youjizz.com': 1,
     // tizam.org: rate-limits rapid sequential CF datacenter requests
     'tv4.tizam.org': 1,
-    // pornone: Deno (all subdomains via regex in buildProxyUrl — page + CDN same Deno IP for token affinity)
+    // pornone/porntrex: Deno — KVS IP-bound tokens require page+CDN on same fixed IP
     'pornone.com': 1, 'www.pornone.com': 1,
+    'porntrex.com': 1, 'www.porntrex.com': 1,
     // eporner: SOCKS5 instability — revert to Deno
     'www.eporner.com': 1,
     // spankbang ru: Deno for browse (SOCKS5 blocks even browse); stream remains broken (needs Playwright)
