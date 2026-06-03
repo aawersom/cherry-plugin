@@ -347,3 +347,140 @@ describe('plugin.js source assertions (anti-drift)', () => {
     expect(SRC).toMatch(/type:\s*'trigger'/);
   });
 });
+
+// ============================================================
+// P2 — Grouped Search Results (behaviour documentation)
+// ============================================================
+
+describe('P2: groupResults — POST behaviour', function () {
+  /**
+   * Pure mirror of loadAllSources() grouped-render logic.
+   * Input: array of { source, name, items } in SOURCES order (one per source,
+   * matching the zip(SOURCES, results) iteration in plugin.js).
+   * Output: an ordered flat stream of render ops:
+   *   { label: <source name> } followed by up to 10 card ops { card: <item> }.
+   * Sources with 0 items are skipped entirely (no label emitted).
+   * Order is preserved (NOT alphabetised) and capped at 10 cards per group.
+   */
+  function groupResults(sourceResults) {
+    var out = [];
+    sourceResults.forEach(function (g) {
+      if (!g || !g.items || !g.items.length) return; // skip empty groups
+      var items = g.items.slice(0, 10); // cap at 10 per source
+      out.push({ label: g.name });
+      items.forEach(function (item) { out.push({ card: item }); });
+    });
+    return out;
+  }
+
+  function cards(n, prefix) {
+    var arr = [];
+    for (var i = 0; i < n; i++) arr.push({ title: (prefix || 'v') + i });
+    return arr;
+  }
+
+  it('caps each group at 10 cards', function () {
+    var out = groupResults([{ source: 'a', name: 'A', items: cards(25, 'a') }]);
+    var cardOps = out.filter(function (o) { return o.card; });
+    expect(cardOps).toHaveLength(10);
+  });
+
+  it('keeps the first 10 items in adapter order (not sorted)', function () {
+    var out = groupResults([{ source: 'a', name: 'A', items: cards(25, 'a') }]);
+    var titles = out.filter(function (o) { return o.card; })
+                    .map(function (o) { return o.card.title; });
+    expect(titles).toEqual([
+      'a0', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8', 'a9'
+    ]);
+  });
+
+  it('emits a label before each non-empty group', function () {
+    var out = groupResults([
+      { source: 'a', name: 'A', items: cards(2, 'a') },
+      { source: 'b', name: 'B', items: cards(3, 'b') }
+    ]);
+    var labels = out.filter(function (o) { return o.label; })
+                    .map(function (o) { return o.label; });
+    expect(labels).toEqual(['A', 'B']);
+  });
+
+  it('preserves SOURCES registration order, not alphabetical', function () {
+    // Sources given Z-then-A; output must stay Z, A.
+    var out = groupResults([
+      { source: 'z', name: 'Zsrc', items: cards(1, 'z') },
+      { source: 'a', name: 'Asrc', items: cards(1, 'a') }
+    ]);
+    var labels = out.filter(function (o) { return o.label; })
+                    .map(function (o) { return o.label; });
+    expect(labels).toEqual(['Zsrc', 'Asrc']);
+  });
+
+  it('skips empty groups entirely — no label, no cards', function () {
+    var out = groupResults([
+      { source: 'a', name: 'A', items: cards(2, 'a') },
+      { source: 'b', name: 'B', items: [] },            // empty
+      { source: 'c', name: 'C', items: null },          // null items
+      { source: 'd', name: 'D', items: cards(1, 'd') }
+    ]);
+    var labels = out.filter(function (o) { return o.label; })
+                    .map(function (o) { return o.label; });
+    expect(labels).toEqual(['A', 'D']);
+  });
+
+  it('label immediately precedes its own group cards', function () {
+    var out = groupResults([
+      { source: 'a', name: 'A', items: cards(2, 'a') },
+      { source: 'b', name: 'B', items: cards(1, 'b') }
+    ]);
+    // Sequence: label A, card a0, card a1, label B, card b0
+    expect(out[0]).toEqual({ label: 'A' });
+    expect(out[1].card.title).toBe('a0');
+    expect(out[2].card.title).toBe('a1');
+    expect(out[3]).toEqual({ label: 'B' });
+    expect(out[4].card.title).toBe('b0');
+  });
+
+  it('all-empty input produces empty output (caller shows ☹ no_results)', function () {
+    var out = groupResults([
+      { source: 'a', name: 'A', items: [] },
+      { source: 'b', name: 'B', items: [] }
+    ]);
+    expect(out).toHaveLength(0);
+  });
+
+  it('exactly 10 items are kept intact (boundary)', function () {
+    var out = groupResults([{ source: 'a', name: 'A', items: cards(10, 'a') }]);
+    var cardOps = out.filter(function (o) { return o.card; });
+    expect(cardOps).toHaveLength(10);
+  });
+});
+
+// ============================================================
+// P2 — plugin.js source assertions (anti-drift)
+// ============================================================
+
+describe('P2: plugin.js source assertions (anti-drift)', () => {
+  it('cherry_group_label template/class present', () => {
+    expect(SRC).toContain('cherry-group-label');
+  });
+
+  it('cherry_group_label template is registered', () => {
+    // Lampa.Template.add('cherry_group_label', ...) OR Lampa.Template.get('cherry_group_label', ...)
+    expect(SRC).toMatch(/cherry_group_label/);
+  });
+
+  it('_reloadFromStart clears group labels alongside cards', () => {
+    // remove selector must include both .cherry-card and .cherry-group-label
+    expect(SRC).toMatch(/\.cherry-card\s*,\s*\.cherry-group-label/);
+  });
+
+  it('loadAllSources caps groups at 10 (slice(0, 10))', () => {
+    expect(SRC).toMatch(/slice\(\s*0\s*,\s*10\s*\)/);
+  });
+
+  it('grouped render no longer alphabetises all_sources results', () => {
+    // The old flat-merge path sorted with localeCompare or a title a/b comparator.
+    // After P2 the all-sources merge+sort block is gone. Guard against its return.
+    expect(SRC).not.toMatch(/all\.sort\(/);
+  });
+});

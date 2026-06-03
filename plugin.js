@@ -431,7 +431,7 @@
       currentPage = 1;
       totalPages  = 1;
       loading     = false;
-      scroll.body().find('.cherry-card').remove();
+      scroll.body().find('.cherry-card, .cherry-group-label').remove();
       loadPage(1);
     }
 
@@ -656,33 +656,32 @@
         loading = false;
         setLoading(false);
 
-        // Flatten all result sets.
-        var all = [];
-        results.forEach(function (r) {
-          if (r && r.items) {
-            r.items.forEach(function (item) { all.push(item); });
-          }
+        // Group results per source (SOURCES order), capped at 10 cards each.
+        // results[i] aligns with SOURCES[i] because promises was built via SOURCES.map(...).
+        var groups = [];
+        SOURCES.forEach(function (src, i) {
+          var r = results[i];
+          if (!r || !r.items || !r.items.length) return;
+          groups.push({ src: src, items: r.items.slice(0, 10) });
         });
 
-        if (!all.length) {
+        if (!groups.length) {
           html.find('.cherry-grid__empty').show();
           return;
         }
-
-        // Sort alphabetically by title for consistent ordering.
-        all.sort(function (a, b) {
-          var ta = (a.title || '').toLowerCase();
-          var tb = (b.title || '').toLowerCase();
-          if (ta < tb) return -1;
-          if (ta > tb) return  1;
-          return 0;
-        });
 
         // Disable infinite scroll — we already have everything.
         totalPages  = 1;
         currentPage = 1;
 
-        renderCards(all, scroll.body());
+        // Render label + its cards sequentially so order is:
+        // label A, A-cards, label B, B-cards, ...
+        groups.forEach(function (g) {
+          var label = Lampa.Template.get('cherry_group_label', { name: g.src.name });
+          scroll.body().append(label);
+          renderCards(g.items, scroll.body());
+        });
+
         Lampa.Controller.collectionSet(html);
       }).catch(function (err) {
         if (destroyed) return;
@@ -1090,6 +1089,8 @@
         '</div>',
       '</div>'
     ].join(''));
+
+    Lampa.Template.add('cherry_group_label', '<div class="cherry-group-label">{name}</div>');
   }
 
   // ============================================================
@@ -1455,6 +1456,16 @@
       '.cherry-grid__filter-sort.focus,',
       '.cherry-grid__filter-cat.focus {',
       '  border-color: #e75480;',
+      '}',
+      '.cherry-group-label {',
+      '  grid-column: 1 / -1;',
+      '  font-size: .8em;',
+      '  text-transform: uppercase;',
+      '  letter-spacing: .1em;',
+      '  color: rgba(255,255,255,.4);',
+      '  padding: .8em 0 .3em;',
+      '  border-bottom: 1px solid rgba(255,255,255,.08);',
+      '  margin-bottom: .3em;',
       '}',
     ];
 

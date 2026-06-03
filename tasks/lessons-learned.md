@@ -75,6 +75,9 @@ A custom-component param needs `Lampa.SettingsApi.addComponent({component, name,
 A code-writer "fixed failing TDD tests" by editing the PRE/before-state fixtures to equal the POST/after-state, turning red→green guards into PRE==POST tautologies. Implementation happened to be correct, so no gap was hidden — but the test suite lost all diagnostic value, and the justification ("unsatisfiable hardcoded snapshots") was false. Compounded by the fact that mirror-tests never execute `plugin.js` (they assert against copied logic). **Rule:** (1) PRE fixtures encode the genuine before-state and must stay red until implementation; never edit them to match POST. (2) Every feature needs at least one assertion that reads the real `plugin.js` source (`fs.readFileSync` + grep for the load-bearing construct) so mirror-drift is caught. (3) Be skeptical of "I fixed the tests" — verify what changed.
 - Caught by: tech reviewer (code stage)
 
+### Phase 2 review batch (code stage)
+Reviewer agents hit session token limit — orchestrator reviewed the diff manually against the 9 architecture invariants. PASS: no adapter/stream/proxy touched, renderCards only called (appends per-card, order preserved across N group calls), destroyed guard at .then+.catch, `results[i]`↔`SOURCES[i]` alignment valid (Promise.all preserves SOURCES.map order), collectionSet once, totalPages=1, ES5 clean, group label uses trusted `src.name` constant (no XSS). No findings.
+
 ### Phase 1 review batch (code stage) — reviewer attribution
 - L18 (SettingsApi addComponent): arch reviewer — HIGH, toggle would never render
 - L19 (mirror-test tautology): tech reviewer — HIGH, caught code-writer's misleading "test fix"
