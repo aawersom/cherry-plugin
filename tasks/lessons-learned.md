@@ -57,6 +57,11 @@ Pattern `['"]src['"]` requires quotes around key name — fails on `{src:"url"}`
 
 ---
 
+## p0-right-recursion (2026-06-04) — Mode: fast
+
+### L29: Lampa.Controller.move(dir) RE-DISPATCHES into the controller's dir handler at the edge
+Calling `Lampa.Controller.move('right')` inside the `right` handler infinitely recurses at the right edge: at the edge `move` calls `run` → the controller's `right` handler again → which calls `move('right')` again → "Maximum call stack size exceeded" (RangeError in jQuery.Sizzle). This is WHY AdultJS/Sisi use `onRight = filter` (no move call) — they never call move in the handler. For edge-detection that still allows in-grid movement, use a re-entrancy guard: set a flag before `move`, the nested edge re-dispatch returns immediately on seeing the flag, and the outer call then detects "focus unchanged" → edge → open menu. The guard doubles as both recursion-breaker and edge-signal. **Rule:** never call `Lampa.Controller.move(dir)` unguarded inside the same-direction handler — it re-enters at the edge.
+
 ## p0-right-menu (2026-06-04) — Mode: fast
 
 ### L28: P0 redesign — header chips → right-edge action menu (user preference)

@@ -813,7 +813,7 @@ describe('P1: plugin.js source assertions (anti-drift)', () => {
   it('right handler calls maybeLoadMore (in the moved-focus branch)', () => {
     // Right is now edge-detecting: it opens the action menu at the edge, else
     // moves + maybeLoadMore. maybeLoadMore sits deeper in the handler now.
-    expect(SRC).toMatch(/right\s*:\s*function[\s\S]{0,400}maybeLoadMore\s*\(/);
+    expect(SRC).toMatch(/right\s*:\s*function[\s\S]{0,600}maybeLoadMore\s*\(/);
   });
 
   it('observer disconnect appears in stop()', () => {
