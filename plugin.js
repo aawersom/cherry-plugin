@@ -106,6 +106,21 @@
   }
 
   /**
+   * Status-tolerant fetch: returns body text regardless of HTTP status.
+   * Needed for sites (e.g. 3movs) that serve a valid full page body with a
+   * 404 status header on category pagination (page > 1).
+   * @param {string} url @param {string=} referer @returns {Promise<string>}
+   */
+  function _fetchAny(url, referer) {
+    if (_isAndroid()) {
+      return _nativeFetch(url).catch(function () {
+        return fetch(buildProxyUrl(url, referer)).then(function (r) { return r.text(); });
+      });
+    }
+    return fetch(buildProxyUrl(url, referer)).then(function (r) { return r.text(); });
+  }
+
+  /**
    * POST via proxy using native fetch (Lampa.Reguest does not expose POST).
    * @param {string} url
    * @param {string} body  application/x-www-form-urlencoded string
@@ -3019,6 +3034,7 @@ SOURCES.push({
     id: 'porntrex',
     name: 'Porntrex',
     host: 'porntrex.com',
+    cfg: { categories: _cats('milf:MILF,teen:Молодые,blowjob:Минет,lesbian:Лесбиянки,hardcore:Жёсткое,pov:От первого лица,blonde:Блондинки,brunette:Брюнетки,busty:Грудастые,hairy:Волосатые,handjob:Дрочка,cumshots:Камшоты,doggystyle:Раком,small-tits:Маленькие сиськи,fetish:Фетиш,college:Колледж,petite:Миниатюрные,russian:Русское,hentai:Хентай'), sorts: [] },
 
     search: function (query, page) {
         var url = 'https://www.porntrex.com/?s=' + encodeURIComponent(query) + '&page=' + page;
@@ -3029,7 +3045,9 @@ SOURCES.push({
 
     browse: function (category, page) {
         var p = page || 1;
-        var url = 'https://www.porntrex.com/latest-updates/' + (p > 1 ? p + '/' : '');
+        var url = category
+            ? _buildCatUrl('https://www.porntrex.com/categories/{slug}/{page}/', category, p, 1, true)
+            : 'https://www.porntrex.com/latest-updates/' + (p > 1 ? p + '/' : '');
         return cherryFetch(url).then(function (html) {
             return { items: _porntrexCards(html), total_pages: _porntrexPages(html) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
@@ -3321,6 +3339,7 @@ SOURCES.push({
     id: '3movs',
     name: '3Movs',
     host: '3movs.com',
+    cfg: { categories: _cats('milf:MILF,teen:Молодые,anal:Анал,blowjob:Минет,big-tits:Большие сиськи,amateur:Любительское,mature:Зрелые,asian:Азиатки,japanese:Японское,lesbian:Лесбиянки,pov:От первого лица,hardcore:Жёсткое,threesome:Втроём,interracial:Межрасовое,ebony:Чёрные,big-cock:Большой член,cumshot:Камшот,creampie:Кремпай,public:На публике,casting:Кастинг,mom:Мамки,squirting:Сквирт,gangbang:Групповуха,russian:Русское,german:Немецкое,big-ass:Большая жопа,bdsm:БДСМ,massage:Массаж,toys:Игрушки'), sorts: [] },
 
     search: function (query, page) {
         var url = 'https://www.3movs.com/?s=' + encodeURIComponent(query) + '&p=' + page;
@@ -3331,6 +3350,14 @@ SOURCES.push({
 
     browse: function (category, page) {
         var p = page || 1;
+        if (category) {
+            // 3movs serves a valid body with a 404 status on category page>1 —
+            // use status-tolerant _fetchAny so pagination isn't dropped.
+            var curl = _buildCatUrl('https://3movs.com/categories/{slug}/{page}/', category, p, 1, true);
+            return _fetchAny(curl).then(function (html) {
+                return { items: _3movsCards(html), total_pages: _3movsPages(html) };
+            }).catch(function () { return { items: [], total_pages: 0 }; });
+        }
         var url = p > 1
             ? 'https://www.3movs.com/latest-updates/' + p + '/'
             : 'https://www.3movs.com/latest-updates/';
@@ -3451,6 +3478,7 @@ SOURCES.push({
     id: 'pornve',
     name: 'PornVe',
     host: 'pornve.com',
+    cfg: { categories: _cats('saggy-tits:Обвисшие сиськи,twerking:Тверк,bareback:Без резинки,triple-penetration:Тройное проникновение,spring-break:Весенние каникулы,camel-toe:Camel toe,ex-girlfriend:Бывшая,sex-slave:Секс-рабыня,submissive:Покорные,tribbing:Трибба,gilf:GILF'), sorts: [] },
 
     search: function (query, page) {
         var q = encodeURIComponent(query).replace(/%20/g, '+');
@@ -3464,9 +3492,11 @@ SOURCES.push({
     },
 
     browse: function (category, page) {
-        var url = page > 1
-            ? 'https://pornve.com/latest-updates/?page=' + page
-            : 'https://pornve.com/latest-updates/';
+        var p = page || 1;
+        var url = category
+            ? _buildCatUrl('https://pornve.com/categories/{slug}/{page}/', category, p, 1, true)
+            : (p > 1 ? 'https://pornve.com/latest-updates/?page=' + p
+                     : 'https://pornve.com/latest-updates/');
         return cherryFetch(url).then(function (html) {
             return { items: _pornveCards(html), total_pages: _pornvePages(html) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
@@ -3538,6 +3568,7 @@ SOURCES.push({
     id: 'familyporn',
     name: 'FamilyPorn',
     host: 'familyporn.tv',
+    cfg: { categories: _cats('sisters:Сёстры,cousin:Кузены,virgin:Девственницы,stepbrother-stepsister:Сводные брат и сестра,stepdaughter-stepdad:Отчим и падчерица,brother-sister:Брат и сестра,stepmom-stepson:Мачеха и пасынок,dad-daughter:Папа и дочь,mother-daughter:Мать и дочь'), sorts: [] },
 
     search: function (query, page) {
         var url = 'https://familyporn.tv/search/?q=' + encodeURIComponent(query) + '&page=' + page;
@@ -3547,7 +3578,10 @@ SOURCES.push({
     },
 
     browse: function (category, page) {
-        var url = 'https://familyporn.tv/latest-updates/' + page + '/';
+        var p = page || 1;
+        var url = category
+            ? _buildCatUrl('https://familyporn.tv/categories/{slug}/{page}/', category, p, 1, true)
+            : 'https://familyporn.tv/latest-updates/' + p + '/';
         return cherryFetch(url).then(function (html) {
             return { items: _familypornCards(html), total_pages: _familypornPages(html) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
