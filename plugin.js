@@ -1333,6 +1333,20 @@ function stripTags(str) {
   return (str || '').replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').trim();
 }
 
+// Final title fallback: derive a readable title from a video URL's last slug
+// segment. Strips extension + leading numeric id, decodes, hyphens→spaces.
+// Returns '' for purely-numeric slugs so callers keep their own fallback.
+function _titleFromUrl(url) {
+  if (!url) return '';
+  try {
+    var seg = String(url).split('?')[0].split('#')[0].replace(/\/+$/, '').split('/').pop() || '';
+    seg = seg.replace(/\.(html?|php)$/i, '').replace(/^\d+[-_]/, '');
+    seg = decodeURIComponent(seg).replace(/[-_]+/g, ' ').trim();
+    if (/^\d+$/.test(seg)) return '';
+    return seg.charAt(0).toUpperCase() + seg.slice(1);
+  } catch (e) { return ''; }
+}
+
 // ============================================================
 // CHERRY — SOURCE ADAPTERS TIER 2
 // Porntrex, Xozilla, 3Movs, Analdin, PornVe, FamilyPorn,
@@ -1605,6 +1619,7 @@ SOURCES.push({
       var titleMatch = block.match(/<p[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)/) ||
                        block.match(/title="([^"]+)"/);
       var title = titleMatch ? stripTags(titleMatch[1]) : '';
+      if (!title) title = _titleFromUrl(videoUrl);
 
       var durMatch = block.match(/<span[^>]*class="[^"]*duration[^"]*"[^>]*>([^<]+)/);
       var duration = durMatch ? parseDur(durMatch[1].trim()) : 0;
@@ -1721,7 +1736,11 @@ SOURCES.push({
     var mozParts = html.split('<div class="mozaique"');
     var content = mozParts.length > 1 ? mozParts[mozParts.length - 1] : html;
 
-    var blocks = content.split(/<div[^>]+class="[^"]*thumb-under[^"]*"/);
+    // Split on the OUTER card wrapper (thumb-block) — like xvideos — so each
+    // block holds BOTH this card's .thumb image and its .thumb-under caption.
+    // Splitting on the inner thumb-under caused an off-by-one: data-src (in
+    // .thumb of the NEXT card) was paired with the href/title of the current.
+    var blocks = content.split(/<div[^>]+class="[^"]*thumb-block[^"]*"/);
     for (var i = 1; i < blocks.length; i++) {
       var block = blocks[i];
       var hrefMatch = block.match(/href="(\/video-?([^/]+)\/[^"]+)"/);
@@ -1742,6 +1761,7 @@ SOURCES.push({
                        block.match(/title="([^"]+)"/) ||
                        block.match(/<a[^>]+>([^<]{5,})/);
       var title = titleMatch ? stripTags(titleMatch[1]) : '';
+      if (!title) title = _titleFromUrl(videoUrl);
 
       // Duration often in a metadata span
       var durMatch = block.match(/<span[^>]*class="[^"]*metadata[^"]*"[^>]*>([\d:]+)/) ||
@@ -1926,6 +1946,7 @@ SOURCES.push({
                        block.match(/title="([^"]+)"/) ||
                        block.match(/<a[^>]+title="([^"]+)"/);
       var title = titleMatch ? stripTags(titleMatch[1]) : '';
+      if (!title) title = _titleFromUrl(videoUrl);
 
       // Duration: span class "i-f" or similar
       var durMatch = block.match(/<span[^>]*class="[^"]*i-f[^"]*"[^>]*>([^<]+)/) ||
@@ -2195,6 +2216,7 @@ SOURCES.push({
         var altTitle = block.match(/title="([^"]+)"/);
         title = altTitle ? altTitle[1] : '';
       }
+      if (!title) title = _titleFromUrl(videoUrl);
 
       var durMatch = block.match(/<div[^>]*class="[^"]*duration[^"]*"[^>]*>([^<]+)/);
       var duration = durMatch ? parseDur(durMatch[1].trim()) : 0;
@@ -2514,6 +2536,7 @@ function _porntrexCards(html) {
             _attr(chunk, /<span[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)<\/span>/) ||
             _attr(chunk, /alt="([^"]+)"/)
         );
+        if (!title) title = _titleFromUrl(videoUrl);
 
         var duration = parseDur(
             _attr(chunk, /<span[^>]*class="[^"]*time[^"]*"[^>]*>([^<]+)<\/span>/) ||
@@ -2597,6 +2620,7 @@ function _porntrexPages(html) {
         if (titleRaw) break;
       }
       var title = _decodeHtml(titleRaw);
+      if (!title) title = _titleFromUrl(videoUrl);
 
       var durStr   = _attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</);
       var duration = parseDur(durStr);
@@ -2802,6 +2826,7 @@ function _3movsCards(html) {
             _attr(chunk, /alt="([^"]+)"/) ||
             _attr(chunk, /<h\d[^>]*>([^<]+)<\/h\d>/)
         );
+        if (!title) title = _titleFromUrl(videoUrl);
 
         var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
         var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
@@ -2938,6 +2963,7 @@ function _pornveCards(html) {
             _attr(chunk, /title="([^"]+)"/) ||
             _attr(chunk, /alt="([^"]+)"/)
         );
+        if (!title) title = _titleFromUrl(videoUrl);
 
         var duration = parseDur(
             _attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</) ||
@@ -3025,6 +3051,7 @@ function _familypornCards(html) {
             _attr(chunk, /<strong[^>]*class="[^"]*title[^"]*"[^>]*>\s*([^<]+)/) ||
             _attr(chunk, /alt="([^"]+)"/)
         );
+        if (!title) title = _titleFromUrl(videoUrl);
 
         var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
         var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
@@ -3121,6 +3148,7 @@ function _porndigCards(html) {
             _attr(chunk, /title="([^"]+)"/) ||
             _attr(chunk, /alt="([^"]+)"/)
         );
+        if (!title) title = _titleFromUrl(videoUrl);
 
         var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
         var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
@@ -3304,6 +3332,7 @@ function _perfektCards(html) {
             _attr(chunk, /<(?:h\d|div)[^>]*class="[^"]*(?:title|name)[^"]*"[^>]*>([^<]+)<\//) ||
             _attr(chunk, /alt="([^"]+)"/)
         );
+        if (!title) title = _titleFromUrl(videoUrl);
 
         var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
         var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
@@ -3684,6 +3713,7 @@ function _ebunCards(html) {
             _attr(chunk, /alt="([^"]+)"/) ||
             _attr(chunk, /title="([^"]+)"/)
         );
+        if (!title) title = _titleFromUrl(videoUrl);
 
         var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
         var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
@@ -3779,6 +3809,7 @@ function _lenpornoCards(html) {
             _attr(chunk, /title="([^"]+)"/) ||
             _attr(chunk, /alt="([^"]+)"/)
         );
+        if (!title) title = _titleFromUrl(videoUrl);
 
         var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
         var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
@@ -3950,6 +3981,7 @@ function _jopaCards(html) {
             _attr(chunk, /<h2[^>]*>\s*([^<]+)/) ||
             _attr(chunk, /<h\d[^>]*>\s*([^<]+)/)
         );
+        if (!title) title = _titleFromUrl(videoUrl);
 
         var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
         var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
