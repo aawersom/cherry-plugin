@@ -1557,7 +1557,7 @@ SOURCES.push({
     sorts: _cats('mostviewed:Популярное,rating:Топ рейтинга,mostrecent:Свежее,longest:Длинные'),
     // Pornhub categories are SLUGS passed to the webmasters API (&category=), not numeric ids.
     // Slugs verified against the webmasters/categories endpoint.
-    categories: _cats('asian:Азиатки,amateur:Любительское,big-ass:Большая жопа,babe:Красотки,bbw:BBW,anal:Анал,big-dick:Большой член,big-tits:Большие сиськи,blonde:Блондинки,blowjob:Минет,bondage:Бондаж,brunette:Брюнетки,creampie:Кремпай,cumshot:Камшот,ebony:Чёрные,fetish:Фетиш,handjob:Дрочка,hardcore:Жёсткое,latina:Латинки,lesbian:Лесбиянки,mature:Зрелые,milf:MILF,pornstar:Порнозвёзды,pov:От первого лица,public:На публике,red-head:Рыжие,small-tits:Маленькие сиськи,squirt:Сквирт,18-25:Молодые 18+,threesome:Втроём,toys:Игрушки,interracial:Межрасовое,gangbang:Групповуха,japanese:Японское,russian:Русское,webcam:Вебкам')
+    categories: _cats('asian:Asian,amateur:Amateur,big-ass:Big Ass,babe:Babe,bbw:BBW,anal:Anal,big-dick:Big Dick,big-tits:Big Tits,blonde:Blonde,blowjob:Blowjob,bondage:Bondage,brunette:Brunette,creampie:Creampie,cumshot:Cumshot,ebony:Ebony,fetish:Fetish,handjob:Handjob,hardcore:Hardcore,latina:Latina,lesbian:Lesbian,mature:Mature,milf:MILF,pornstar:Pornstar,pov:POV,public:Public,red-head:Red Head,small-tits:Small Tits,squirt:Squirt,18-25:Teen 18-25,threesome:Threesome,toys:Toys,interracial:Interracial,gangbang:Gangbang,japanese:Japanese,russian:Russian,webcam:Webcam,hd-porn:HD Porn,vintage:Vintage,compilation:Compilation,parody:Parody')
   },
 
   // Webmasters API returns {videos:[...]} with NO total_pages key. It serves a
@@ -1789,7 +1789,7 @@ SOURCES.push({
       { id: 'new',   label: 'Свежее'           },
       { id: 'views', label: 'По просмотрам'    }
     ],
-    categories: _cats('Anal-12:Анал,Teen-13:Молодые,Ass-14:Жопа,Blowjob-15:Минет,Latina-16:Латинки,Cumshot-18:Камшот,Milf-19:MILF,Blonde-20:Блондинки,Big_Tits-23:Большие сиськи,Big_Ass-24:Большая жопа,Brunette-25:Брюнетки,Lesbian-26:Лесбиянки,Interracial-27:Межрасовое,Stockings-28:Чулки,Redhead-31:Рыжие,Asian_Woman-32:Азиатки,Big_Cock-34:Большой член,Mature-38:Зрелые,Creampie-40:Кремпай,bbw-51:BBW,Squirting-56:Сквирт,Amateur-65:Любительское,Gangbang-69:Групповуха,Indian-89:Индийское,Arab-159:Арабское')
+    categories: _cats('AI-239:AI,Amateur-65:Amateur,Anal-12:Anal,Arab-159:Arab,Asian_Woman-32:Asian,ASMR-229:ASMR,Ass-14:Ass,bbw-51:BBW,Bi_Sexual-62:Bi,Big_Ass-24:Big Ass,Big_Cock-34:Big Cock,Big_Tits-23:Big Tits,Black_Woman-30:Black,Blonde-20:Blonde,Blowjob-15:Blowjob,Brunette-25:Brunette,Cam_Porn-58:Cam Porn,Creampie-40:Creampie,Cuckold-237:Cuckold/Hotwife,Cumshot-18:Cumshot,Femdom-235:Femdom,Fisting-165:Fisting,Fucked_Up_Family-81:Fucked Up Family,Gangbang-69:Gangbang,Gapes-167:Gapes,Indian-89:Indian,Interracial-27:Interracial,Latina-16:Latina,Lesbian-26:Lesbian,Lingerie-83:Lingerie,Mature-38:Mature,Milf-19:Milf,Oiled-22:Oiled,Redhead-31:Redhead,Solo_and_Masturbation-33:Solo,Squirting-56:Squirting,Stockings-28:Stockings,Teen-13:Teen')
   },
 
   search: function(query, page, sort) {
@@ -1941,14 +1941,15 @@ SOURCES.push({
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
-  cfg: { categories: _cats('amateur:Любительское,anal:Анал,asian:Азиатки,bbw:BBW,big-ass:Большая жопа,big-tits:Большие сиськи,blonde:Блондинки,blowjob:Минет,brunette:Брюнетки,creampie:Кремпай,cumshot:Камшот,ebony:Чёрные,hardcore:Жёсткое,hentai:Хентай,interracial:Межрасовое,japanese:Японское,latina:Латинки,lesbian:Лесбиянки,mature:Зрелые,milf:MILF,pov:От первого лица,public:На публике,redhead:Рыжие,teen:Молодые,threesome:Втроём'), sorts: [] },
+  cfg: { categories: _cats('amateur:Amateur,anal:Anal,asian:Asian,bbw:BBW,big-ass:Big Ass,big-tits:Big Tits,blonde:Blonde,blowjob:Blowjob,brunette:Brunette,creampie:Creampie,cumshot:Cumshot,ebony:Ebony,gangbang:Gangbang,hardcore:Hardcore,hentai:Hentai,interracial:Interracial,japanese:Japanese,latina:Latina,lesbian:Lesbian,massage:Massage,mature:Mature,milf:MILF,pov:POV,public:Public,redhead:Redhead,step-mom:Step Mom,teen:Teen,threesome:Threesome'), sorts: [] },
 
   browse: function(category, page) {
     var self = this;
     var p = page || 1;
-    // xnxx has no category pages — browse-by-category is tag search /search/{slug}/{page} (0-based page)
+    // xnxx categories use the native /tags/{slug}/{page} route (0-based page, page1 omits).
+    // SEARCH still uses /search/{q}/ (unchanged) — only the CATEGORY path is /tags/.
     var url = category
-      ? _buildCatUrl('https://www.xnxx.com/search/{slug}/{page}', category, p, 0, false)
+      ? _buildCatUrl('https://www.xnxx.com/tags/{slug}/{page}', category, p, 0, true)
       : 'https://www.xnxx.com/?k=new&p=' + (p - 1);
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html);
@@ -2015,7 +2016,7 @@ SOURCES.push({
   id: 'eporner',
   name: 'Eporner',
   host: 'eporner.com',
-  cfg: { categories: _cats('4k-porn:4K,amateur:Любительское,anal:Анал,asian:Азиатки,bbw:BBW,bdsm:БДСМ,big-ass:Большая жопа,big-dick:Большой член,big-tits:Большие сиськи,blonde:Блондинки,blowjob:Минет,brunette:Брюнетки,creampie:Кремпай,cumshot:Камшот,double-penetration:Двойное,ebony:Чёрные,fetish:Фетиш,group-sex:Групповое,handjob:Дрочка,hardcore:Жёсткое,hentai:Хентай,interracial:Межрасовое,japanese:Японское,latina:Латинки,lesbians:Лесбиянки,massage:Массаж,mature:Зрелые,milf:MILF,public:На публике,redhead:Рыжие,squirt:Сквирт,teens:Молодые,threesome:Втроём,toys:Игрушки,webcam:Вебкам'), sorts: _cats('most-popular:Популярное,latest:Свежее,top-rated:Топ рейтинга,longest:Длинные,top-weekly:За неделю,top-monthly:За месяц') },
+  cfg: { categories: _cats('4k-porn:4K Ultra HD,vr-porn:VR Porn,amateur:Amateur,anal:Anal,asian:Asian,asmr:ASMR,bbw:BBW,bdsm:BDSM,big-ass:Big Ass,big-dick:Big Dick,big-tits:Big Tits,bisexual:Bisexual,blonde:Blonde,blowjob:Blowjob,bondage:Bondage,brunette:Brunette,bukkake:Bukkake,creampie:Creampie,cumshot:Cumshot,double-penetration:Double Penetration,ebony:Ebony,fetish:Fetish,fisting:Fisting,footjob:Footjob,for-women:For Women,gay:Gay,group-sex:Group Sex,handjob:Handjob,hardcore:Hardcore,hentai:Hentai,homemade:Homemade,indian:Indian,interracial:Interracial,japanese:Japanese,latina:Latina,lesbians:Lesbian,lingerie:Lingerie,massage:Massage,masturbation:Masturbation,mature:Mature,milf:MILF,orgy:Orgy,outdoor:Outdoor,petite:Petite,pornstar:Pornstar,pov-porn:POV,public:Public,redhead:Redhead,shemale:Shemale,small-tits:Small Tits,squirt:Squirt,striptease:Striptease,students:Students,swingers:Swinger,teens:Teen,threesome:Threesome,toys:Toys,uniform:Uniform,vintage:Vintage,webcam:Webcam'), sorts: _cats('most-popular:Популярное,latest:Свежее,top-rated:Топ рейтинга,longest:Длинные,top-weekly:За неделю,top-monthly:За месяц') },
 
   _apiFetch: function(url) {
     // eporner JSON search/browse API has Access-Control-Allow-Origin: * — direct fetch is safe here.
@@ -2107,7 +2108,7 @@ SOURCES.push({
 SOURCES.push({
   id: 'spankbang',
   name: 'Spankbang',
-  cfg: { categories: _cats('amateur:Любительское,anal:Анал,anime:Аниме,arab:Арабское,asian:Азиатки,ass:Жопа,babe:Красотки,bbc:BBC,bbw:BBW,bdsm:БДСМ,blonde:Блондинки,blowjob:Минет,bondage:Бондаж,british:Британское,brunette:Брюнетки,busty:Грудастые,casting:Кастинг,compilation:Компиляция,cosplay:Косплей,creampie:Кремпай,cuckold:Куколд,cumshot:Камшот,ebony:Чёрные,feet:Ножки,femdom:Фемдом,fetish:Фетиш,gangbang:Групповуха,hentai:Хентай,indian:Индийское,japanese:Японское,latina:Латинки,massage:Массаж'), sorts: [] },
+  cfg: { categories: _cats('amateur:Любительское,anal:Анал,anime:Аниме,arab:Арабское,asian:Азиатки,ass:Жопа,babe:Красотки,bbc:BBC,bbw:BBW,bdsm:БДСМ,blonde:Блондинки,blowjob:Минет,bondage:Бондаж,british:Британское,brunette:Брюнетки,busty:Грудастые,cam:Вебкам,casting:Кастинг,cheating:Измена,chinese:Китайское,compilation:Компиляция,cosplay:Косплей,creampie:Кремпай,cuckold:Куколд,cumshot:Камшот,ebony:Чёрные,feet:Ножки,femdom:Фемдом,fetish:Фетиш,gangbang:Групповуха,hentai:Хентай,indian:Индийское,japanese:Японское,latina:Латинки,massage:Массаж,milf:MILF,pov:POV,shemale:Трансы,solo:Соло,squirt:Сквирт,stepmom:Мачеха,teen:Молодые,big+tits:Большие сиськи,big+ass:Большая жопа'), sorts: [] },
   host: 'ru.spankbang.com',
 
   _parseCards: function(html) {
@@ -2316,7 +2317,7 @@ SOURCES.push({
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
-  cfg: { categories: _cats('4k-porn:4K,amateur:Любительское,anal-sex-hd:Анал HD,asian:Азиатки,babe:Красотки,bdsm:БДСМ,big-ass:Большая жопа,big-dick:Большой член,big-tits:Большие сиськи,blonde:Блондинки,blowjob:Минет,brunette:Брюнетки,casting:Кастинг,creampie:Кремпай,cumshot:Камшот,ebony:Чёрные,fetish:Фетиш,gangbang:Групповуха,group-sex:Групповое,handjob:Дрочка,hentai:Хентай,interracial:Межрасовое,latina:Латинки,lesbian:Лесбиянки,mature:Зрелые,milf:MILF,pov:От первого лица,public:На публике,redhead:Рыжие,russian:Русское,shemale:Трансы,small-tits:Маленькие сиськи,squirt:Сквирт,stockings:Чулки,teen-porn:Молодые,threesome:Втроём'), sorts: [] },
+  cfg: { categories: _cats('4k-porn:4K porn,1080p-porn:1080p porn,60fps-porn:60 FPS porn,amateur:Amateur,anal-sex-hd:Anal,asian:Asian,babe:Babe,bdsm:BDSM,beach-porn:Beach,big-ass:Big ass,big-dick:Big dick,big-tits:Big tits,bisexual:Bisexual,blonde:Blonde,blowjob:Blowjob,bondage:Bondage,brunette:Brunette,casting:Casting,creampie:Creampie,cumshot:Cumshot,deepthroat:Deepthroat,ebony:Ebony,fetish:Fetish,fingering:Fingering,fisting:Fisting,gangbang:Gangbang,group-sex:Group sex,hairy-pussy:Hairy pussy,handjob:Handjob,hentai:Hentai,interracial:Interracial,japanese-girls-porn:Japanese,latina:Latina,lesbian:Lesbian,long-hair:Long hair,masturbation:Masturbation,mature:Mature,milf:MILF,old-and-young:Old and young,orgasm:Orgasm,orgy:Orgy,outdoor:Outdoor,pickup:Pickup,pov:POV,public:Public,pussy-licking:Pussy licking,redhead:Redhead,russian:Russian,porn-massage:Sex massage,sex-parties:Sex party,shaved-pussy:Shaved pussy,shemale:Shemale,small-tits:Small tits,squirt:Squirt,stockings:Stockings,tattooed:Tattooed,teen-porn:Teen porn,threesome:Threesome,vintage:Vintage'), sorts: [] },
 
   browse: function(category, page) {
     var self = this;
@@ -2381,7 +2382,7 @@ SOURCES.push({
 SOURCES.push({
   id: 'youjizz',
   name: 'YouJizz',
-  cfg: { categories: _cats('amateur:Любительское,anal:Анал,asian:Азиатки,bbc:BBC,big-ass:Большая жопа,big-tits:Большие сиськи,blonde:Блондинки,blowjob:Минет,casting:Кастинг,compilation:Компиляция,creampie:Кремпай,ebony:Чёрные,gangbang:Групповуха,hentai:Хентай,homemade:Домашнее,interracial:Межрасовое,japanese:Японское,latina:Латинки,massage:Массаж,mature:Зрелые,milf:MILF,pov:От первого лица,stepmom:Мачеха,teen:Молодые,threesome:Втроём'), sorts: [] },
+  cfg: { categories: _cats('amateur:Amateur,anal:Anal,asian:Asian,bbc:BBC,big-ass:Big Ass,big-tits:Big Tits,blonde:Blonde,blowjob:Blowjob,casting:Casting,compilation:Compilation,creampie:Creampie,daddy:Daddy,ebony:Ebony,gangbang:Gangbang,hentai:Hentai,homemade:Homemade,interracial:Interracial,japanese:Japanese,japanese-uncensored:Japanese Uncensored,japanese-wife:Japanese Wife,latina:Latina,massage:Massage,mature:Mature,milf:MILF,mind-control:Mind Control,pinay:Pinay,pov:POV,sister:Sister,sleeping:Sleeping,stepdaughter:Stepdaughter,stepmom:Stepmom,stepmom-and-son:Stepmom And Son,stepsister:Stepsister,superheroine:Superheroine,taboo:Taboo,teen:Teen,threesome:Threesome,ai-generated:AI Generated,czech-streets:Czech Streets,private-society:Private Society'), sorts: [] },
   host: 'youjizz.com',
 
   _parseCards: function(html) {
@@ -2518,7 +2519,7 @@ SOURCES.push({
     id: 'pornone',
     name: 'PornOne',
     host: 'pornone.com',
-    cfg: { categories: _cats('amateur:Любительское,anal:Анал,arab:Арабское,asian:Азиатки,ass:Жопа,babes:Красотки,bbc:BBC,bbw:BBW,bdsm:БДСМ,big-boobs:Большие сиськи,big-dick:Большой член,blonde:Блондинки,blowjob:Минет,brunette:Брюнетки,busty:Грудастые,casting:Кастинг,creampie:Кремпай,cumshot:Камшот,ebony:Чёрные,fetish:Фетиш,gangbang:Групповуха,granny:Бабушки,hairy:Волосатые,hardcore:Жёсткое,interracial:Межрасовое,japanese:Японское,latina:Латинки,lesbian:Лесбиянки,massage:Массаж,mature:Зрелые,milf:MILF,mom:Мамки,pov:От первого лица,public:На публике,russian:Русское,teen:Молодые,threesome:Втроём'), sorts: [] },
+    cfg: { categories: _cats('amateur:Amateur,anal:Anal,asian:Asian,ass:Ass,babes:Babes,bbc:Bbc,bbw:BBW,bdsm:Bdsm,big-boobs:Big Boobs,big-dick:Big Dick,blonde:Blonde,blowjob:Blowjob,brunette:Brunette,bukkake:Bukkake,busty:Busty,casting:Audition,cougar:Cougar,creampie:Creampie,cuckold:Cuckold,cumshot:Cumshot,deepthroat:Deepthroat,ebony:Ebony,fetish:Fetish,gangbang:Gangbang,granny:Granny,hairy:Hairy,handjob:Handjob,hardcore:Hardcore,hentai:Hentai,homemade:Homemade,interracial:Interracial,japanese:Japanese,latin:Latin,lesbian:Lesbian,massage:Massage,mature:Mature,milf:MILF,mom:Mom,pawg:Pawg,petite:Petite,pov:POV,public:Public,redhead:Redhead,russian:Russian,squirting:Squirting,stepmom:Stepmom,teen:Teen,threesome:Threesome,toys:Toys,webcams:Webcams,young:Young'), sorts: [] },
 
     // WP REST API is tried first; HTML scraping is the fallback.
     _fromApi: function (text) {
@@ -2677,7 +2678,7 @@ SOURCES.push({
     id: 'porntrex',
     name: 'Porntrex',
     host: 'porntrex.com',
-    cfg: { categories: _cats('milf:MILF,teen:Молодые,blowjob:Минет,lesbian:Лесбиянки,hardcore:Жёсткое,pov:От первого лица,blonde:Блондинки,brunette:Брюнетки,busty:Грудастые,hairy:Волосатые,handjob:Дрочка,cumshots:Камшоты,doggystyle:Раком,small-tits:Маленькие сиськи,fetish:Фетиш,college:Колледж,petite:Миниатюрные,russian:Русское,hentai:Хентай'), sorts: [] },
+    cfg: { categories: _cats('milf:Milf,teen:Teen,mature:Mature,amateur:Amateur,anal:Anal,big-tits:Big Tits,big-ass:Big Ass,blowjob:Blowjob,lesbian:Lesbian,hardcore:Hardcore,pov:POV,blonde:Blonde,brunette:Brunette,busty:Busty,hairy:Hairy,handjob:Handjob,cumshots:Cumshots,doggystyle:Doggystyle,small-tits:Small tits,petite:Petite,fetish:Fetish,bondage:Bondage,college:College,russian:Russian,hentai:Hentai,asian:Asian,japanese:Japanese,indian:Indian,latina:Latina,ebony:Ebony,black:Black,interracial:Interracial,german:German,czech:Czech,arab:Arab,homemade:Homemade,solo:Solo,masturbation:Masturbation,toys:Toys,creampie:Creampie,deepthroat:Deepthroat,gangbang:Gangbang,threesome:Threesome,orgy:Orgy,public:Public,outdoor:Outdoor,massage:Massage,casting:Casting,compilation:Compilation,squirt:Squirt,fisting:Fisting,footjob:Footjob,cuckold:Cuckold,gloryhole:Gloryhole,bukkake:Bukkake,pussy-licking:Pussy licking,ass-licking:Ass licking,double-penetration:Double Penetration (DP),red-head:Red Head,school-girl:School Girl,bbw:BBW,skinny:Skinny,lingerie:Lingerie,uniform:Uniform,office:Office,old-and-young:Old and Young,riding:Riding,fingering:Fingering,strap-on:Strap-on,celebrities:Celebrities,virtual-reality:Virtual Reality (VR)'), sorts: [] },
 
     search: function (query, page) {
         var url = 'https://www.porntrex.com/?s=' + encodeURIComponent(query) + '&page=' + page;
@@ -2981,7 +2982,7 @@ SOURCES.push(_kvsEngine({
     host: 'xozilla.com',
     categoryFmt: 'https://www.xozilla.com/categories/{slug}/{page}/',
     catPageBase: 1, catPage1Omit: true,
-    categories: _cats('amateur:Любительское,anal:Анал,asian:Азиатки,bbw:BBW,big-tits:Большие сиськи,blonde:Блондинки,blowjob:Минет,creampie:Кремпай,hairy:Волосатые,hardcore:Жёсткое,indian:Индийское,interracial:Межрасовое,japanese:Японское,lesbian:Лесбиянки,milf:MILF,pov:От первого лица,stockings:Чулки,teen:Молодые,threesome:Втроём,young:Юные'),
+    categories: _cats('amateur:Amateur,anal:Anal,asian:Asian,bbw:BBW,big-tits:Big Tits,blonde:Blonde,blowjob:Blowjob,creampie:Creampie,hairy:Hairy,hardcore:Hardcore,indian:Indian,interracial:Interracial,japanese:Japanese,lesbian:Lesbian,milf:MILF,pov:POV,stockings:Stockings,teen:Teen,threesome:Threesome,mature:Mature,granny-anal:Granny Anal,russian-anal:Russian Anal,russian-teens:Russian Teens 18+,teen-girls-18:Teen Girls 18+,muslim:Muslim,hijab:Hijab,top-rated:Top Rated,classic:Classic,milf-creampie:MILF Creampie'),
     sorts: [{id:'video_viewed',label:'Популярное'},{id:'rating',label:'Топ рейтинга'},{id:'post_date',label:'Новое'}],
     searchUrl: function(query, page) {
         return 'https://xozilla.com/?s=' + encodeURIComponent(query) + '&p=' + page;
@@ -3028,7 +3029,7 @@ SOURCES.push({
     id: '3movs',
     name: '3Movs',
     host: '3movs.com',
-    cfg: { categories: _cats('milf:MILF,teen:Молодые,anal:Анал,blowjob:Минет,big-tits:Большие сиськи,amateur:Любительское,mature:Зрелые,asian:Азиатки,japanese:Японское,lesbian:Лесбиянки,pov:От первого лица,hardcore:Жёсткое,threesome:Втроём,interracial:Межрасовое,ebony:Чёрные,big-cock:Большой член,cumshot:Камшот,creampie:Кремпай,public:На публике,casting:Кастинг,mom:Мамки,squirting:Сквирт,gangbang:Групповуха,russian:Русское,german:Немецкое,big-ass:Большая жопа,bdsm:БДСМ,massage:Массаж,toys:Игрушки'), sorts: [] },
+    cfg: { categories: _cats('milf:MILF,teen:Teens 18+,18-year-old:18 Year Old,anal:Anal,blowjob:Blowjob,big-tits:Big Tits,big-natural-tits:Big Natural Tits,amateur:Amateur,mature:Mature,asian:Asian,japanese:Japanese,lesbian:Lesbian,pov:POV,hardcore:Hardcore,threesome:Threesome,interracial:Interracial,ebony:Ebony,big-cock:Big Cock,cumshot:Cumshot,public:Public,casting:Casting,mom:Mom,squirting:Squirting,gangbang:Gangbang,russian:Russian,german:German,big-ass:Big Ass,bdsm:BDSM,massage:Massage,toys:Toys,deepthroat:Deepthroat,double-penetration:Double Penetration,handjob:Handjob,outdoor:Outdoor,pornstar:Pornstar,small-tits:Small Tits,group:Group,czech:Czech,homemade:Homemade'), sorts: [] },
 
     search: function (query, page) {
         var p = page || 1;
@@ -3125,7 +3126,7 @@ SOURCES.push(_kvsEngine({
     host: 'analdin.com',
     categoryFmt: 'https://www.analdin.com/categories/{slug}/{page}/',
     catPageBase: 1, catPage1Omit: true,
-    categories: _cats('18-years-old:18 лет,69:69,anal:Анал,anal-toys:Анальные игрушки,arab:Арабское,asian:Азиатки,ass:Жопа,ass-licking:Лизание жопы,babes:Красотки,bbc:BBC,bbw:BBW,bdsm:БДСМ,blowjob:Минет'),
+    categories: _cats('sex:Sex,blowjobs:Blowjobs,hot:Hot,pussy:Pussy,ass:Ass,sexy:Sexy,hardcore:Hardcore,babes:Babes,big-tits:Big Tits,tits:Tits,brunettes:Brunettes,teens:Teens 18+,big-ass:Big Ass,amateurs:Amateurs,blondes:Blondes,doggy-style:Doggy Style,anal:Anal,big-cock:Big Cock,cumshots:Cumshots,sluts:Sluts,pussy-licking:Pussy Licking,crazy:Crazy,pornstars:Pornstars,masturbation:Masturbation,young:Young,cowgirl:Cowgirl,oral:Oral,milfs:MILFs,pov:POV,hd:HD,small-tits:Small Tits,tattoos:Tattoos,lesbians:Lesbians,homemade:Homemade,interracial:Interracial,busty:Busty,natural-tits:Natural Tits,reverse-cowgirl:Reverse Cowgirl,facial:Facial,mature:Mature'),
     sorts: [{id:'video_viewed',label:'Популярное'},{id:'rating',label:'Топ рейтинга'},{id:'duration',label:'Длинные'}],
     searchUrl: function(query, page) {
         return 'https://analdin.com/?s=' + encodeURIComponent(query) + '&p=' + page;
@@ -3174,7 +3175,7 @@ SOURCES.push({
     id: 'pornve',
     name: 'PornVe',
     host: 'pornve.com',
-    cfg: { categories: _cats('saggy-tits:Обвисшие сиськи,twerking:Тверк,bareback:Без резинки,triple-penetration:Тройное проникновение,spring-break:Весенние каникулы,camel-toe:Camel toe,ex-girlfriend:Бывшая,sex-slave:Секс-рабыня,submissive:Покорные,tribbing:Трибба,gilf:GILF'), sorts: [] },
+    cfg: { categories: _cats('blowjob:Blowjob,japanese:Japanese,big-tits:Big Tits,teens:Teens,asian:Asian,brunette:Brunette,hardcore:Hardcore,blonde:Blonde,milf:MILF,big-cock:Big Cock,cumshot:Cumshot,anal:Anal,big-ass:Big Ass,babes:Babes,amateur:Amateur,small-tits:Small Tits,petite:Petite,one-on-one:One on One,creampie:Creampie,threesome:Threesome,masturbation:Masturbation,lesbian:Lesbian,interracial:Interracial,facial:Facial,handjob:Handjob,pov:POV,lingerie:Lingerie,cowgirl:Cowgirl,pussy-licking:Pussy Licking,fingering:Fingering,toys:Toys,deepthroat:Deepthroat,latina:Latina,doggy:Doggy,tattoo:Tattoo,shaved-pussy:Shaved Pussy,webcam:Webcam,natural-tits:Natural Tits,fetish:Fetish,redhead:Redhead'), sorts: [] },
 
     search: function (query, page) {
         var q = encodeURIComponent(query).replace(/%20/g, '+');
@@ -3267,7 +3268,7 @@ SOURCES.push({
     id: 'familyporn',
     name: 'FamilyPorn',
     host: 'familyporn.tv',
-    cfg: { categories: _cats('sisters:Сёстры,cousin:Кузены,virgin:Девственницы,stepbrother-stepsister:Сводные брат и сестра,stepdaughter-stepdad:Отчим и падчерица,brother-sister:Брат и сестра,stepmom-stepson:Мачеха и пасынок,dad-daughter:Папа и дочь,mother-daughter:Мать и дочь'), sorts: [] },
+    cfg: { categories: _cats('sisters:Sisters,cousin:Cousin,grandma-grandson:Grandma & Grandson,virgin:Virgin,stepbrother-stepsister:Stepbrother & Stepsister,stepdaughter-stepdad:Stepdad & Stepdaughter,brother-sister:Brother & Sister,grandpa-granddaughter:Grandpa & Granddaughter,niece-nephew:Niece & Nephew,stepmom-stepson:Stepmom & Stepson,dad-daughter:Dad & Daughter,mother-daughter:Mother & Daughter'), sorts: [] },
 
     search: function (query, page) {
         var url = 'https://familyporn.tv/search/?q=' + encodeURIComponent(query) + '&page=' + page;
@@ -3353,7 +3354,7 @@ SOURCES.push({
     name: 'Porndig',
     host: 'porndig.com',
     // Composite slug "{id}/{name}" (porndig channels need both). Browse: /channels/{id}/{name}/page/{n}.
-    cfg: { categories: _cats('33/anal:Анал,34/young:Юные,36/blonde:Блондинки,38/asian:Азиатки,39/milf:MILF,40/lesbian:Лесбиянки,41/mature:Зрелые,42/orgy:Оргия,43/big-boobs:Большие сиськи,45/black:Чёрные,46/bbw:BBW,47/creampie:Кремпай,48/masturbation:Мастурбация,51/hentai:Хентай,52/blowjob:Минет,53/interracial:Межрасовое,54/latina:Латинки,55/bondage-bdsm:БДСМ,57/fetish:Фетиш,58/pov:От первого лица,60/redhead:Рыжие,63/brunette:Брюнетки,64/double-penetration:Двойное,67/small-tits:Маленькие сиськи,74/massage:Массаж,799/cumshot:Камшот,802/big-dick:Большой член,816/stockings:Чулки,82/gangbang:Групповуха,1198/big-ass:Большая жопа'), sorts: [] },
+    cfg: { categories: _cats('33/anal:Anal,34/young:Young,35/cum-swallowing:Cum Swallowing,36/blonde:Blonde,38/asian:Asian,39/milf:MILF,40/lesbian:Lesbian,41/mature:Mature,42/orgy:Orgy,43/big-boobs:Big Boobs,45/black:Black,46/bbw:BBW,47/creampie:Creampie,48/masturbation:Masturbation,50/facial-ejaculation:Facial Ejaculation,51/hentai:Hentai,52/blowjob:Blowjob,53/interracial:Interracial,54/latina:Latina,55/bondage-bdsm:BDSM,57/fetish:Fetish,58/pov:POV,59/bukkake:Bukkake,60/redhead:Redhead,63/brunette:Brunette,64/double-penetration:Double Penetration,67/small-tits:Small Tits,68/squirters:Squirting,70/webcam:Webcam,74/massage:Massage,75/sexy-lingerie:Sexy Lingerie,799/cumshot:Cumshot,802/big-dick:Big Dick,816/stockings:Stockings,82/gangbang:GangBang,1043/threesome:Threesome,1117/european:European,1198/big-ass:Big Ass,1235/hardcore:Hardcore,1236/cuckold:Cuckold'), sorts: [] },
 
     search: function (query, page) {
         var p = page || 1;
@@ -3455,7 +3456,7 @@ SOURCES.push({
   name: 'Tizam',
   host: 'tv4.tizam.org',
   // Category pages render one page in static HTML (pagination is JS-only) → total_pages 1.
-  cfg: { categories: _cats('all_sex:Все,anal_seks_bol_shie_popki:Анал,aziatki:Азиатки,bol_shaya_grud:Большая грудь,dominirovanie:Доминирование,groupvideo:Групповое,incest:Инцест,italyan_porn:Итальянское,klassika:Классика,minet:Минет,nemeckie_pornofil_my:Немецкое,novinki:Новинки,podrostki_18:Подростки 18+,polnometrazhnye:Полнометражные,pyshechki:Пышечки,russkoe_porno:Русское,s_russkim_perevodom:С переводом,svingery:Свингеры,temnokozhie:Темнокожие,zhenskaya_masturbaciya:Мастурбация,zrelye:Зрелые'), sorts: [] },
+  cfg: { categories: _cats('all_sex:Фильмы xxx,s_russkim_perevodom:С Русским переводом,russkoe_porno:Русские порнофильмы,novinki:Новинки по выбору года,polnometrazhnye:Полнометражные с сюжетом,zrelye:Зрелые женщины,podrostki_18:Молодые девушки +18,anal_seks_bol_shie_popki:Анал и Большие попки,bol_shaya_grud:Большие сиськи,minet:Оральный секс,groupvideo:Групповой секс,incest:Семейное порно,svingery:Свингеры и Измена,dominirovanie:Доминирование,zhenskaya_masturbaciya:Соло девушки,pyshechki:Пышечки,aziatki:Азиатские порнофильмы,temnokozhie:Темнокожие,italyan_porn:Итальянские порнофильмы,nemeckie_pornofil_my:Немецкие порнофильмы,klassika:Классика и Ретро'), sorts: [] },
 
   _parseCards: function(html) {
     var items = [];
@@ -3572,7 +3573,7 @@ SOURCES.push({
     id: 'perfektdamen',
     name: 'PerfektDamen',
     host: 'perfektdamen.co',
-    cfg: { categories: _cats('anal:Анал,18-year-old:18 лет,3d-porn:3D,3some:Втроём'), sorts: [] },
+    cfg: { categories: _cats('hd:HD,blowjob:Blowjob,big-tits:Big Tits,big-ass:Big Ass,big-cock:Big Cock,brunette:Brunette,doggystyle:Doggystyle,cowgirl:Cowgirl,oral:Oral,missionary:Missionary,hardcore:Hardcore,pornstar:Pornstar,blonde:Blonde,milf:MILF,amateur:Amateur,babe:Babe,masturbation:Masturbation,cumshot:Cumshot,natural-tits:Natural Tits,small-tits:Small Tits,pussy-licking:Pussy Licking,fingering:Fingering,handjob:Handjob,shaved:Shaved,anal:Anal,skinny:Skinny,pov:POV,asian:Asian,deep-throat:Deep Throat,toys:Toys,reverse-cowgirl:Reverse Cowgirl,japanese:Japanese,fetish:Fetish,lesbian:Lesbian,interracial:Interracial,petite:Petite,threesome:Threesome,solo:Solo,creampie:Creampie,lingerie:Lingerie,mature:Mature,stockings:Stockings,mom:Mom,redhead:Redhead,facial:Facial,latina:Latina,ebony:Ebony,bbw:BBW,homemade:Homemade,step-fantasy:Step Fantasy,bbc:BBC,busty:Busty'), sorts: [] },
 
     search: function (query, page) {
         var p = page || 1;
@@ -3656,7 +3657,7 @@ SOURCES.push(_kvsEngine({
   host: 'hellporno.com',
   categoryFmt: 'https://hellporno.com/{slug}/{page}/',
   catPageBase: 1, catPage1Omit: true,
-  categories: _cats('anal:Анал,arab:Арабское,asian:Азиатки,bbw:BBW,bdsm:БДСМ,big-ass:Большая жопа,big-tits:Большие сиськи,casting:Кастинг,creampie:Кремпай,ebony:Чёрные,gangbang:Групповуха,granny:Бабушки,hairy:Волосатые,handjob:Дрочка,indian:Индийское,interracial:Межрасовое,japanese:Японское,milf:MILF,massage:Массаж,mature:Зрелые,mom:Мамки,pov:От первого лица,public:На публике,russian:Русское,teen:Молодые,threesome:Втроём'),
+  categories: _cats('anal:Anal,arab:Arab,asian:Asian,bbw:BBW,bdsm:BDSM,big-ass:Big ass,big-tits:Big tits,casting:Casting,creampie:Creampie,ebony:Ebony,gangbang:Gangbang,granny:Granny,hairy:Hairy,handjob:Handjob,indian:Indian,interracial:Interracial,japanese:Japanese,milf:MILF,massage:Massage,masturbation:Masturbation,mature:Mature,mom:Mom,office:Office,pov:POV,pantyhose:Pantyhose,party:Party,pissing:Pissing,public:Public,russian:Russian,skinny:Skinny,solo:Solo,solo-girl:Solo girl,stockings:Stockings,teacher:Teacher,teen:Teen,threesome:Threesome'),
   sorts: [{id:'video_viewed',label:'Популярное'}],
   searchUrl: function(query, page) {
     return 'https://hellporno.com/search/' + (page || 1) + '/?q=' + encodeURIComponent(query);
@@ -3779,7 +3780,7 @@ SOURCES.push(_kvsEngine({
     host: 'sex.pornobolt.in',
     categoryFmt: 'https://sex.pornobolt.in/{slug}/{page}',
     catPageBase: 1, catPage1Omit: true, sortParam: 'sort',
-    categories: _cats('anal:Анал,milf:Милфа,granny:Бабушки,big-ass:Большая жопа,china:Китайское,japan:Японское,indian:Индийское,arab:Арабское,shkola:Школа,otchim:Отчим,izmena:Измена,cuckold:Куколд,incest:Инцест,zrelye:Зрелые,pickup:Пикап,kasting:Кастинг,molodenkie:Молоденькие,lyubitelskoe:Любительское,gruppovuha:Групповуха,aziatki:Азиатки,latinki:Латинки,russkoe-porno:Русские'),
+    categories: _cats('russkoe-porno:Русские,incest:Инцест,zrelye:Зрелые,pickup:Пикап,kasting:Кастинг,vzroslye-s-molodymi:Взрослые с молодыми,molodenkie:Молоденькие,lyubitelskoe:Любительское,gruppovuha:Групповуха,anal:Анал,aziatki:Азиатки,latinki:Латинки,mezhrassovyj-seks:Межрассовый секс,tolstye:Толстые,sperma:Сперма,igrushki:Игрушки,krasotki:Красотки,lesbiyanki:Лесбиянки,minet:Минет,blondinki:Блондинки,bryunetki:Брюнетки,ryzhie:Рыжие,fetish-i-bdsm:Фетиш и БДСМ,bolshie-siski:Большие сиськи,bolshoj-chlen:Большой член,masturbaciya:Мастурбация,volosatye:Волосатые,dvojnoe-proniknovenie:Двойное проникновение,na-ulice:На улице,zhestkij-seks:Жесткий секс,china:Китайское,starushki:Старушки,milf:Милфа,korean:Корейское,granny:Бабушки,mama-druga:Мама друга,doiki:Дойки,huge-cock:Огромный член,shkola:Школа,big-ass:Большая жопа'),
     sorts: [{id:'mv',label:'Популярное'},{id:'mc',label:'Обсуждаемое'}],
     searchUrl: function(query) {
         return 'https://sex.pornobolt.in/search/' + encodeURIComponent(query);
@@ -3839,7 +3840,7 @@ SOURCES.push(_kvsEngine({
     host: 'crocotube.com',
     categoryFmt: 'https://crocotube.com/categories/{slug}/{page}/',
     catPageBase: 1, catPage1Omit: true,
-    categories: _cats('amateur:Любительское,anal:Анал,arab:Арабское,asian:Азиатки,ass:Жопа,babes:Красотки,bbw:BBW,big-ass:Большая жопа,big-black-cock:Большой чёрный член,big-cock:Большой член,big-tits:Большие сиськи,hairy:Волосатые,natural-tits:Натуральные сиськи,perfect-body:Идеальное тело'),
+    categories: _cats('amateur:Amateur,anal:Anal,arab:Arab,asian:Asian,ass:Ass,babes:Babes,bbw:BBW,big-ass:Big ass,big-black-cock:Big black cock,big-cock:Big dick,big-tits:Big tits,blonde:Blonde,blowjob:Blowjob,brunette:Brunette,creampie:Creampie,cumshot:Cumshot,deepthroat:Deepthroat,double-penetration:Double penetration,ebony:Ebony,fake-tits:Fake tits,gangbang:Gangbang,granny:Granny,group-sex:Group sex,hairy:Hairy,handjob:Handjob,hardcore:Hardcore,hd:HD,indian:Indian,interracial:Interracial,japanese:Japanese,latina:Latina,mature:Mature,milf:MILF,mom:Mom,natural-tits:Natural tits,perfect-body:Perfect body,pov:POV,public:Public,pussy:Pussy,redhead:Redhead,russian:Russian,small-tits:Small tits,stockings:Stockings,teen:Teen,threesome:Threesome,webcam:Webcam'),
     sorts: [],
     searchUrl: function(query, page) {
         return page > 1
@@ -3953,7 +3954,7 @@ SOURCES.push({
     id: 'ebun',
     name: 'Ebun',
     host: 'www1.ebun.tv',
-    cfg: { categories: _cats('molodye:Молодые,amerikanskoe:Американское,bryunetki:Брюнетки,russkoe:Русское,krasivye-devushki:Красивые девушки,domashnee:Домашнее,anal:Анал,hudye:Худые,blondinki:Блондинки,chulki-i-kolgotki:Чулки,ot-pervogo-lica:От первого лица,bolshie-siski:Большие сиськи,seks-vtroem:Втроём,bolshie-chleny:Большие члены,jopy:Жопы,studenty:Студенты,minet:Минет,kasting:Кастинг,gruppovoe:Групповое,zrelye:Зрелые,negry:Негры,mejrassovoe:Межрассовое,jmj:ЖМЖ,mjm:МЖМ,zheny:Жёны'), sorts: [] },
+    cfg: { categories: _cats('russkoe:Русское,molodye:Молодые,zrelye:Зрелые,mamki:Мамки,anal:Анал,minet:Минет,domashnee:Домашнее,krasivye-devushki:Красивые девушки,bryunetki:Брюнетки,blondinki:Блондинки,bolshie-siski:Большие сиськи,bolshie-chleny:Большие члены,jopy:Жопы,hudye:Худые,chulki-i-kolgotki:Чулки и колготки,ot-pervogo-lica:От первого лица,seks-vtroem:Секс втроем,gruppovoe:Групповое,kasting:Кастинг,kasting-vudmana:Кастинг Вудмана,studenty:Студенты,izmena:Измена,jeny:Жены,jmj:ЖМЖ,mjm:МЖМ,negry:Негры,mejrassovoe:Межрассовое,aziatki:Азиатки,latinki:Латинки,eblya:Ебля,rakom:Раком,krempay:Кремпай,sperma:Сперма,glubokaya-glotka:Глубокая глотка,skvirting:Сквиртинг,bdsm:БДСМ,fetish:Фетиш,masturbaciya:Мастурбация,pikap:Пикап,za-dengi:За деньги'), sorts: [] },
 
     search: function (query, page) {
         var url = 'https://www1.ebun.tv/search/?q=' + encodeURIComponent(query) + '&page=' + page;
@@ -4035,7 +4036,7 @@ SOURCES.push({
     id: 'lenporno',
     name: 'LenPorno',
     host: 'www.lenporno.net',
-    cfg: { categories: _cats('aziatskoye:Азиатское,analnoye:Анальное,bdsm:БДСМ,blondinki:Блондинки,bolshiye-dojki:Большие дойки,bolshiye-popki:Большие попки,bolshiye-chleny:Большие члены,bryunetki:Брюнетки,v-chulkakh:В чулках,volosatyye:Волосатые,gruppovoye:Групповое,domashneye:Домашнее,zhestkoye:Жёсткое,zrelyye:Зрелые,izmena:Измена,kasting:Кастинг,krasotki:Красотки,lesbiyanki:Лесбиянки,mamki:Мамки,massazh:Массаж,minet:Минет,molodyye:Молодые,blacked:Негры,orgazmy:Оргазмы,ot-pervogo-litsa:От первого лица,russkoye:Русское,studenty:Студенты,yaponskoye:Японское'), sorts: [] },
+    cfg: { categories: _cats('russkoye:Русское,molodyye:Молодые,zrelyye:Зрелые,mamki:Мамки,analnoye:Анальное,minet:Минет,domashneye:Домашнее,krasotki:Красотки,bryunetki:Брюнетки,blondinki:Блондинки,bolshiye-dojki:Большие дойки,bolshiye-popki:Большие попки,bolshiye-chleny:Большие члены,khudyye:Худые,v-chulkakh:В чулках,ot-pervogo-litsa:От первого лица,gruppovoye:Групповое,kasting:Кастинг,studenty:Студенты,izmena:Измена,gheny:Жены,mzhm:МЖМ,blacked:Негры,aziatskoye:Азиатское,yaponskoye:Японское,mulatki:Мулатки,rakom:Раком,sperma:Сперма,bdsm:БДСМ,masturbatsiya:Мастурбация,lesbiyanki:Лесбиянки,massazh:Массаж,volosatyye:Волосатые,dvoynoye-proniknoveniye:Двойное проникновение,dominirovaniye:Доминирование,orgazmy:Оргазмы,zhestkoye:Жесткое,na-prirode:На природе,na-publike:На публике,pikap:Пикап'), sorts: [] },
 
     search: function (query, page) {
         // single-page site: /search/?q= takes no page param → total_pages 1.
@@ -4136,7 +4137,7 @@ SOURCES.push({
     id: '24rolika',
     name: '24Rolika',
     host: 'w2.huyalkino.com',
-    cfg: { categories: _cats('russian:С русской озвучкой,russia:Русское порно,gopa:Анал,retro:Ретро,asian-girl:Азиатки,bdsm:БДСМ,big-cock:Большие члены,big-tits:Большие сиськи,group:Групповуха,lesbi:Лесбиянки,teen:Молодые,solo:Мастурбация,beautiful:Красивый секс,black:Межрасовое,homemade:Домашнее,incest:Инцест,orgasms:Оргазмы'), sorts: [] },
+    cfg: { categories: _cats('russia:Русское порно,russian:С переводом,gopa:Анал,retro:Ретро,asian-girl:Азиатки,bdsm:БДСМ,big-cock:Большие члены,big-tits:Большие сиськи,group:Групповуха,lesbi:Лесбиянки,teen:Молодые девушки,solo:Женская мастурбация,beautiful:Красивый секс,black:Межрасовое,homemade:Домашнее,incest:Инцест,orgasms:Оргазмы,movie:Порно фильмы,ok:Одноклассники,youtube-porno:Ютуб'), sorts: [] },
 
     search: function (query, page) {
         // DLE search does not paginate natively — page param is advisory
@@ -4221,7 +4222,7 @@ SOURCES.push({
     id: 'jopaonline',
     name: 'JopaOnline',
     host: 'jopaonline.mobi',
-    cfg: { categories: _cats('mamki:Мамки,russkoe:Русское,zhestkoe:Жёсткое,zrelye:Зрелые,izmena:Измена,krasotki:Красотки,domashnee:Домашнее,big-cock:Большие члены,gruppovoe:Групповое,anal:Анал,asian:Азиатки,studenty:Студенты'), sorts: [] },
+    cfg: { categories: _cats('mamki:Мамки,russkoe:Русское,zhestkoe:Жесткое,zrelye:Зрелые,izmena:Измена,krasotki:Красотки,domashnee:Домашнее,big-cock:Большие члены,gruppovoe:Групповое,anal:Анал,asian:Азиатки,studenty:Студенты,blonde:Блондинки,bolshie-siski:Большие сиськи,bryunetki:Брюнетки,dvoynoe-proniknovenie:Двойное проникновение,hudenkie:Худые,krasiviy-seks:Красивый секс,lesbiyanki:Лесбиянки,masturbation:Мастурбация,mejrassovyy:Межрасовое,minet:Минет,molodye:Молодые,mulatki:Мулатки,pickap:Пикап,rakom:Раком,redhead:Рыжие,s-negrami:Негры,stockings:Чулки,v-vannoi:В ванной,zhopy:Жопы'), sorts: [] },
 
     search: function (query, page) {
         // single-page site: DLE ?do=search returns one page (no page param) → total_pages 1.
