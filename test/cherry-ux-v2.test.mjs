@@ -872,7 +872,7 @@ describe('P1: plugin.js source assertions (anti-drift)', () => {
 
   it('comp.create toggles the activity loader and calls build()', () => {
     expect(SRC).toMatch(/comp\.create\s*=\s*function[\s\S]{0,400}this\.activity\.loader\(\s*true\s*\)/);
-    expect(SRC).toMatch(/comp\.create\s*=\s*function[\s\S]{0,600}\.build\(\s*\{/);
+    expect(SRC).toMatch(/comp\.create\s*=\s*function[\s\S]{0,900}\.build\(\s*\{/);
   });
 
   it('nextPageReuest is overridden for framework-driven paging', () => {
@@ -1597,19 +1597,16 @@ describe('Final sort batch: xnxx PATH + youjizz/hqporner/spankbang GLOBAL feeds'
   }
 
   // ---- xnxx: per-category PATH sort ----
-  it('xnxx: views first «По популярности», Russian labels, exact ids', () => {
-    var s = sortsFor('xnxx');
-    expect(s.map(function (x) { return x.id; }))
-      .toEqual(['views', 'uploaddate', 'rating', 'duration']);
-    expect(s[0].label).toBe('По популярности');
-    s.forEach(function (x) {
-      expect(x.label).toMatch(/[А-Яа-я]/);
-      expect(x.label).not.toBe('Популярное');
-    });
+  it('xnxx: sorts removed (/tags/ ignores page & mis-parses sort)', () => {
+    var at = SRC.indexOf("id: 'xnxx'");
+    var w = SRC.slice(at, at + 5000);
+    expect(w).toMatch(/sorts:\s*\[\]/);
+    expect(w).not.toMatch(/views:По популярности/);
   });
-  it('xnxx category browse injects sort path /tags/{slug}/{sort}/{page} (default views)', () => {
+  it('xnxx category browse uses the paginating /search/{slug}/{page} route (not /tags/)', () => {
     var body = browseBodyOf('xnxx');
-    expect(body).toContain("'https://www.xnxx.com/tags/{slug}/' + (sort || 'views') + '/{page}'");
+    expect(body).toContain("'https://www.xnxx.com/search/' + encodeURIComponent(category) + '/' + p");
+    expect(body).not.toContain('/tags/{slug}');
   });
 
   // ---- youjizz / hqporner / spankbang: GLOBAL-feed sorts ----
@@ -1761,8 +1758,8 @@ describe('Batch 2 categories — plugin.js source assertions (anti-drift)', () =
 describe('Batch 3 categories — plugin.js source assertions (anti-drift)', () => {
   // Category-URL templates must be present (position-independent — cfg may sit far from id).
   var fmts = {
-    // xnxx now injects a per-category sort path segment: /tags/{slug}/{sort}/{page}.
-    xnxx: "'https://www.xnxx.com/tags/{slug}/' + (sort || 'views') + '/{page}'",
+    // xnxx categories use the paginating /search/ route (/tags/ ignored the page param).
+    xnxx: "'https://www.xnxx.com/search/' + encodeURIComponent(category) + '/' + p",
     perfektdamen: 'https://www.perfektdamen.co/tags/{slug}/{page}/',
     hqporner: 'https://hqporner.com/category/{slug}/{page}'
   };
