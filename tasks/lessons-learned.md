@@ -75,6 +75,11 @@ Pornhub categories are numeric ids; the existing webmasters JSON browse just nee
 ### L31: Bash quoted-heredoc still collapses `\\` → `\` for appended JS test files
 Appending a vitest file via `cat >> f << 'EOF'` turned `new RegExp("id:\\s*...")` into `"id:\s*..."`, and JS then read `"\s"` as `"s"` — the regex silently became `id:s*...[sS]` and never matched. Literal regexes (`/\{page\}/`) survived; only double-backslash strings broke. **Rule:** never write regex-bearing JS through a heredoc — use the Edit/Write tool, or prefer `indexOf`/`toContain` proximity checks over `new RegExp(string)` in anti-drift tests.
 
+## nav-recursion-alldirs (2026-06-04) — Mode: fast
+
+### L34: The move()-re-dispatch recursion affects ALL directions, not just right — guard every handler
+L29 fixed `right` only. But on this Lampa build `Lampa.Controller.move(dir)` re-dispatches into the SAME-direction handler at an edge for EVERY direction. Pressing down/up/left into an edge (e.g. scrolling the catalog to the bottom) recursed to `Maximum call stack size exceeded`, which kills the controller → arrows stop responding entirely ("листаю стрелочками — ничего не происходит"). Symptom looked like "navigation dead everywhere" and was easy to misattribute to load/render. Fix: a shared `_navMoving` re-entrancy flag guarding up/down/left/right in BOTH cherry_grid and cherry_main. **Rule:** if move(dir) can re-dispatch at an edge, EVERY directional handler that calls it needs the guard — half-guarding (right only) leaves the others fatal. This is navigation-only; never touches getStream/preview/playback.
+
 ## p0-right-recursion (2026-06-04) — Mode: fast
 
 ### L29: Lampa.Controller.move(dir) RE-DISPATCHES into the controller's dir handler at the edge

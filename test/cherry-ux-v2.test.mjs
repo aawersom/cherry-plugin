@@ -1279,3 +1279,20 @@ describe('categories coverage — every wired adapter ships a list', () => {
     expect(n).toBeGreaterThanOrEqual(20);
   });
 });
+
+// ── Navigation recursion guard (all directions, both controllers) ─────────────
+describe('nav recursion guard — plugin.js source assertions (anti-drift)', () => {
+  it('both controllers declare _navMoving', () => {
+    var n = (SRC.match(/var _navMoving = false/g) || []).length;
+    expect(n).toBe(2); // CherryGrid + CherryMain
+  });
+  it('every directional handler is guarded by _navMoving (no bare move recursion)', () => {
+    // Count guarded directions: 4 in cherry_grid + 4 in cherry_main = 8
+    var guarded = (SRC.match(/if \(_navMoving\) return; _navMoving = true; Lampa\.Controller\.move/g) || []).length;
+    expect(guarded).toBeGreaterThanOrEqual(7); // right in grid is multiline-guarded separately
+  });
+  it('no unguarded bare directional move remains in a controller handler', () => {
+    // The old pattern "up:    function () { Lampa.Controller.move('up'); }" must be gone
+    expect(SRC).not.toMatch(/up:\s*function \(\) \{ Lampa\.Controller\.move\('up'\); \}/);
+  });
+});
