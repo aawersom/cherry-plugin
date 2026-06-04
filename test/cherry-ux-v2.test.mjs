@@ -149,6 +149,94 @@ describe('UX-G: context menu items — POST behaviour', function () {
 });
 
 // ============================================================
+// S4 — "Модель" context menu item + onSelect routing
+// (re-activates the dead browseByModel path via onMenu).
+// ============================================================
+
+describe('S4: model menu item — POST behaviour', function () {
+  var mockLampa = { Lang: { translate: function (k) { return k; } } };
+
+  /**
+   * Mirror of the onMenu items array: base [fav, similar] + optional related
+   * (by capability) + optional model (when element.model.name exists).
+   */
+  function buildMenuItems(cardSrc, element, Lampa) {
+    var items = [
+      { title: Lampa.Lang.translate('cherry_add_fav_action'), action: 'fav' },
+      { title: Lampa.Lang.translate('cherry_similar'),        action: 'similar' }
+    ];
+    if (cardSrc && cardSrc.getRelated) {
+      items.push({ title: Lampa.Lang.translate('cherry_related'), action: 'related' });
+    }
+    if (element.model && element.model.name) {
+      items.push({
+        title: Lampa.Lang.translate('cherry_model') + ': ' + element.model.name,
+        action: 'model'
+      });
+    }
+    return items;
+  }
+
+  /** Mirror of the onSelect 'model' branch — returns the pushed activity. */
+  function selectModel(element) {
+    return {
+      component: 'cherry_grid',
+      title:     element.model.name,
+      source_id: element.source,
+      model_url: element.model.url,
+      page:      1
+    };
+  }
+
+  var phSrc = { id: 'pornhub', getRelated: function () { return Promise.resolve([]); } };
+
+  it('pushes a "model" item only when element.model.name exists', function () {
+    var withModel = buildMenuItems(phSrc,
+      { source: 'pornhub', model: { name: 'Mia', url: 'http://ph/pornstar/mia' } }, mockLampa);
+    var actions = withModel.map(function (i) { return i.action; });
+    expect(actions).toContain('model');
+  });
+
+  it('no "model" item when element.model absent', function () {
+    var noModel = buildMenuItems(phSrc, { source: 'pornhub' }, mockLampa);
+    expect(noModel.map(function (i) { return i.action; })).not.toContain('model');
+  });
+
+  it('no "model" item when model has no name', function () {
+    var emptyModel = buildMenuItems(phSrc,
+      { source: 'pornhub', model: { url: 'http://ph/pornstar/x' } }, mockLampa);
+    expect(emptyModel.map(function (i) { return i.action; })).not.toContain('model');
+  });
+
+  it('model item title includes the performer name', function () {
+    var items = buildMenuItems(phSrc,
+      { source: 'pornhub', model: { name: 'Mia', url: 'http://ph/pornstar/mia' } }, mockLampa);
+    var mi = items.find(function (i) { return i.action === 'model'; });
+    expect(mi.title).toBe('cherry_model: Mia');
+  });
+
+  it('model comes after related in the items order', function () {
+    var items = buildMenuItems(phSrc,
+      { source: 'pornhub', model: { name: 'Mia', url: 'http://ph/pornstar/mia' } }, mockLampa);
+    var actions = items.map(function (i) { return i.action; });
+    expect(actions.indexOf('model')).toBeGreaterThan(actions.indexOf('related'));
+  });
+
+  it("onSelect 'model' pushes cherry_grid with model_url + source_id", function () {
+    var element = { source: 'pornhub', model: { name: 'Mia', url: 'http://ph/pornstar/mia' } };
+    var pushed = selectModel(element);
+    expect(pushed.component).toBe('cherry_grid');
+    expect(pushed.model_url).toBe('http://ph/pornstar/mia');
+    expect(pushed.source_id).toBe('pornhub');
+    expect(pushed.title).toBe('Mia');
+    expect(pushed.page).toBe(1);
+    // No query/all_sources — this is a pure model grid.
+    expect(pushed.query).toBeUndefined();
+    expect(pushed.all_sources).toBeUndefined();
+  });
+});
+
+// ============================================================
 // UX-C — Lampa.SettingsApi registration contract (behaviour documentation)
 // ============================================================
 
@@ -289,6 +377,17 @@ describe('plugin.js source assertions (anti-drift)', () => {
   it('UX-C: preview param type is trigger', () => {
     expect(SRC).toMatch(/cherry_preview_enabled/);
     expect(SRC).toMatch(/type:\s*'trigger'/);
+  });
+  it("S4: onMenu pushes a 'model' item guarded by element.model.name", () => {
+    expect(SRC).toMatch(/element\.model\s*&&\s*element\.model\.name/);
+    expect(SRC).toMatch(/action:\s*'model'/);
+  });
+  it("S4: onSelect 'model' branch pushes cherry_grid with model_url", () => {
+    expect(SRC).toMatch(/item\.action\s*===\s*'model'/);
+    expect(SRC).toMatch(/model_url:\s*element\.model\.url/);
+  });
+  it('S4: cherry_model lang key registered with ru + en', () => {
+    expect(SRC).toMatch(/cherry_model\s*:\s*\{\s*ru:\s*'Модель',\s*en:\s*'Model'/);
   });
 });
 

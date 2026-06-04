@@ -1669,3 +1669,58 @@ describe('S1 total_pages anti-drift', function () {
     expect(/single-page site/.test(PLUGIN)).toBe(true);
   });
 });
+
+// ============================================================
+// S4: pornhub _mapVideo surfaces a listing-level `model` field
+// (re-activates the dead browseByModel path — see onMenu "Модель").
+// ============================================================
+
+// Verbatim mirror of the model branch added to pornhub._mapVideo.
+// browseByModel() appends "/videos?page=P" itself, so the url must be the
+// pornstar page BASE (/pornstar/{slug}) WITHOUT a trailing /videos.
+function phMapModel(v) {
+  var card = { id: 'x', source: 'pornhub', title: v.title || '' };
+  if (v.pornstars && v.pornstars[0] && v.pornstars[0].pornstar_name) {
+    var pn = v.pornstars[0].pornstar_name;
+    card.model = {
+      name: pn,
+      url: 'https://www.pornhub.com/pornstar/' +
+           pn.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+    };
+  }
+  return card;
+}
+
+describe('S4 pornhub _mapVideo model field', function () {
+  it('sets card.model {name,url} from pornstars[0].pornstar_name', function () {
+    var card = phMapModel({ pornstars: [{ pornstar_name: 'Mia Khalifa' }] });
+    expect(card.model).toBeDefined();
+    expect(card.model.name).toBe('Mia Khalifa');
+    expect(card.model.url).toBe('https://www.pornhub.com/pornstar/mia-khalifa');
+  });
+
+  it('slugifies name: lowercase, non-alnum→-, trimmed edges', function () {
+    var card = phMapModel({ pornstars: [{ pornstar_name: "  Léa O'Connor!! " }] });
+    // diacritics/apostrophe/space/bang collapse to single hyphens, edges trimmed
+    expect(card.model.url).toBe('https://www.pornhub.com/pornstar/l-a-o-connor');
+  });
+
+  it('model.url has NO trailing /videos (browseByModel appends it)', function () {
+    var card = phMapModel({ pornstars: [{ pornstar_name: 'Riley Reid' }] });
+    expect(card.model.url).not.toMatch(/\/videos/);
+    expect(card.model.url.endsWith('/riley-reid')).toBe(true);
+  });
+
+  it('no model when pornstars absent / empty / nameless', function () {
+    expect(phMapModel({}).model).toBeUndefined();
+    expect(phMapModel({ pornstars: [] }).model).toBeUndefined();
+    expect(phMapModel({ pornstars: [{}] }).model).toBeUndefined();
+  });
+
+  it('anti-drift: shipped _mapVideo reads pornstars[0].pornstar_name into card.model', function () {
+    var PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+    expect(/v\.pornstars\s*&&\s*v\.pornstars\[0\]\s*&&\s*v\.pornstars\[0\]\.pornstar_name/.test(PLUGIN)).toBe(true);
+    expect(/card\.model\s*=\s*\{/.test(PLUGIN)).toBe(true);
+    expect(/https:\/\/www\.pornhub\.com\/pornstar\//.test(PLUGIN)).toBe(true);
+  });
+});
