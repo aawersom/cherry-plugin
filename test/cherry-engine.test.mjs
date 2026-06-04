@@ -7,6 +7,12 @@
  * helpers verbatim at the top, then describe/it below.
  */
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const fixture = (name) => readFileSync(join(__dirname, 'fixtures', name), 'utf8');
 
 // ---- _attr ------------------------------------------------------------------
 // Verbatim from plugin.js line 1333
@@ -1300,11 +1306,26 @@ function xvParseCards(html) {
 // ============================================================
 // adapter-preview-quality: xnxx video.preview (REQ-2)
 // ============================================================
+// Verbatim from plugin.js _titleFromUrl (line ~1336)
+function _titleFromUrl(url) {
+  if (!url) return '';
+  try {
+    var seg = String(url).split('?')[0].split('#')[0].replace(/\/+$/, '').split('/').pop() || '';
+    seg = seg.replace(/\.(html?|php)$/i, '').replace(/^\d+[-_]/, '');
+    seg = decodeURIComponent(seg).replace(/[-_]+/g, ' ').trim();
+    if (/^\d+$/.test(seg)) return '';
+    return seg.charAt(0).toUpperCase() + seg.slice(1);
+  } catch (e) { return ''; }
+}
+
+// Inline reimplementation of xnxx _parseCards — kept IN SYNC with plugin.js.
+// Splits on the OUTER thumb-block wrapper (like xvideos) so each block holds
+// BOTH this card's .thumb image and its .thumb-under caption (no off-by-one).
 function xnxxParseCards(html) {
   var items = [];
   var mozParts = html.split('<div class="mozaique"');
   var content = mozParts.length > 1 ? mozParts[mozParts.length - 1] : html;
-  var blocks = content.split(/<div[^>]+class="[^"]*thumb-under[^"]*"/);
+  var blocks = content.split(/<div[^>]+class="[^"]*thumb-block[^"]*"/);
   for (var i = 1; i < blocks.length; i++) {
     var block = blocks[i];
     var hrefMatch = block.match(/href="(\/video-?([^/]+)\/[^"]+)"/);
@@ -1316,7 +1337,12 @@ function xnxxParseCards(html) {
     var thumbMatch = block.match(/data-src="([^"]+)"/) || block.match(/src="([^"]+\.jpg[^"]*)"/);
     var thumb = thumbMatch ? thumbMatch[1] : '';
     var preview = thumb ? thumb.replace(/\/[^\/]+$/, '/preview.mp4') : '';
-    items.push({ id: 'xnxx-' + rawId, source: 'xnxx', title: '', thumb: thumb,
+    var titleMatch = block.match(/class="title"[^>]*>([^<]+)/) ||
+                     block.match(/title="([^"]+)"/) ||
+                     block.match(/<a[^>]+>([^<]{5,})/);
+    var title = titleMatch ? stripTagsLocal(titleMatch[1]) : '';
+    if (!title) title = _titleFromUrl(videoUrl);
+    items.push({ id: 'xnxx-' + rawId, source: 'xnxx', title: title, thumb: thumb,
                  preview: preview, url: videoUrl, duration: 0, views: 0 });
   }
   return items;
@@ -1404,14 +1430,21 @@ describe('REQ-3 pornhub data-mediabook', function () {
   });
 });
 
-describe('REQ-2 xnxx video.preview', function () {
+describe('REQ-2 xnxx video.preview (real thumb-block markup)', function () {
   var UUID = '8f9a9694-d042-4f65-9a3b-c13ed3c0f91b';
   var THUMB = 'https://thumb-cdn77.xnxx-cdn.com/' + UUID + '/3/xn_15_t.jpg';
   var PREVIEW = 'https://thumb-cdn77.xnxx-cdn.com/' + UUID + '/3/preview.mp4';
 
+  // Real card: outer .thumb-block wraps .thumb (img) + .thumb-under (caption).
+  function card(href, thumb) {
+    return '<div class="thumb-block ">' +
+             '<div class="thumb"><a href="' + href + '"><img data-src="' + thumb + '"></a></div>' +
+             '<div class="thumb-under"><p class="title"><a href="' + href + '">Cap</a></p></div>' +
+           '</div>';
+  }
+
   it('AC-P3a: populates preview from thumb URL', function () {
-    var html = '<div class="mozaique"><div class="thumb-under">' +
-               '<a href="/video-abc123/slug"><img data-src="' + THUMB + '"></a></div></div>';
+    var html = '<div class="mozaique">' + card('/video-abc123/slug', THUMB) + '</div>';
     var items = xnxxParseCards(html);
     expect(items.length).toBe(1);
     expect(items[0].preview).toBe(PREVIEW);
@@ -1419,18 +1452,97 @@ describe('REQ-2 xnxx video.preview', function () {
 
   it('AC-P3b: works for any extension (webp)', function () {
     var thumb = 'https://thumb-cdn77.xnxx-cdn.com/' + UUID + '/3/xn_15_t.webp';
-    var html = '<div class="mozaique"><div class="thumb-under">' +
-               '<a href="/video-abc123/slug"><img data-src="' + thumb + '"></a></div></div>';
+    var html = '<div class="mozaique">' + card('/video-abc123/slug', thumb) + '</div>';
     var items = xnxxParseCards(html);
     expect(items[0].preview).toBe('https://thumb-cdn77.xnxx-cdn.com/' + UUID + '/3/preview.mp4');
   });
 
   it('AC-P3c: empty thumb produces empty preview', function () {
-    var html = '<div class="mozaique"><div class="thumb-under">' +
-               '<a href="/video-abc123/slug"></a></div></div>';
+    var html = '<div class="mozaique"><div class="thumb-block ">' +
+               '<div class="thumb"><a href="/video-abc123/slug"></a></div>' +
+               '<div class="thumb-under"><p class="title"><a href="/video-abc123/slug">Cap</a></p></div>' +
+               '</div></div>';
     var items = xnxxParseCards(html);
     expect(items.length).toBe(1);
     expect(items[0].preview).toBe('');
+  });
+});
+
+// ============================================================
+// Fix J — xnxx off-by-one: thumb must belong to the SAME card as href/title
+// (fixture-backed, REAL markup). FAILS against the old inner thumb-under split.
+// ============================================================
+describe('Fix J — xnxx parser pairs thumb with the SAME card href', function () {
+  // Extract the xnxx video id from a /video-ID/slug URL.
+  function vidId(url) {
+    var m = /\/video-?([^/]+)\//.exec(url || '');
+    return m ? m[1] : null;
+  }
+  // The thumb filename embeds the same id (xn_<id>_t.jpg in the fixture).
+  function thumbId(url) {
+    var m = /xn_([a-z0-9]+)_t\./i.exec(url || '');
+    return m ? m[1] : null;
+  }
+
+  it('items[0]: url id and thumb id reference the same video', function () {
+    var items = xnxxParseCards(fixture('xnxx-list.html'));
+    expect(items.length).toBeGreaterThanOrEqual(2);
+    expect(vidId(items[0].url)).toBe('aaa111');
+    expect(thumbId(items[0].thumb)).toBe('aaa111');
+  });
+
+  it('items[1]: url id and thumb id reference the same video', function () {
+    var items = xnxxParseCards(fixture('xnxx-list.html'));
+    expect(vidId(items[1].url)).toBe('bbb222');
+    expect(thumbId(items[1].thumb)).toBe('bbb222');
+  });
+
+  it('every card has a non-empty title (parsed or URL fallback)', function () {
+    var items = xnxxParseCards(fixture('xnxx-list.html'));
+    items.forEach(function (it) { expect(it.title).not.toBe(''); });
+  });
+
+  it('title-less card (3rd) gets a non-empty title via _titleFromUrl', function () {
+    var items = xnxxParseCards(fixture('xnxx-list.html'));
+    var third = items[2];
+    expect(vidId(third.url)).toBe('ccc333');
+    expect(third.title).toBe('Lonely untitled card');
+  });
+});
+
+// ============================================================
+// Fix D — _titleFromUrl shared slug fallback
+// ============================================================
+describe('Fix D — _titleFromUrl slug fallback', function () {
+  it('/video-123/hot-clip/ -> "Hot clip"', function () {
+    expect(_titleFromUrl('https://x.com/video-123/hot-clip/')).toBe('Hot clip');
+  });
+
+  it('/12345-some_slug.html -> "Some slug"', function () {
+    expect(_titleFromUrl('https://x.com/12345-some_slug.html')).toBe('Some slug');
+  });
+
+  it('/v/99999/ (numeric only) -> ""', function () {
+    expect(_titleFromUrl('https://x.com/v/99999/')).toBe('');
+  });
+
+  it('empty -> ""', function () {
+    expect(_titleFromUrl('')).toBe('');
+  });
+
+  it('decodes percent-encoding and collapses separators', function () {
+    expect(_titleFromUrl('https://x.com/video/hot%20redhead-scene')).toBe('Hot redhead scene');
+  });
+
+  it('a card with thumb+url but no parsed title yields non-empty title', function () {
+    var html = '<div class="mozaique"><div class="thumb-block ">' +
+               '<div class="thumb"><a href="/video-zzz999/wild-party-night">' +
+               '<img data-src="https://cdn/uuid/3/xn_zzz999_t.jpg"></a></div>' +
+               '<div class="thumb-under"><a href="/video-zzz999/wild-party-night"></a></div>' +
+               '</div></div>';
+    var items = xnxxParseCards(html);
+    expect(items.length).toBe(1);
+    expect(items[0].title).toBe('Wild party night');
   });
 });
 

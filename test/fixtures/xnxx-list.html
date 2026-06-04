@@ -1,0 +1,46 @@
+<!-- Real xnxx listing markup (mozaique grid).
+     Per card: outer .thumb-block wrapper holds BOTH the .thumb <img data-src>
+     AND the .thumb-under caption <a href><title>. The image and the href/title
+     belong to the SAME card. Two cards with distinct video ids + distinct thumb
+     filenames so an off-by-one parser pairs the wrong thumb with the wrong href. -->
+<div id="content">
+  <div class="mozaique">
+
+    <div class="thumb-block ">
+      <div class="thumb">
+        <a href="/video-aaa111/first_hot_clip">
+          <img data-src="https://thumb-cdn77.xnxx-cdn.com/uuid-aaa111/3/xn_aaa111_t.jpg" alt="">
+        </a>
+      </div>
+      <div class="thumb-under">
+        <p class="title"><a href="/video-aaa111/first_hot_clip">First Hot Clip</a></p>
+        <p class="metadata"><span class="duration">12:34</span></p>
+      </div>
+    </div>
+
+    <div class="thumb-block ">
+      <div class="thumb">
+        <a href="/video-bbb222/second_amazing_scene">
+          <img data-src="https://thumb-cdn77.xnxx-cdn.com/uuid-bbb222/3/xn_bbb222_t.jpg" alt="">
+        </a>
+      </div>
+      <div class="thumb-under">
+        <p class="title"><a href="/video-bbb222/second_amazing_scene">Second Amazing Scene</a></p>
+        <p class="metadata"><span class="duration">08:21</span></p>
+      </div>
+    </div>
+
+    <!-- Third card WITHOUT a title in the markup, to exercise _titleFromUrl fallback -->
+    <div class="thumb-block ">
+      <div class="thumb">
+        <a href="/video-ccc333/lonely-untitled-card">
+          <img data-src="https://thumb-cdn77.xnxx-cdn.com/uuid-ccc333/3/xn_ccc333_t.jpg" alt="">
+        </a>
+      </div>
+      <div class="thumb-under">
+        <a href="/video-ccc333/lonely-untitled-card"></a>
+      </div>
+    </div>
+
+  </div>
+</div>
