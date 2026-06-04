@@ -2315,7 +2315,9 @@ SOURCES.push({
     var p = page || 1;
     var q = encodeURIComponent(query);
     var url = 'https://www.youjizz.com/search/videos/' + q + '-' + p + '.html';
-    return cherryFetch(url).then(function(html) {
+    // Status-tolerant: this search route can return a non-200 whose body still holds
+    // result cards (datacenter IP saw a 404); cherryFetch would throw and drop them.
+    return _fetchAny(url).then(function(html) {
       var items = self._parseCards(html);
       // Pagination: look for highest page link
       var pgNums = [];
@@ -4027,8 +4029,10 @@ SOURCES.push({
 
     search: function (query, page) {
         // single-page site: DLE ?do=search returns one page (no page param) → total_pages 1.
+        // DLE search responds HTTP 404 but the body DOES contain result cards, so use
+        // the status-tolerant _fetchAny (cherryFetch would throw on !ok and drop them).
         var url = 'https://jopaonline.mobi/?do=search&subaction=search&story=' + encodeURIComponent(query);
-        return cherryFetch(url).then(function (html) {
+        return _fetchAny(url).then(function (html) {
             return { items: _jopaCards(html), total_pages: 1 };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
