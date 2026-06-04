@@ -3199,6 +3199,32 @@ function _porntrexPages(html) {
     return items;
   }
 
+  // Build a category-browse URL from a {slug}/{page} template + flags.
+  // pageBase: page number for page 1 (0 or 1). page1Omit: drop the page segment on page 1.
+  // Handles all site formats: /categories/{slug}/{page}/, root /{slug}/{page}/,
+  // no-trailing-slash, 0-based pages, page-in-filename ({slug}-{page}.html), query (&page={page}).
+  function _buildCatUrl(fmt, slug, page, pageBase, page1Omit) {
+    var p = page || 1;
+    var out;
+    if (page1Omit && p === 1) {
+      out = fmt.replace(/[-/]?\{page\}/, '');     // drop "-{page}" or "/{page}" on page 1
+    } else {
+      var n = (pageBase === 0) ? (p - 1) : p;
+      out = fmt.replace(/\{page\}/, n);
+    }
+    out = out.replace(/\{slug\}/, slug);
+    out = out.replace(/([^:])\/\/+/g, '$1/');     // collapse double slashes (keep scheme ://)
+    return out;
+  }
+
+  // Compact category list: "slug:Label,slug:Label" → [{id,label}]. Label may contain spaces.
+  function _cats(s) {
+    return s.split(',').map(function (pair) {
+      var i = pair.indexOf(':');
+      return { id: pair.slice(0, i), label: pair.slice(i + 1) };
+    });
+  }
+
   function _kvsEngine(cfg) {
     if (cfg.id && !/^[a-z0-9_-]+$/i.test(cfg.id)) {
       throw new Error('Cherry _kvsEngine: cfg.id must be alphanumeric/hyphen/underscore, got: ' + cfg.id);
@@ -3207,6 +3233,8 @@ function _porntrexPages(html) {
       id:   cfg.id,
       name: cfg.name,
       host: cfg.host,
+      // Expose categories/sorts so the right-edge action menu (openActionsMenu) shows them.
+      cfg: { categories: cfg.categories || [], sorts: cfg.sorts || [] },
 
       search: function(query, page) {
         return cherryFetch(cfg.searchUrl(query, page)).then(function(html) {
@@ -3218,9 +3246,16 @@ function _porntrexPages(html) {
         }).catch(function() { return { items: [], total_pages: 0 }; });
       },
 
-      browse: function(category, page) {
+      browse: function(category, page, sort) {
         var p = page || 1;
-        return cherryFetch(cfg.browseUrl(p)).then(function(html) {
+        var url;
+        if (category && cfg.categoryFmt) {
+          url = _buildCatUrl(cfg.categoryFmt, category, p, cfg.catPageBase || 1, cfg.catPage1Omit !== false);
+          if (sort) url += (url.indexOf('?') >= 0 ? '&' : '?') + (cfg.sortParam || 'sort_by') + '=' + sort;
+        } else {
+          url = cfg.browseUrl(p);
+        }
+        return cherryFetch(url).then(function(html) {
           return {
             items:       _kvsParseCards(html, cfg),
             total_pages: _kvsPages(html, cfg.pagesRx, p)
@@ -3237,6 +3272,10 @@ SOURCES.push(_kvsEngine({
     id: 'xozilla',
     name: 'Xozilla',
     host: 'xozilla.com',
+    categoryFmt: 'https://www.xozilla.com/categories/{slug}/{page}/',
+    catPageBase: 1, catPage1Omit: true,
+    categories: _cats('amateur:Любительское,anal:Анал,asian:Азиатки,bbw:BBW,big-tits:Большие сиськи,blonde:Блондинки,blowjob:Минет,creampie:Кремпай,hairy:Волосатые,hardcore:Жёсткое,indian:Индийское,interracial:Межрасовое,japanese:Японское,lesbian:Лесбиянки,milf:MILF,pov:От первого лица,stockings:Чулки,teen:Молодые,threesome:Втроём,young:Юные'),
+    sorts: [{id:'video_viewed',label:'Популярное'},{id:'rating',label:'Топ рейтинга'},{id:'post_date',label:'Новое'}],
     searchUrl: function(query, page) {
         return 'https://xozilla.com/?s=' + encodeURIComponent(query) + '&p=' + page;
     },
@@ -3361,6 +3400,10 @@ SOURCES.push(_kvsEngine({
     id: 'analdin',
     name: 'Analdin',
     host: 'analdin.com',
+    categoryFmt: 'https://www.analdin.com/categories/{slug}/{page}/',
+    catPageBase: 1, catPage1Omit: true,
+    categories: _cats('18-years-old:18 лет,69:69,anal:Анал,anal-toys:Анальные игрушки,arab:Арабское,asian:Азиатки,ass:Жопа,ass-licking:Лизание жопы,babes:Красотки,bbc:BBC,bbw:BBW,bdsm:БДСМ,blowjob:Минет'),
+    sorts: [{id:'video_viewed',label:'Популярное'},{id:'rating',label:'Топ рейтинга'},{id:'duration',label:'Длинные'}],
     searchUrl: function(query, page) {
         return 'https://analdin.com/?s=' + encodeURIComponent(query) + '&p=' + page;
     },
@@ -3829,6 +3872,10 @@ SOURCES.push(_kvsEngine({
   id: 'hellporno',
   name: 'HellPorno',
   host: 'hellporno.com',
+  categoryFmt: 'https://hellporno.com/{slug}/{page}/',
+  catPageBase: 1, catPage1Omit: true,
+  categories: _cats('anal:Анал,arab:Арабское,asian:Азиатки,bbw:BBW,bdsm:БДСМ,big-ass:Большая жопа,big-tits:Большие сиськи,casting:Кастинг,creampie:Кремпай,ebony:Чёрные,gangbang:Групповуха,granny:Бабушки,hairy:Волосатые,handjob:Дрочка,indian:Индийское,interracial:Межрасовое,japanese:Японское,milf:MILF,massage:Массаж,mature:Зрелые,mom:Мамки,pov:От первого лица,public:На публике,russian:Русское,teen:Молодые,threesome:Втроём'),
+  sorts: [{id:'video_viewed',label:'Популярное'}],
   searchUrl: function(query, page) {
     return 'https://hellporno.com/search/' + (page || 1) + '/?q=' + encodeURIComponent(query);
   },
@@ -3948,6 +3995,10 @@ SOURCES.push(_kvsEngine({
     id: 'pornobolt',
     name: 'Pornobolt',
     host: 'sex.pornobolt.in',
+    categoryFmt: 'https://sex.pornobolt.in/{slug}/{page}',
+    catPageBase: 1, catPage1Omit: true, sortParam: 'sort',
+    categories: _cats('anal:Анал,milf:Милфа,granny:Бабушки,big-ass:Большая жопа,china:Китайское,japan:Японское,indian:Индийское,arab:Арабское,shkola:Школа,otchim:Отчим,izmena:Измена,cuckold:Куколд,incest:Инцест,zrelye:Зрелые,pickup:Пикап,kasting:Кастинг,molodenkie:Молоденькие,lyubitelskoe:Любительское,gruppovuha:Групповуха,aziatki:Азиатки,latinki:Латинки,russkoe-porno:Русские'),
+    sorts: [{id:'mv',label:'Популярное'},{id:'mc',label:'Обсуждаемое'}],
     searchUrl: function(query) {
         return 'https://sex.pornobolt.in/search/' + encodeURIComponent(query);
     },
@@ -4004,6 +4055,10 @@ SOURCES.push(_kvsEngine({
     id: 'crocotube',
     name: 'CrocoTube',
     host: 'crocotube.com',
+    categoryFmt: 'https://crocotube.com/categories/{slug}/{page}/',
+    catPageBase: 1, catPage1Omit: true,
+    categories: _cats('amateur:Любительское,anal:Анал,arab:Арабское,asian:Азиатки,ass:Жопа,babes:Красотки,bbw:BBW,big-ass:Большая жопа,big-black-cock:Большой чёрный член,big-cock:Большой член,big-tits:Большие сиськи,hairy:Волосатые,natural-tits:Натуральные сиськи,perfect-body:Идеальное тело'),
+    sorts: [],
     searchUrl: function(query, page) {
         return page > 1
             ? 'https://crocotube.com/search/' + page + '/?q=' + encodeURIComponent(query)

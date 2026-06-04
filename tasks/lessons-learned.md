@@ -57,6 +57,14 @@ Pattern `['"]src['"]` requires quotes around key name — fails on `{src:"url"}`
 
 ---
 
+## categories-batch1 (2026-06-04) — Mode: fast
+
+### L30: One generic URL builder beats 14 per-site category hacks
+24 sites have ~14 distinct category-URL shapes (/categories/{slug}/{page}/, root /{slug}/, no-trailing-slash, 0-based page, page-in-filename, &page= query). A single `_buildCatUrl(fmt, slug, page, pageBase, page1Omit)` with a `{slug}`/`{page}` template + 2 flags covers all of them; per-adapter cfg just supplies the template + flags. Elegant > 14 hacks. `_kvsEngine` now exposes `cfg:{categories,sorts}` so the UI menu reads them, and its browse uses `categoryFmt` when a category is set.
+
+### L31: Bash quoted-heredoc still collapses `\\` → `\` for appended JS test files
+Appending a vitest file via `cat >> f << 'EOF'` turned `new RegExp("id:\\s*...")` into `"id:\s*..."`, and JS then read `"\s"` as `"s"` — the regex silently became `id:s*...[sS]` and never matched. Literal regexes (`/\{page\}/`) survived; only double-backslash strings broke. **Rule:** never write regex-bearing JS through a heredoc — use the Edit/Write tool, or prefer `indexOf`/`toContain` proximity checks over `new RegExp(string)` in anti-drift tests.
+
 ## p0-right-recursion (2026-06-04) — Mode: fast
 
 ### L29: Lampa.Controller.move(dir) RE-DISPATCHES into the controller's dir handler at the edge

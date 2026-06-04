@@ -1123,3 +1123,61 @@ describe('Android native stream — plugin.js source assertions (anti-drift)', (
     expect(SRC).toMatch(/_isAndroid\(\)\s*\?\s*hlsUrls\[lbl\]\s*:\s*buildProxyUrl\(hlsUrls\[lbl\]/);
   });
 });
+
+// ── Batch 1: KVS categories (_buildCatUrl + _kvsEngine cfg) ────────────────────
+describe('KVS categories — _buildCatUrl POST behaviour', () => {
+  // Local mirror of plugin.js _buildCatUrl
+  function _buildCatUrl(fmt, slug, page, pageBase, page1Omit) {
+    var p = page || 1, out;
+    if (page1Omit && p === 1) out = fmt.replace(/[-/]?\{page\}/, '');
+    else { var n = (pageBase === 0) ? (p - 1) : p; out = fmt.replace(/\{page\}/, n); }
+    out = out.replace(/\{slug\}/, slug).replace(/([^:])\/\/+/g, '$1/');
+    return out;
+  }
+  it('kvs /categories/{slug}/{page}/ — page1 omits number', () => {
+    expect(_buildCatUrl('https://www.xozilla.com/categories/{slug}/{page}/', 'anal', 1, 1, true))
+      .toBe('https://www.xozilla.com/categories/anal/');
+    expect(_buildCatUrl('https://www.xozilla.com/categories/{slug}/{page}/', 'anal', 2, 1, true))
+      .toBe('https://www.xozilla.com/categories/anal/2/');
+  });
+  it('root /{slug}/{page}/ (hellporno)', () => {
+    expect(_buildCatUrl('https://hellporno.com/{slug}/{page}/', 'anal', 1, 1, true)).toBe('https://hellporno.com/anal/');
+    expect(_buildCatUrl('https://hellporno.com/{slug}/{page}/', 'anal', 2, 1, true)).toBe('https://hellporno.com/anal/2/');
+  });
+  it('no-trailing-slash (pornobolt)', () => {
+    expect(_buildCatUrl('https://sex.pornobolt.in/{slug}/{page}', 'anal', 1, 1, true)).toBe('https://sex.pornobolt.in/anal');
+    expect(_buildCatUrl('https://sex.pornobolt.in/{slug}/{page}', 'anal', 2, 1, true)).toBe('https://sex.pornobolt.in/anal/2');
+  });
+  it('0-based page (xnxx/xvideos style)', () => {
+    expect(_buildCatUrl('https://www.xnxx.com/search/{slug}/{page}', 'anal', 1, 0, false)).toBe('https://www.xnxx.com/search/anal/0');
+    expect(_buildCatUrl('https://www.xnxx.com/search/{slug}/{page}', 'anal', 2, 0, false)).toBe('https://www.xnxx.com/search/anal/1');
+  });
+  it('page-in-filename (youjizz)', () => {
+    expect(_buildCatUrl('https://www.youjizz.com/categories/{slug}-{page}.html', 'anal', 1, 1, false)).toBe('https://www.youjizz.com/categories/anal-1.html');
+    expect(_buildCatUrl('https://www.youjizz.com/categories/{slug}-{page}.html', 'anal', 2, 1, false)).toBe('https://www.youjizz.com/categories/anal-2.html');
+  });
+});
+
+describe('KVS categories — plugin.js source assertions (anti-drift)', () => {
+  it('_buildCatUrl helper is defined', () => {
+    expect(SRC).toMatch(/function _buildCatUrl\(/);
+  });
+  it('_cats helper is defined', () => {
+    expect(SRC).toMatch(/function _cats\(/);
+  });
+  it('_kvsEngine exposes cfg with categories and sorts', () => {
+    expect(SRC).toMatch(/cfg:\s*\{\s*categories:\s*cfg\.categories[\s\S]{0,60}sorts:\s*cfg\.sorts/);
+  });
+  it('_kvsEngine.browse uses categoryFmt + _buildCatUrl when category set', () => {
+    expect(SRC).toMatch(/category\s*&&\s*cfg\.categoryFmt[\s\S]{0,120}_buildCatUrl/);
+  });
+  it('all 5 KVS adapters declare categoryFmt + categories', () => {
+    ['xozilla','analdin','hellporno','pornobolt','crocotube'].forEach(function (id) {
+      var at = SRC.indexOf("id: '" + id + "'");
+      expect(at).toBeGreaterThan(-1);
+      var window = SRC.slice(at, at + 500);
+      expect(window).toContain('categoryFmt');
+      expect(window).toContain('categories:');
+    });
+  });
+});
