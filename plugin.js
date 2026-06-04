@@ -721,7 +721,7 @@
           if (object.client_sort === 'duration') {
             flat.sort(function (a, b) { return (b.duration || 0) - (a.duration || 0); });
           }
-          resolve(flat.map(toCard), anyFull ? (page + 1) : page);
+          resolve(flat.map(toCard), anyFull ? (page + 50) : page);
         }).catch(function (err) {
           console.warn('[Cherry] loadAllSources error:', err);
           reject();
@@ -1678,8 +1678,15 @@ function _titleFromUrl(url) {
 // there's a next one; a short page is the last. `full` = the per-source page size
 // (or a low floor). Returns the page number to report as total_pages.
 function _derivePages(itemsLen, page, full) {
-  var threshold = full || 12;
-  return itemsLen >= threshold ? (page + 1) : page;
+  // "Has more pages" if this page came back at least half-full (tolerant to per-site
+  // count variance). When it does, promise a GENEROUS window ahead so the base
+  // InteractionCategory keeps requesting on scroll — returning page+1 made it stop
+  // after a single extra page (the infinite-scroll bug). A short/empty page caps it.
+  // nextPageReuest re-derives each page, so the window re-extends as long as pages
+  // stay full → effectively infinite while the site has content.
+  var f = full || 12;
+  var hasMore = itemsLen >= Math.max(1, Math.floor(f / 2));
+  return hasMore ? (page + 50) : page;
 }
 
 // ============================================================
@@ -1818,7 +1825,7 @@ SOURCES.push({
       var data = JSON.parse(text);
       var videos = data.videos || (data.data && data.data.videos) || [];
       var items = videos.map(function(v) { return self._mapVideo(v); });
-      var total_pages = (items.length >= self._PAGE_SIZE) ? (p + 1) : p;
+      var total_pages = _derivePages(items.length, p, self._PAGE_SIZE);
       return { items: items, total_pages: total_pages };
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
@@ -1834,7 +1841,7 @@ SOURCES.push({
       var data = JSON.parse(text);
       var videos = data.videos || (data.data && data.data.videos) || [];
       var items = videos.map(function(v) { return self._mapVideo(v); });
-      var total_pages = (items.length >= self._PAGE_SIZE) ? (p + 1) : p;
+      var total_pages = _derivePages(items.length, p, self._PAGE_SIZE);
       return { items: items, total_pages: total_pages };
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },

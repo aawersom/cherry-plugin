@@ -1432,9 +1432,10 @@ describe('all_sources pagination wiring', () => {
     expect(body).toMatch(/r\.items\.length\s*>=\s*10[\s\S]{0,40}anyFull\s*=\s*true/);
   });
 
-  it('derives total_pages: page+1 when a full batch returned, else page (last)', () => {
+  it('derives total_pages: generous forward (page+50) when a full batch returned, else page (last)', () => {
     var body = allSourcesBody();
-    expect(body).toMatch(/resolve\(flat\.map\(toCard\),\s*anyFull\s*\?\s*\(page\s*\+\s*1\)\s*:\s*page\)/);
+    // Generous forward window so InteractionCategory keeps paginating (page+1 stopped after one page).
+    expect(body).toMatch(/resolve\(flat\.map\(toCard\),\s*anyFull\s*\?\s*\(page\s*\+\s*50\)\s*:\s*page\)/);
   });
 });
 
@@ -1887,11 +1888,12 @@ describe('Pornhub adapter — webmasters slugs/orderings/pagination', () => {
     expect(PH).toContain("'&ordering=' + ordering");
   });
 
-  it('total_pages derived from batch size (no broken total_pages/pagesTotal parse)', () => {
+  it('total_pages derived via _derivePages (generous forward, no broken total_pages parse)', () => {
     expect(PH).not.toContain('data.total_pages');
     expect(PH).not.toContain('data.pagesTotal');
     expect(PH).toContain('_PAGE_SIZE');
-    expect(PH).toContain('(p + 1)');
+    expect(PH).toMatch(/_derivePages\(items\.length, p, self\._PAGE_SIZE\)/);
+    expect(PH).not.toContain('(p + 1)');
   });
 
   // Behavior: full batch (>= PAGE_SIZE) means there's likely a next page;

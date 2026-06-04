@@ -56,12 +56,13 @@ function parseViews(str) {
 }
 
 // ---- _derivePages -----------------------------------------------------------
-// Verbatim from plugin.js (near _titleFromUrl).
-// Infinite-scroll pagination from batch fullness: full page → next page exists;
-// short page → last page.
+// Verbatim from plugin.js (near _titleFromUrl). Half-full → "has more" (tolerant);
+// generous forward window (page+50) so InteractionCategory keeps paginating
+// (page+1 stopped after one extra page); short/empty page caps it.
 function _derivePages(itemsLen, page, full) {
-  var threshold = full || 12;
-  return itemsLen >= threshold ? (page + 1) : page;
+  var f = full || 12;
+  var hasMore = itemsLen >= Math.max(1, Math.floor(f / 2));
+  return hasMore ? (page + 50) : page;
 }
 
 // ---- _kvsPages --------------------------------------------------------------
@@ -254,13 +255,15 @@ var BASE_CFG = {
 // =============================================================================
 
 describe('_derivePages', () => {
-  it('full batch (len >= threshold) → page+1', () => {
-    expect(_derivePages(20, 1, 20)).toBe(2);
-    expect(_derivePages(27, 3, 20)).toBe(4);
+  it('at-least-half-full batch → generous forward (page+50)', () => {
+    expect(_derivePages(20, 1, 20)).toBe(51);   // full
+    expect(_derivePages(27, 3, 20)).toBe(53);   // full
+    expect(_derivePages(10, 1, 20)).toBe(51);   // exactly half (>=10) → has more
+    expect(_derivePages(19, 1, 20)).toBe(51);   // partial-but-half-full → keep paginating
   });
 
-  it('short batch (len < threshold) → page (last page)', () => {
-    expect(_derivePages(19, 1, 20)).toBe(1);
+  it('clearly short batch (< half) → page (last page)', () => {
+    expect(_derivePages(9, 1, 20)).toBe(1);     // below half (10) → stop
     expect(_derivePages(5, 4, 20)).toBe(4);
   });
 
@@ -269,10 +272,11 @@ describe('_derivePages', () => {
     expect(_derivePages(0, 7, 12)).toBe(7);
   });
 
-  it('default floor of 12 when full is falsy', () => {
-    expect(_derivePages(12, 1)).toBe(2);   // 12 >= 12 → next
-    expect(_derivePages(11, 1)).toBe(1);   // 11 < 12 → last
-    expect(_derivePages(12, 2, 0)).toBe(3);
+  it('default floor of 12 when full is falsy (half = 6)', () => {
+    expect(_derivePages(12, 1)).toBe(51);  // >= half(6) → forward
+    expect(_derivePages(6, 1)).toBe(51);   // exactly half → forward
+    expect(_derivePages(5, 1)).toBe(1);    // < half(6) → last
+    expect(_derivePages(12, 2, 0)).toBe(52);
   });
 });
 
@@ -286,9 +290,9 @@ describe('_kvsPages', () => {
   it('derives from batch fullness when RegExp does not match (full → next page)', () => {
     var html = '<a href="/page/2/">Next</a>';
     var rx = /p=(\d+)"[^>]*(?:last|>>|&raquo;)/i;
-    // 20 cards (full) on page 1 → next page exists
-    expect(_kvsPages(html, rx, 1, 20)).toBe(2);
-    // 5 cards (short) on page 1 → last page
+    // 20 cards (full) on page 1 → generous forward window
+    expect(_kvsPages(html, rx, 1, 20)).toBe(51);
+    // 5 cards (< half of 20) on page 1 → last page
     expect(_kvsPages(html, rx, 1, 5)).toBe(1);
   });
 
@@ -301,12 +305,12 @@ describe('_kvsPages', () => {
   it('falls back to derived pages for falsy function return', () => {
     // A function returning 0 falls back to fullness-derivation.
     var fn = function() { return 0; };
-    expect(_kvsPages('', fn, 1, 20)).toBe(2);  // full page → next
-    expect(_kvsPages('', fn, 2, 3)).toBe(2);   // short page → last
+    expect(_kvsPages('', fn, 1, 20)).toBe(51);  // full page → forward window
+    expect(_kvsPages('', fn, 2, 3)).toBe(2);    // short page (<half) → last
   });
 
   it('derives from fullness when pagesRxOrFn is undefined', () => {
-    expect(_kvsPages('<p>some html</p>', undefined, 1, 20)).toBe(2);
+    expect(_kvsPages('<p>some html</p>', undefined, 1, 20)).toBe(51);
     expect(_kvsPages('<p>some html</p>', undefined, 1, 0)).toBe(1);
   });
 
