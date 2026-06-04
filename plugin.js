@@ -1406,6 +1406,14 @@ function _titleFromUrl(url) {
   } catch (e) { return ''; }
 }
 
+// Infinite-scroll pagination without fragile markup parsing: a full page implies
+// there's a next one; a short page is the last. `full` = the per-source page size
+// (or a low floor). Returns the page number to report as total_pages.
+function _derivePages(itemsLen, page, full) {
+  var threshold = full || 12;
+  return itemsLen >= threshold ? (page + 1) : page;
+}
+
 // ============================================================
 // CHERRY — SOURCE ADAPTERS TIER 2
 // Porntrex, Xozilla, 3Movs, Analdin, PornVe, FamilyPorn,
@@ -1721,7 +1729,8 @@ SOURCES.push({
     var url = 'https://www.xvideos2.com/?k=' + encodeURIComponent(query) + '&p=' + (p - 1);
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html, p);
-      return { items: items, total_pages: p + 10 };
+      // xvideos grid serves ~27 cards/page; full batch ⇒ next page exists.
+      return { items: items, total_pages: _derivePages(items.length, p, 20) };
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
@@ -1740,7 +1749,7 @@ SOURCES.push({
     }
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html, p);
-      return { items: items, total_pages: p + 10 };
+      return { items: items, total_pages: _derivePages(items.length, p, 20) };
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
@@ -1753,7 +1762,7 @@ SOURCES.push({
     var url = pageIdx === 0 ? baseUrl : baseUrl + '/' + pageIdx;
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html, p);
-      return { items: items, total_pages: p + 5 };
+      return { items: items, total_pages: _derivePages(items.length, p, 20) };
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
@@ -1853,7 +1862,8 @@ SOURCES.push({
     var url = 'https://www.xnxx.com/search/' + q + '/' + p;
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html);
-      return { items: items, total_pages: p + 10 };
+      // xnxx grid serves ~27 cards/page; full batch ⇒ next page exists.
+      return { items: items, total_pages: _derivePages(items.length, p, 20) };
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
@@ -1868,7 +1878,7 @@ SOURCES.push({
       : 'https://www.xnxx.com/?k=new&p=' + (p - 1);
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html);
-      return { items: items, total_pages: p + 10 };
+      return { items: items, total_pages: _derivePages(items.length, p, 20) };
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
@@ -2315,7 +2325,8 @@ SOURCES.push({
         var n = parseInt(m[1], 10);
         if (!isNaN(n)) pgNums.push(n);
       }
-      var total = pgNums.length ? Math.max.apply(null, pgNums) : p + 5;
+      // Prefer the real last-page link; fall back to batch fullness (~30/page).
+      var total = pgNums.length ? Math.max.apply(null, pgNums) : _derivePages(items.length, p, 20);
       return { items: items, total_pages: total };
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
@@ -2327,10 +2338,12 @@ SOURCES.push({
       // page number baked into the filename: {slug}-{page}.html (1-based)
       var curl = _buildCatUrl('https://www.youjizz.com/categories/{slug}-{page}.html', category, p, 1, false);
       return cherryFetch(curl).then(function(html) {
-        return { items: self._parseCards(html), total_pages: p + 5 };
+        var items = self._parseCards(html);
+        return { items: items, total_pages: _derivePages(items.length, p, 20) };
       }).catch(function() { return { items: [], total_pages: 0 }; });
     }
-    // youjizz.com/videos/newest-N.html returns 500; use homepage instead
+    // youjizz.com/videos/newest-N.html returns 500; use homepage instead.
+    // single-page site: homepage has no page param (newest-N 500s) → total_pages 1.
     var url = 'https://www.youjizz.com/';
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html);
@@ -2400,12 +2413,14 @@ SOURCES.push({
             '&_embed=wp%3Afeaturedmedia&_fields=id,title,link,_embedded';
         return cherryFetch(apiUrl).then(function (text) {
             var items = self._fromApi(text);
-            if (items) return { items: items, total_pages: p + 5 };
+            // WP API per_page=20 → full batch implies a next page.
+            if (items) return { items: items, total_pages: _derivePages(items.length, p, 20) };
             throw new Error('api-empty');
         }).catch(function () {
             var url = 'https://pornone.com/?s=' + encodeURIComponent(query) + '&paged=' + p;
             return cherryFetch(url).then(function (html) {
-                return { items: _pornoneCards(html), total_pages: _pornonePages(html) };
+                var items = _pornoneCards(html);
+                return { items: items, total_pages: _pornonePages(html, p, items.length) };
             }).catch(function () { return { items: [], total_pages: 0 }; });
         });
     },
@@ -2417,7 +2432,8 @@ SOURCES.push({
             // Category browses at ROOT /{slug}/{page}/ (HTML); reuse _pornoneCards parser.
             var curl = _buildCatUrl('https://pornone.com/{slug}/{page}/', category, p, 1, true);
             return cherryFetch(curl).then(function (html) {
-                return { items: _pornoneCards(html), total_pages: _pornonePages(html) };
+                var items = _pornoneCards(html);
+                return { items: items, total_pages: _pornonePages(html, p, items.length) };
             }).catch(function () { return { items: [], total_pages: 0 }; });
         }
         var apiUrl = 'https://pornone.com/wp-json/wp/v2/posts?orderby=date&order=desc' +
@@ -2425,14 +2441,15 @@ SOURCES.push({
             '&_embed=wp%3Afeaturedmedia&_fields=id,title,link,_embedded';
         return cherryFetch(apiUrl).then(function (text) {
             var items = self._fromApi(text);
-            if (items) return { items: items, total_pages: p + 10 };
+            if (items) return { items: items, total_pages: _derivePages(items.length, p, 20) };
             throw new Error('api-empty');
         }).catch(function () {
             var url = p > 1
                 ? 'https://pornone.com/page/' + p + '/'
                 : 'https://pornone.com/';
             return cherryFetch(url).then(function (html) {
-                return { items: _pornoneCards(html), total_pages: _pornonePages(html) };
+                var items = _pornoneCards(html);
+                return { items: items, total_pages: _pornonePages(html, p, items.length) };
             }).catch(function () { return { items: [], total_pages: 0 }; });
         });
     },
@@ -2506,11 +2523,11 @@ function _pornoneCards(html) {
     return items;
 }
 
-function _pornonePages(html) {
+function _pornonePages(html, page, itemsLen) {
     // WP pagination uses ?paged=N (search) or /page/N/ (browse)
     var m = /paged=(\d+)["'][^>]*(?:last|>>)/i.exec(html) ||
             /\/page\/(\d+)\/["'][^>]*(?:last|>>)/i.exec(html);
-    return m ? (parseInt(m[1], 10) || 10) : 10;
+    return m ? (parseInt(m[1], 10) || _derivePages(itemsLen, page, 20)) : _derivePages(itemsLen, page, 20);
 }
 
 // ---- 1. Porntrex ----
@@ -2632,16 +2649,19 @@ function _porntrexPages(html) {
   // KVS ENGINE — generic browse/search/card-parse for KVS sites
   // ============================================================
 
-  function _kvsPages(html, pagesRxOrFn, page) {
+  // Prefer a real last-page number from the markup; when none is found, derive from
+  // batch fullness (KVS grids serve ~24-30 cards/page) instead of a constant cap.
+  function _kvsPages(html, pagesRxOrFn, page, itemsLen) {
+    var fallback = _derivePages(itemsLen || 0, page || 1, 20);
     if (typeof pagesRxOrFn === 'function') {
-      return pagesRxOrFn(html, page) || 10;
+      return pagesRxOrFn(html, page) || fallback;
     }
     if (pagesRxOrFn instanceof RegExp) {
       var m = pagesRxOrFn.exec(html);
-      if (m) return parseInt(m[1], 10) || 10;
-      return 10;
+      if (m) return parseInt(m[1], 10) || fallback;
+      return fallback;
     }
-    return 10;
+    return fallback;
   }
 
   function _kvsParseCards(html, cfg) {
@@ -2745,7 +2765,7 @@ function _porntrexPages(html) {
           var items = _kvsParseCards(html, cfg);
           var total = typeof cfg.searchTotalPages === 'number'
             ? cfg.searchTotalPages
-            : _kvsPages(html, cfg.pagesRx, page);
+            : _kvsPages(html, cfg.pagesRx, page, items.length);
           return { items: items, total_pages: total };
         }).catch(function() { return { items: [], total_pages: 0 }; });
       },
@@ -2768,9 +2788,10 @@ function _porntrexPages(html) {
           url += (url.indexOf('?') >= 0 ? '&' : '?') + sp + '=' + s;
         }
         return cherryFetch(url).then(function(html) {
+          var items = _kvsParseCards(html, cfg);
           return {
-            items:       _kvsParseCards(html, cfg),
-            total_pages: _kvsPages(html, cfg.pagesRx, p)
+            items:       items,
+            total_pages: _kvsPages(html, cfg.pagesRx, p, items.length)
           };
         }).catch(function() { return { items: [], total_pages: 0 }; });
       },
@@ -2836,9 +2857,11 @@ SOURCES.push({
     cfg: { categories: _cats('milf:MILF,teen:Молодые,anal:Анал,blowjob:Минет,big-tits:Большие сиськи,amateur:Любительское,mature:Зрелые,asian:Азиатки,japanese:Японское,lesbian:Лесбиянки,pov:От первого лица,hardcore:Жёсткое,threesome:Втроём,interracial:Межрасовое,ebony:Чёрные,big-cock:Большой член,cumshot:Камшот,creampie:Кремпай,public:На публике,casting:Кастинг,mom:Мамки,squirting:Сквирт,gangbang:Групповуха,russian:Русское,german:Немецкое,big-ass:Большая жопа,bdsm:БДСМ,massage:Массаж,toys:Игрушки'), sorts: [] },
 
     search: function (query, page) {
-        var url = 'https://www.3movs.com/?s=' + encodeURIComponent(query) + '&p=' + page;
+        var p = page || 1;
+        var url = 'https://www.3movs.com/?s=' + encodeURIComponent(query) + '&p=' + p;
         return cherryFetch(url).then(function (html) {
-            return { items: _3movsCards(html), total_pages: _3movsPages(html) };
+            var items = _3movsCards(html);
+            return { items: items, total_pages: _3movsPages(html, p, items.length) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
@@ -2849,14 +2872,16 @@ SOURCES.push({
             // use status-tolerant _fetchAny so pagination isn't dropped.
             var curl = _buildCatUrl('https://3movs.com/categories/{slug}/{page}/', category, p, 1, true);
             return _fetchAny(curl).then(function (html) {
-                return { items: _3movsCards(html), total_pages: _3movsPages(html) };
+                var items = _3movsCards(html);
+                return { items: items, total_pages: _3movsPages(html, p, items.length) };
             }).catch(function () { return { items: [], total_pages: 0 }; });
         }
         var url = p > 1
             ? 'https://www.3movs.com/latest-updates/' + p + '/'
             : 'https://www.3movs.com/latest-updates/';
         return cherryFetch(url).then(function (html) {
-            return { items: _3movsCards(html), total_pages: _3movsPages(html) };
+            var items = _3movsCards(html);
+            return { items: items, total_pages: _3movsPages(html, p, items.length) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
@@ -2912,9 +2937,9 @@ function _3movsCards(html) {
     return items;
 }
 
-function _3movsPages(html) {
+function _3movsPages(html, page, itemsLen) {
     var m = /p=(\d+)"[^>]*(?:last|>>|&raquo;)/i.exec(html);
-    return m ? (parseInt(m[1], 10) || 10) : 10;
+    return m ? (parseInt(m[1], 10) || _derivePages(itemsLen, page, 20)) : _derivePages(itemsLen, page, 20);
 }
 
 // ---- 4. Analdin ----
@@ -3151,12 +3176,14 @@ SOURCES.push({
     cfg: { categories: _cats('33/anal:Анал,34/young:Юные,36/blonde:Блондинки,38/asian:Азиатки,39/milf:MILF,40/lesbian:Лесбиянки,41/mature:Зрелые,42/orgy:Оргия,43/big-boobs:Большие сиськи,45/black:Чёрные,46/bbw:BBW,47/creampie:Кремпай,48/masturbation:Мастурбация,51/hentai:Хентай,52/blowjob:Минет,53/interracial:Межрасовое,54/latina:Латинки,55/bondage-bdsm:БДСМ,57/fetish:Фетиш,58/pov:От первого лица,60/redhead:Рыжие,63/brunette:Брюнетки,64/double-penetration:Двойное,67/small-tits:Маленькие сиськи,74/massage:Массаж,799/cumshot:Камшот,802/big-dick:Большой член,816/stockings:Чулки,82/gangbang:Групповуха,1198/big-ass:Большая жопа'), sorts: [] },
 
     search: function (query, page) {
+        var p = page || 1;
         var q = encodeURIComponent(query);
-        var url = page > 1
-            ? 'https://porndig.com/search/' + q + '/page/' + page
+        var url = p > 1
+            ? 'https://porndig.com/search/' + q + '/page/' + p
             : 'https://porndig.com/search/' + q + '/';
         return cherryFetch(url).then(function (html) {
-            return { items: _porndigCards(html), total_pages: _porndigPages(html) };
+            var items = _porndigCards(html);
+            return { items: items, total_pages: _porndigPages(html, p, items.length) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
@@ -3167,7 +3194,8 @@ SOURCES.push({
             ? 'https://porndig.com/channels/' + category + (p > 1 ? '/page/' + p : '')
             : 'https://porndig.com/channels/33/anal/page/' + p;
         return cherryFetch(url).then(function (html) {
-            return { items: _porndigCards(html), total_pages: _porndigPages(html) };
+            var items = _porndigCards(html);
+            return { items: items, total_pages: _porndigPages(html, p, items.length) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
@@ -3234,9 +3262,9 @@ function _porndigCards(html) {
     return items;
 }
 
-function _porndigPages(html) {
+function _porndigPages(html, page, itemsLen) {
     var m = /\/page\/(\d+)["'][^>]*(?:last|>>)/i.exec(html);
-    return m ? (parseInt(m[1], 10) || 10) : 10;
+    return m ? (parseInt(m[1], 10) || _derivePages(itemsLen, page, 20)) : _derivePages(itemsLen, page, 20);
 }
 
 // ---- Tizam ----
@@ -3330,11 +3358,12 @@ SOURCES.push({
         return { items: self._parseCards(html), total_pages: 1 };
       }).catch(function() { return { items: [], total_pages: 0 }; });
     }
-    // Zero-indexed: page 1 → ?p=0
+    // Zero-indexed: page 1 → ?p=0. ?p= advances pages, so derive from batch fullness
+    // (was a synthetic hardcode of 50 → scrolled past the end).
     var url = 'https://tv4.tizam.org/fil_my_dlya_vzroslyh/s_russkim_perevodom/?p=' + (p - 1);
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html);
-      return { items: items, total_pages: 50 };
+      return { items: items, total_pages: _derivePages(items.length, p, 12) };
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
@@ -3354,11 +3383,13 @@ SOURCES.push({
     cfg: { categories: _cats('anal:Анал,18-year-old:18 лет,3d-porn:3D,3some:Втроём'), sorts: [] },
 
     search: function (query, page) {
-        var url = page > 1
-            ? 'https://perfektdamen.co/search/' + page + '/?q=' + encodeURIComponent(query)
+        var p = page || 1;
+        var url = p > 1
+            ? 'https://perfektdamen.co/search/' + p + '/?q=' + encodeURIComponent(query)
             : 'https://perfektdamen.co/search/1/?q=' + encodeURIComponent(query);
         return cherryFetch(url).then(function (html) {
-            return { items: _perfektCards(html), total_pages: _perfektPages(html) };
+            var items = _perfektCards(html);
+            return { items: items, total_pages: _perfektPages(html, p, items.length) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
@@ -3367,10 +3398,11 @@ SOURCES.push({
         if (category) {
             var curl = _buildCatUrl('https://www.perfektdamen.co/tags/{slug}/{page}/', category, p, 1, true);
             return cherryFetch(curl).then(function (html) {
-                return { items: _perfektCards(html), total_pages: _perfektPages(html) };
+                var items = _perfektCards(html);
+                return { items: items, total_pages: _perfektPages(html, p, items.length) };
             }).catch(function () { return { items: [], total_pages: 0 }; });
         }
-        // Popular / front page; pagination handled via browse page number if site supports it
+        // single-page site: /popular/ front page has no page param → total_pages 1.
         var url = 'https://perfektdamen.co/popular/';
         return cherryFetch(url).then(function (html) {
             return { items: _perfektCards(html), total_pages: 1 };
@@ -3418,9 +3450,9 @@ function _perfektCards(html) {
     return items;
 }
 
-function _perfektPages(html) {
+function _perfektPages(html, page, itemsLen) {
     var m = /\/search\/(\d+)\/["'][^>]*(?:last|>>)/i.exec(html);
-    return m ? (parseInt(m[1], 10) || 10) : 10;
+    return m ? (parseInt(m[1], 10) || _derivePages(itemsLen, page, 20)) : _derivePages(itemsLen, page, 20);
 }
 
 // ---- HellPorno ----
@@ -3812,6 +3844,7 @@ SOURCES.push({
     cfg: { categories: _cats('aziatskoye:Азиатское,analnoye:Анальное,bdsm:БДСМ,blondinki:Блондинки,bolshiye-dojki:Большие дойки,bolshiye-popki:Большие попки,bolshiye-chleny:Большие члены,bryunetki:Брюнетки,v-chulkakh:В чулках,volosatyye:Волосатые,gruppovoye:Групповое,domashneye:Домашнее,zhestkoye:Жёсткое,zrelyye:Зрелые,izmena:Измена,kasting:Кастинг,krasotki:Красотки,lesbiyanki:Лесбиянки,mamki:Мамки,massazh:Массаж,minet:Минет,molodyye:Молодые,blacked:Негры,orgazmy:Оргазмы,ot-pervogo-litsa:От первого лица,russkoye:Русское,studenty:Студенты,yaponskoye:Японское'), sorts: [] },
 
     search: function (query, page) {
+        // single-page site: /search/?q= takes no page param → total_pages 1.
         var url = 'https://www.lenporno.net/search/?q=' + encodeURIComponent(query);
         return cherryFetch(url).then(function (html) {
             return { items: _lenpornoCards(html), total_pages: 1 };
@@ -3823,14 +3856,16 @@ SOURCES.push({
         if (category) {
             var curl = _buildCatUrl('https://www.lenporno.net/{slug}/{page}/', category, p, 1, true);
             return cherryFetch(curl).then(function (html) {
-                return { items: _lenpornoCards(html), total_pages: _lenpornoPages(html) };
+                var items = _lenpornoCards(html);
+                return { items: items, total_pages: _lenpornoPages(html, p, items.length) };
             }).catch(function () { return { items: [], total_pages: 0 }; });
         }
-        var url = page > 1
-            ? 'https://www.lenporno.net/the-best/?page=' + page
+        var url = p > 1
+            ? 'https://www.lenporno.net/the-best/?page=' + p
             : 'https://www.lenporno.net/the-best/';
         return cherryFetch(url).then(function (html) {
-            return { items: _lenpornoCards(html), total_pages: _lenpornoPages(html) };
+            var items = _lenpornoCards(html);
+            return { items: items, total_pages: _lenpornoPages(html, p, items.length) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
@@ -3895,9 +3930,9 @@ function _lenpornoCards(html) {
     return items;
 }
 
-function _lenpornoPages(html) {
+function _lenpornoPages(html, page, itemsLen) {
     var m = /[?&]page=(\d+)["'][^>]*(?:last|>>|&raquo;)/i.exec(html);
-    return m ? (parseInt(m[1], 10) || 10) : 10;
+    return m ? (parseInt(m[1], 10) || _derivePages(itemsLen, page, 20)) : _derivePages(itemsLen, page, 20);
 }
 
 // ---- 13. 24Rolika / Huyalkino ----
@@ -3921,7 +3956,8 @@ SOURCES.push({
             ? _buildCatUrl('https://w2.huyalkino.com/{slug}/page/{page}/', category, p, 1, true)
             : (p > 1 ? 'https://w2.huyalkino.com/page/' + p + '/' : 'https://w2.huyalkino.com/');
         return cherryFetch(url).then(function (html) {
-            return { items: _rolikaCards(html), total_pages: _rolikaPages(html) };
+            var items = _rolikaCards(html);
+            return { items: items, total_pages: _rolikaPages(html, p, items.length) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
@@ -3977,9 +4013,9 @@ function _rolikaCards(html) {
     return items;
 }
 
-function _rolikaPages(html) {
+function _rolikaPages(html, page, itemsLen) {
     var m = /\/page\/(\d+)\/["'][^>]*(?:last|>>)/i.exec(html);
-    return m ? (parseInt(m[1], 10) || 10) : 10;
+    return m ? (parseInt(m[1], 10) || _derivePages(itemsLen, page, 20)) : _derivePages(itemsLen, page, 20);
 }
 
 // ---- 14. JopaOnline ----
@@ -3990,6 +4026,7 @@ SOURCES.push({
     cfg: { categories: _cats('mamki:Мамки,russkoe:Русское,zhestkoe:Жёсткое,zrelye:Зрелые,izmena:Измена,krasotki:Красотки,domashnee:Домашнее,big-cock:Большие члены,gruppovoe:Групповое,anal:Анал,asian:Азиатки,studenty:Студенты'), sorts: [] },
 
     search: function (query, page) {
+        // single-page site: DLE ?do=search returns one page (no page param) → total_pages 1.
         var url = 'https://jopaonline.mobi/?do=search&subaction=search&story=' + encodeURIComponent(query);
         return cherryFetch(url).then(function (html) {
             return { items: _jopaCards(html), total_pages: 1 };
@@ -4003,7 +4040,8 @@ SOURCES.push({
             ? _buildCatUrl('https://jopaonline.mobi/categories/{slug}/{page}', category, p, 1, true)
             : (p > 1 ? 'https://jopaonline.mobi/' + p : 'https://jopaonline.mobi/');
         return cherryFetch(url).then(function (html) {
-            return { items: _jopaCards(html), total_pages: _jopaPages(html) };
+            var items = _jopaCards(html);
+            return { items: items, total_pages: _jopaPages(html, p, items.length) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
@@ -4067,10 +4105,10 @@ function _jopaCards(html) {
     return items;
 }
 
-function _jopaPages(html) {
+function _jopaPages(html, page, itemsLen) {
     var m = /href="https?:\/\/jopaonline\.mobi\/(\d+)"[^>]*(?:last|>>)/i.exec(html) ||
             /["']\/(\d+)["'][^>]*(?:last|>>)/i.exec(html);
-    return m ? (parseInt(m[1], 10) || 10) : 10;
+    return m ? (parseInt(m[1], 10) || _derivePages(itemsLen, page, 20)) : _derivePages(itemsLen, page, 20);
 }
 
 })();

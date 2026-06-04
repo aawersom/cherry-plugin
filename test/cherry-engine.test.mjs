@@ -55,22 +55,31 @@ function parseViews(str) {
   return parseInt(str, 10) || 0;
 }
 
+// ---- _derivePages -----------------------------------------------------------
+// Verbatim from plugin.js (near _titleFromUrl).
+// Infinite-scroll pagination from batch fullness: full page → next page exists;
+// short page → last page.
+function _derivePages(itemsLen, page, full) {
+  var threshold = full || 12;
+  return itemsLen >= threshold ? (page + 1) : page;
+}
+
 // ---- _kvsPages --------------------------------------------------------------
-// Spec: A-5 / primer §A-5
-// - if pagesRxOrFn is a function: call it(html, page), return result || 10
-// - if RegExp: exec html, parseInt group 1, || 10
-// - else (undefined / null / other): return 10
-// - no-match: return 10
-function _kvsPages(html, pagesRxOrFn, page) {
+// Verbatim from plugin.js _kvsPages.
+// - if pagesRxOrFn is a function: call it(html, page), return result || derive fallback
+// - if RegExp: exec html, parseInt group 1, || derive fallback
+// - else (undefined / null / other) or no-match: derive fallback from batch fullness
+function _kvsPages(html, pagesRxOrFn, page, itemsLen) {
+  var fallback = _derivePages(itemsLen || 0, page || 1, 20);
   if (typeof pagesRxOrFn === 'function') {
-    return pagesRxOrFn(html, page) || 10;
+    return pagesRxOrFn(html, page) || fallback;
   }
   if (pagesRxOrFn instanceof RegExp) {
     var m = pagesRxOrFn.exec(html);
-    if (m) return parseInt(m[1], 10) || 10;
-    return 10;
+    if (m) return parseInt(m[1], 10) || fallback;
+    return fallback;
   }
-  return 10;
+  return fallback;
 }
 
 // ---- _kvsParseCards ---------------------------------------------------------
@@ -177,16 +186,17 @@ function _kvsEngine(cfg) {
         var items = _doCards(html);
         var total = typeof cfg.searchTotalPages === 'number'
           ? cfg.searchTotalPages
-          : _kvsPages(html, cfg.pagesRx, page);
+          : _kvsPages(html, cfg.pagesRx, page, items.length);
         return { items: items, total_pages: total };
       }).catch(function() { return { items: [], total_pages: 0 }; });
     },
 
     browse: function(category, page) {
       return fetch(cfg.browseUrl(page || 1)).then(function(html) {
+        var items = _doCards(html);
         return {
-          items:       _doCards(html),
-          total_pages: _kvsPages(html, cfg.pagesRx, page)
+          items:       items,
+          total_pages: _kvsPages(html, cfg.pagesRx, page, items.length)
         };
       }).catch(function() { return { items: [], total_pages: 0 }; });
     },
@@ -232,33 +242,61 @@ var BASE_CFG = {
 // describe: _kvsPages
 // =============================================================================
 
+describe('_derivePages', () => {
+  it('full batch (len >= threshold) → page+1', () => {
+    expect(_derivePages(20, 1, 20)).toBe(2);
+    expect(_derivePages(27, 3, 20)).toBe(4);
+  });
+
+  it('short batch (len < threshold) → page (last page)', () => {
+    expect(_derivePages(19, 1, 20)).toBe(1);
+    expect(_derivePages(5, 4, 20)).toBe(4);
+  });
+
+  it('empty batch (len 0) → page', () => {
+    expect(_derivePages(0, 1, 20)).toBe(1);
+    expect(_derivePages(0, 7, 12)).toBe(7);
+  });
+
+  it('default floor of 12 when full is falsy', () => {
+    expect(_derivePages(12, 1)).toBe(2);   // 12 >= 12 → next
+    expect(_derivePages(11, 1)).toBe(1);   // 11 < 12 → last
+    expect(_derivePages(12, 2, 0)).toBe(3);
+  });
+});
+
 describe('_kvsPages', () => {
   it('extracts page count via RegExp', () => {
     var html = '<a href="?p=42"class="last">&raquo;</a>';
     var rx = /p=(\d+)"[^>]*(?:last|>>|&raquo;)/i;
-    expect(_kvsPages(html, rx, 1)).toBe(42);
+    expect(_kvsPages(html, rx, 1, 20)).toBe(42);
   });
 
-  it('returns 10 when RegExp does not match', () => {
+  it('derives from batch fullness when RegExp does not match (full → next page)', () => {
     var html = '<a href="/page/2/">Next</a>';
     var rx = /p=(\d+)"[^>]*(?:last|>>|&raquo;)/i;
-    expect(_kvsPages(html, rx, 1)).toBe(10);
+    // 20 cards (full) on page 1 → next page exists
+    expect(_kvsPages(html, rx, 1, 20)).toBe(2);
+    // 5 cards (short) on page 1 → last page
+    expect(_kvsPages(html, rx, 1, 5)).toBe(1);
   });
 
   it('calls function and returns its result', () => {
     var html = '<a href="/99/">last</a>';
     var fn = function(h, p) { return 99; };
-    expect(_kvsPages(html, fn, 1)).toBe(99);
+    expect(_kvsPages(html, fn, 1, 20)).toBe(99);
   });
 
-  it('returns 10 for falsy function return (zero counts as falsy → 10)', () => {
-    // A function returning 0 should fall back to 10 (same as no-match).
+  it('falls back to derived pages for falsy function return', () => {
+    // A function returning 0 falls back to fullness-derivation.
     var fn = function() { return 0; };
-    expect(_kvsPages('', fn, 1)).toBe(10);
+    expect(_kvsPages('', fn, 1, 20)).toBe(2);  // full page → next
+    expect(_kvsPages('', fn, 2, 3)).toBe(2);   // short page → last
   });
 
-  it('returns 10 when pagesRxOrFn is undefined', () => {
-    expect(_kvsPages('<p>some html</p>', undefined, 1)).toBe(10);
+  it('derives from fullness when pagesRxOrFn is undefined', () => {
+    expect(_kvsPages('<p>some html</p>', undefined, 1, 20)).toBe(2);
+    expect(_kvsPages('<p>some html</p>', undefined, 1, 0)).toBe(1);
   });
 
   it('passes (html, page) to function form', () => {
@@ -268,7 +306,7 @@ describe('_kvsPages', () => {
       captured.page = page;
       return 5;
     };
-    _kvsPages('test-html', fn, 3);
+    _kvsPages('test-html', fn, 3, 20);
     expect(captured.html).toBe('test-html');
     expect(captured.page).toBe(3);
   });
@@ -283,7 +321,7 @@ describe('_kvsPages', () => {
       return nums.length ? Math.max.apply(null, nums) : (p + 5);
     };
     // No pagination links → should return page+5
-    expect(_kvsPages('<html>no links here</html>', fn, 3)).toBe(8);
+    expect(_kvsPages('<html>no links here</html>', fn, 3, 20)).toBe(8);
   });
 });
 
@@ -1568,5 +1606,66 @@ describe('REQ-1 xvideos video.preview', function () {
     expect(items.length).toBe(1);
     expect(items[0].preview).toBe('');
     expect(items[0].thumb).toBe('');
+  });
+});
+
+// ============================================================
+// S1 total_pages anti-drift — flagged adapters no longer hardcode pagination
+// and route through _derivePages. Reads plugin.js source directly.
+// ============================================================
+describe('S1 total_pages anti-drift', function () {
+  var PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+
+  it('the shared _derivePages helper exists', function () {
+    expect(/function _derivePages\(itemsLen, page, full\)/.test(PLUGIN)).toBe(true);
+  });
+
+  it('no flagged adapter returns a synthetic p+10 / p+5 total_pages', function () {
+    // browseByModel (pornhub/xvideos) historically used p+5/p+10 as graceful
+    // fallbacks but those are now _derivePages too. Assert the synthetic literals
+    // are gone from total_pages computations entirely.
+    expect(/total_pages:\s*p \+ 10/.test(PLUGIN)).toBe(false);
+    expect(/total_pages:\s*p \+ 5/.test(PLUGIN)).toBe(false);
+  });
+
+  it('no flagged _pages helper hardcodes "|| 10) : 10"', function () {
+    // Flagged HTML adapters whose _pages helpers must now derive on no-match.
+    var flaggedHelpers = [
+      '_3movsPages', '_porndigPages', '_pornonePages',
+      '_lenpornoPages', '_rolikaPages', '_jopaPages', '_perfektPages'
+    ];
+    flaggedHelpers.forEach(function (name) {
+      var rx = new RegExp('function ' + name + '\\([^)]*\\)\\s*\\{[\\s\\S]*?\\n\\}');
+      var m = rx.exec(PLUGIN);
+      expect(m, name + ' must exist').toBeTruthy();
+      var body = m[0];
+      expect(body.indexOf('|| 10) : 10'), name + ' must not hardcode 10').toBe(-1);
+      expect(body.indexOf('_derivePages') >= 0, name + ' must use _derivePages').toBe(true);
+    });
+  });
+
+  it('tizam default browse no longer hardcodes total_pages: 50', function () {
+    expect(/total_pages:\s*50/.test(PLUGIN)).toBe(false);
+  });
+
+  it('xvideos and xnxx browse/search route through _derivePages', function () {
+    // Both used p+10 hardcode before; assert _derivePages now drives them.
+    var xv = PLUGIN.slice(PLUGIN.indexOf("id: 'xvideos'"), PLUGIN.indexOf("id: 'xnxx'"));
+    expect(xv.indexOf('_derivePages') >= 0).toBe(true);
+    expect(/total_pages:\s*p \+ 10/.test(xv)).toBe(false);
+
+    var xnxxStart = PLUGIN.indexOf("id: 'xnxx'");
+    var xnxx = PLUGIN.slice(xnxxStart, PLUGIN.indexOf("id: 'eporner'"));
+    expect(xnxx.indexOf('_derivePages') >= 0).toBe(true);
+  });
+
+  it('_kvsPages derives from item count on no-match (xozilla cap fix)', function () {
+    // The KVS engine must thread items.length into _kvsPages for fullness fallback.
+    expect(/_kvsPages\(html, cfg\.pagesRx, page, items\.length\)/.test(PLUGIN)).toBe(true);
+    expect(/_kvsPages\(html, cfg\.pagesRx, p, items\.length\)/.test(PLUGIN)).toBe(true);
+  });
+
+  it('genuine single-page sites keep total_pages 1 with a documented reason', function () {
+    expect(/single-page site/.test(PLUGIN)).toBe(true);
   });
 });
