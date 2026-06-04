@@ -1286,6 +1286,102 @@ describe('Step 2: query-param / API sorts (popular first, Russian labels)', () =
   });
 });
 
+describe('Step 3: PATH-segment sorts (popular first, Russian labels, segment in URL)', () => {
+  function sortsFor(id) {
+    var at = SRC.indexOf("id: '" + id + "'");
+    expect(at).toBeGreaterThan(-1);
+    var body = SRC.slice(at, at + 4000);
+    var m = body.match(/sorts: _cats\('([^']*)'\)/);
+    expect(m).toBeTruthy();
+    return m[1].split(',').map(function (p) {
+      var i = p.indexOf(':');
+      return { id: p.slice(0, i), label: p.slice(i + 1) };
+    });
+  }
+  // For each: ids in order + popular label, then the literal URL-shape the browse builds.
+  var specs = {
+    xvideos: {
+      ids:   ['views', 'uploaddate', 'rating', 'length'],
+      shape: "'https://www.xvideos.com/c/s:' + s + '/{slug}/{page}'"
+    },
+    porntrex: {
+      ids:   ['most-popular', 'top-rated', 'longest', 'most-commented'],
+      shape: "'https://www.porntrex.com/categories/{slug}/' + s + '/{page}/'"
+    },
+    pornone: {
+      ids:   ['views', 'rating'],
+      shape: "'https://pornone.com/{slug}/' + s + '/{page}/'"
+    },
+    '3movs': {
+      ids:   ['most-viewed/all-time', 'top-rated/all-time', 'longest', 'latest-updates'],
+      shape: "'https://3movs.com/categories/{slug}/' + s + '/{page}/'"
+    },
+    jopaonline: {
+      ids:   ['popular', 'toprated'],
+      shape: "'https://jopaonline.mobi/categories/{slug}/' + s + '/{page}'"
+    },
+    ebun: {
+      ids:   ['most-popular', 'new', 'top-rated'],
+      shape: "'https://www1.ebun.tv/categories/{slug}/' + s + '/{page}/'"
+    }
+  };
+  Object.keys(specs).forEach(function (id) {
+    var spec = specs[id];
+    it(id + ': popular first «По популярности», Russian labels, exact ids', () => {
+      var s = sortsFor(id);
+      expect(s.map(function (x) { return x.id; })).toEqual(spec.ids);
+      expect(s[0].label).toBe('По популярности');
+      s.forEach(function (x) {
+        expect(x.label).toMatch(/[А-Яа-я]/);
+        expect(x.label).not.toBe('Популярное');
+      });
+    });
+    it(id + ': browse injects sort as a path segment (default = popular)', () => {
+      expect(SRC).toContain(spec.shape);
+      // browse signature carries `sort`, and defaults to the popular value.
+      var at = SRC.indexOf("id: '" + id + "'");
+      var browseAt = SRC.indexOf('browse: function (category, page, sort)', at);
+      if (browseAt < 0) browseAt = SRC.indexOf('browse: function(category, page, sort)', at);
+      expect(browseAt).toBeGreaterThan(-1);
+      var browseBody = SRC.slice(browseAt, browseAt + 900);
+      expect(browseBody).toMatch(/var s = sort \|\|/);
+    });
+  });
+
+  // KVS engine path-sort mode: crocotube + ebun-style configs declare sortMode:'path'.
+  it('crocotube: sortMode:path + path-sort ids, popular first', () => {
+    var at = SRC.indexOf("id: 'crocotube'");
+    expect(at).toBeGreaterThan(-1);
+    var body = SRC.slice(at, at + 3000);
+    expect(body).toMatch(/sortMode: 'path'/);
+    var s = sortsFor('crocotube');
+    expect(s.map(function (x) { return x.id; })).toEqual(['most-popular', 'top-rated', 'longest']);
+    expect(s[0].label).toBe('По популярности');
+  });
+
+  it('_kvsEngine path mode builds /{slug}/{sort}/{page} (not ?sort_by=) for path configs', () => {
+    var eng = SRC.indexOf('function _kvsEngine(');
+    expect(eng).toBeGreaterThan(-1);
+    var at = SRC.indexOf('browse: function(category, page, sort)', eng);
+    expect(at).toBeGreaterThan(-1);
+    var body = SRC.slice(at, at + 1400);
+    expect(body).toContain("cfg.sortMode === 'path'");
+    // path mode injects the sort segment after the slug in the categoryFmt
+    expect(body).toMatch(/replace\('\{slug\}', '\{slug\}\/' \+ s\)/);
+    // query mode (xozilla/analdin/etc.) still appends ?sort_by= when sortMode absent
+    expect(body).toMatch(/sp \+ '=' \+ s/);
+  });
+
+  it('query-mode KVS adapters (xozilla/analdin) keep ?sort_by= (no sortMode)', () => {
+    ['xozilla', 'analdin'].forEach(function (id) {
+      var at = SRC.indexOf("id: '" + id + "'");
+      expect(at).toBeGreaterThan(-1);
+      var body = SRC.slice(at, at + 1500);
+      expect(body).not.toMatch(/sortMode: 'path'/);
+    });
+  });
+});
+
 describe('Phase 3 A3(b): all_sources per-source title-match filter before slice', () => {
   it('filter uses indexOf(query) and runs before slice(0,10)', () => {
     var at = SRC.indexOf('All-sources search');
@@ -1497,7 +1593,7 @@ describe('Batch 2 categories — plugin.js source assertions (anti-drift)', () =
   it('3movs uses _fetchAny for category browse (404-tolerant)', () => {
     var at = SRC.indexOf("id: '3movs'");
     expect(at).toBeGreaterThan(-1);
-    var w = SRC.slice(at, at + 1600);
+    var w = SRC.slice(at, at + 3500);
     expect(w).toContain('cfg:');
     expect(w).toContain('_fetchAny');
     expect(w).toContain('_buildCatUrl');
@@ -1518,7 +1614,6 @@ describe('Batch 3 categories — plugin.js source assertions (anti-drift)', () =
   // Category-URL templates must be present (position-independent — cfg may sit far from id).
   var fmts = {
     xnxx: 'https://www.xnxx.com/tags/{slug}/{page}',
-    pornone: 'https://pornone.com/{slug}/{page}/',
     perfektdamen: 'https://www.perfektdamen.co/tags/{slug}/{page}/',
     hqporner: 'https://hqporner.com/category/{slug}/{page}'
   };
@@ -1526,6 +1621,10 @@ describe('Batch 3 categories — plugin.js source assertions (anti-drift)', () =
     it(id + ' wires its categoryFmt template', () => {
       expect(SRC).toContain(fmts[id]);
     });
+  });
+  it('pornone wires its categoryFmt template (path-sort: {slug}/{sort}/{page})', () => {
+    // Sort is a path segment after the slug; default = views (По популярности).
+    expect(SRC).toContain("'https://pornone.com/{slug}/' + s + '/{page}/'");
   });
   it('eporner category uses API query (slug→keyword)', () => {
     expect(SRC).toContain('category.replace(/-/g');
@@ -1539,8 +1638,9 @@ describe('Batch 3 categories — plugin.js source assertions (anti-drift)', () =
 
 // ── Batch 4: custom categories (xvideos, youjizz, spankbang, porndig, tizam) ──
 describe('Batch 4 categories — plugin.js source assertions (anti-drift)', () => {
-  it('xvideos category template /c/{slug}/{page}', () => {
-    expect(SRC).toContain('https://www.xvideos.com/c/{slug}/{page}');
+  it('xvideos category template /c/s:{sort}/{slug}/{page} (path-sort before slug)', () => {
+    // Sort segment s:{value} sits BEFORE the slug; default = views (По популярности).
+    expect(SRC).toContain("'https://www.xvideos.com/c/s:' + s + '/{slug}/{page}'");
   });
   it('youjizz page-in-filename template', () => {
     expect(SRC).toContain('https://www.youjizz.com/categories/{slug}-{page}.html');
@@ -1565,11 +1665,13 @@ describe('Batch 5 categories — plugin.js source assertions (anti-drift)', () =
   it('24rolika DLE /{slug}/page/{page}/ template', () => {
     expect(SRC).toContain('https://w2.huyalkino.com/{slug}/page/{page}/');
   });
-  it('jopaonline /categories/{slug}/{page} template', () => {
-    expect(SRC).toContain('https://jopaonline.mobi/categories/{slug}/{page}');
+  it('jopaonline /categories/{slug}/{sort}/{page} template (path-sort after slug)', () => {
+    // Sort segment after the slug; default = popular (По популярности).
+    expect(SRC).toContain("'https://jopaonline.mobi/categories/{slug}/' + s + '/{page}'");
   });
-  it('ebun /categories/{slug}/{page}/ template', () => {
-    expect(SRC).toContain('https://www1.ebun.tv/categories/{slug}/{page}/');
+  it('ebun /categories/{slug}/{sort}/{page}/ template (path-sort after slug)', () => {
+    // Sort segment after the slug; default = most-popular (По популярности).
+    expect(SRC).toContain("'https://www1.ebun.tv/categories/{slug}/' + s + '/{page}/'");
   });
   it('lenporno root /{slug}/{page}/ template', () => {
     expect(SRC).toContain('https://www.lenporno.net/{slug}/{page}/');

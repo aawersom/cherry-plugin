@@ -1784,10 +1784,7 @@ SOURCES.push({
   },
 
   cfg: {
-    sorts: [
-      { id: 'new',   label: 'Свежее'           },
-      { id: 'views', label: 'По просмотрам'    }
-    ],
+    sorts: _cats('views:По популярности,uploaddate:Свежее,rating:По рейтингу,length:Длинные'),
     categories: _cats('AI-239:AI,Amateur-65:Amateur,Anal-12:Anal,Arab-159:Arab,Asian_Woman-32:Asian,ASMR-229:ASMR,Ass-14:Ass,bbw-51:BBW,Bi_Sexual-62:Bi,Big_Ass-24:Big Ass,Big_Cock-34:Big Cock,Big_Tits-23:Big Tits,Black_Woman-30:Black,Blonde-20:Blonde,Blowjob-15:Blowjob,Brunette-25:Brunette,Cam_Porn-58:Cam Porn,Creampie-40:Creampie,Cuckold-237:Cuckold/Hotwife,Cumshot-18:Cumshot,Femdom-235:Femdom,Fisting-165:Fisting,Fucked_Up_Family-81:Fucked Up Family,Gangbang-69:Gangbang,Gapes-167:Gapes,Indian-89:Indian,Interracial-27:Interracial,Latina-16:Latina,Lesbian-26:Lesbian,Lingerie-83:Lingerie,Mature-38:Mature,Milf-19:Milf,Oiled-22:Oiled,Redhead-31:Redhead,Solo_and_Masturbation-33:Solo,Squirting-56:Squirting,Stockings-28:Stockings,Teen-13:Teen')
   },
 
@@ -1809,10 +1806,12 @@ SOURCES.push({
     var pageIdx = p - 1;
     var url;
     if (category) {
-      // /c/{Label-id}/{page} — page is 0-based, omitted on page 1
-      url = _buildCatUrl('https://www.xvideos.com/c/{slug}/{page}', category, p, 0, true);
+      // /c/s:{value}/{Label-id}/{page} — sort is a path segment BEFORE the slug;
+      // page is 0-based, omitted on page 1. Default sort = views (По популярности).
+      var s = sort || 'views';
+      url = _buildCatUrl('https://www.xvideos.com/c/s:' + s + '/{slug}/{page}', category, p, 0, true);
     } else {
-      // sort='views': use /best/ prefix; sort='new' or default: /new/
+      // Non-category homepage: sort='views' → /best/ prefix; else /
       var base = (sort === 'views') ? 'https://www.xvideos2.com/best/' : 'https://www.xvideos2.com/';
       url = pageIdx === 0 ? base : base + pageIdx;
     }
@@ -2518,7 +2517,7 @@ SOURCES.push({
     id: 'pornone',
     name: 'PornOne',
     host: 'pornone.com',
-    cfg: { categories: _cats('amateur:Amateur,anal:Anal,asian:Asian,ass:Ass,babes:Babes,bbc:Bbc,bbw:BBW,bdsm:Bdsm,big-boobs:Big Boobs,big-dick:Big Dick,blonde:Blonde,blowjob:Blowjob,brunette:Brunette,bukkake:Bukkake,busty:Busty,casting:Audition,cougar:Cougar,creampie:Creampie,cuckold:Cuckold,cumshot:Cumshot,deepthroat:Deepthroat,ebony:Ebony,fetish:Fetish,gangbang:Gangbang,granny:Granny,hairy:Hairy,handjob:Handjob,hardcore:Hardcore,hentai:Hentai,homemade:Homemade,interracial:Interracial,japanese:Japanese,latin:Latin,lesbian:Lesbian,massage:Massage,mature:Mature,milf:MILF,mom:Mom,pawg:Pawg,petite:Petite,pov:POV,public:Public,redhead:Redhead,russian:Russian,squirting:Squirting,stepmom:Stepmom,teen:Teen,threesome:Threesome,toys:Toys,webcams:Webcams,young:Young'), sorts: [] },
+    cfg: { categories: _cats('amateur:Amateur,anal:Anal,asian:Asian,ass:Ass,babes:Babes,bbc:Bbc,bbw:BBW,bdsm:Bdsm,big-boobs:Big Boobs,big-dick:Big Dick,blonde:Blonde,blowjob:Blowjob,brunette:Brunette,bukkake:Bukkake,busty:Busty,casting:Audition,cougar:Cougar,creampie:Creampie,cuckold:Cuckold,cumshot:Cumshot,deepthroat:Deepthroat,ebony:Ebony,fetish:Fetish,gangbang:Gangbang,granny:Granny,hairy:Hairy,handjob:Handjob,hardcore:Hardcore,hentai:Hentai,homemade:Homemade,interracial:Interracial,japanese:Japanese,latin:Latin,lesbian:Lesbian,massage:Massage,mature:Mature,milf:MILF,mom:Mom,pawg:Pawg,petite:Petite,pov:POV,public:Public,redhead:Redhead,russian:Russian,squirting:Squirting,stepmom:Stepmom,teen:Teen,threesome:Threesome,toys:Toys,webcams:Webcams,young:Young'), sorts: _cats('views:По популярности,rating:По рейтингу') },
 
     // WP REST API is tried first; HTML scraping is the fallback.
     _fromApi: function (text) {
@@ -2560,12 +2559,14 @@ SOURCES.push({
         });
     },
 
-    browse: function (category, page) {
+    browse: function (category, page, sort) {
         var self = this;
         var p = page || 1;
         if (category) {
-            // Category browses at ROOT /{slug}/{page}/ (HTML); reuse _pornoneCards parser.
-            var curl = _buildCatUrl('https://pornone.com/{slug}/{page}/', category, p, 1, true);
+            // Category browses at ROOT /{slug}/{sort}/{page}/ (HTML); reuse _pornoneCards parser.
+            // Sort is a path segment after the slug. Default = views (По популярности).
+            var s = sort || 'views';
+            var curl = _buildCatUrl('https://pornone.com/{slug}/' + s + '/{page}/', category, p, 1, true);
             return cherryFetch(curl).then(function (html) {
                 var items = _pornoneCards(html);
                 return { items: items, total_pages: _pornonePages(html, p, items.length) };
@@ -2677,7 +2678,7 @@ SOURCES.push({
     id: 'porntrex',
     name: 'Porntrex',
     host: 'porntrex.com',
-    cfg: { categories: _cats('milf:Milf,teen:Teen,mature:Mature,amateur:Amateur,anal:Anal,big-tits:Big Tits,big-ass:Big Ass,blowjob:Blowjob,lesbian:Lesbian,hardcore:Hardcore,pov:POV,blonde:Blonde,brunette:Brunette,busty:Busty,hairy:Hairy,handjob:Handjob,cumshots:Cumshots,doggystyle:Doggystyle,small-tits:Small tits,petite:Petite,fetish:Fetish,bondage:Bondage,college:College,russian:Russian,hentai:Hentai,asian:Asian,japanese:Japanese,indian:Indian,latina:Latina,ebony:Ebony,black:Black,interracial:Interracial,german:German,czech:Czech,arab:Arab,homemade:Homemade,solo:Solo,masturbation:Masturbation,toys:Toys,creampie:Creampie,deepthroat:Deepthroat,gangbang:Gangbang,threesome:Threesome,orgy:Orgy,public:Public,outdoor:Outdoor,massage:Massage,casting:Casting,compilation:Compilation,squirt:Squirt,fisting:Fisting,footjob:Footjob,cuckold:Cuckold,gloryhole:Gloryhole,bukkake:Bukkake,pussy-licking:Pussy licking,ass-licking:Ass licking,double-penetration:Double Penetration (DP),red-head:Red Head,school-girl:School Girl,bbw:BBW,skinny:Skinny,lingerie:Lingerie,uniform:Uniform,office:Office,old-and-young:Old and Young,riding:Riding,fingering:Fingering,strap-on:Strap-on,celebrities:Celebrities,virtual-reality:Virtual Reality (VR)'), sorts: [] },
+    cfg: { categories: _cats('milf:Milf,teen:Teen,mature:Mature,amateur:Amateur,anal:Anal,big-tits:Big Tits,big-ass:Big Ass,blowjob:Blowjob,lesbian:Lesbian,hardcore:Hardcore,pov:POV,blonde:Blonde,brunette:Brunette,busty:Busty,hairy:Hairy,handjob:Handjob,cumshots:Cumshots,doggystyle:Doggystyle,small-tits:Small tits,petite:Petite,fetish:Fetish,bondage:Bondage,college:College,russian:Russian,hentai:Hentai,asian:Asian,japanese:Japanese,indian:Indian,latina:Latina,ebony:Ebony,black:Black,interracial:Interracial,german:German,czech:Czech,arab:Arab,homemade:Homemade,solo:Solo,masturbation:Masturbation,toys:Toys,creampie:Creampie,deepthroat:Deepthroat,gangbang:Gangbang,threesome:Threesome,orgy:Orgy,public:Public,outdoor:Outdoor,massage:Massage,casting:Casting,compilation:Compilation,squirt:Squirt,fisting:Fisting,footjob:Footjob,cuckold:Cuckold,gloryhole:Gloryhole,bukkake:Bukkake,pussy-licking:Pussy licking,ass-licking:Ass licking,double-penetration:Double Penetration (DP),red-head:Red Head,school-girl:School Girl,bbw:BBW,skinny:Skinny,lingerie:Lingerie,uniform:Uniform,office:Office,old-and-young:Old and Young,riding:Riding,fingering:Fingering,strap-on:Strap-on,celebrities:Celebrities,virtual-reality:Virtual Reality (VR)'), sorts: _cats('most-popular:По популярности,top-rated:По рейтингу,longest:Длинные,most-commented:По комментариям') },
 
     search: function (query, page) {
         var url = 'https://www.porntrex.com/?s=' + encodeURIComponent(query) + '&page=' + page;
@@ -2686,10 +2687,13 @@ SOURCES.push({
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
-    browse: function (category, page) {
+    browse: function (category, page, sort) {
         var p = page || 1;
+        // Sort is a path segment AFTER the slug, before page: /categories/{slug}/{sort}/{page}/
+        // Default sort = most-popular (По популярности).
+        var s = sort || 'most-popular';
         var url = category
-            ? _buildCatUrl('https://www.porntrex.com/categories/{slug}/{page}/', category, p, 1, true)
+            ? _buildCatUrl('https://www.porntrex.com/categories/{slug}/' + s + '/{page}/', category, p, 1, true)
             : 'https://www.porntrex.com/latest-updates/' + (p > 1 ? p + '/' : '');
         return cherryFetch(url).then(function (html) {
             return { items: _porntrexCards(html), total_pages: _porntrexPages(html) };
@@ -2933,20 +2937,30 @@ function _porntrexPages(html) {
 
       browse: function(category, page, sort) {
         var p = page || 1;
-        // Default to the first configured sort (Популярное / video_viewed) when the
-        // user hasn't chosen one. Verified: KVS accepts ?sort_by= on BOTH category and
-        // default pages (xozilla/analdin return cards either way).
+        // Default to the first configured sort (Популярное) when the user hasn't
+        // chosen one. Verified: KVS accepts ?sort_by= on BOTH category and default
+        // pages (xozilla/analdin return cards either way).
         var s  = sort || (cfg.sorts && cfg.sorts[0] && cfg.sorts[0].id) || '';
         var sp = cfg.sortParam || 'sort_by';
         var url;
-        if (category && cfg.categoryFmt) {
+        if (cfg.sortMode === 'path' && category && cfg.categoryFmt) {
+          // PATH sort (crocotube/ebun): /categories/{slug}/{sort}/{page}/ — sort segment
+          // injected after the slug, before the page. categoryFmt MUST carry {slug}/{page}.
+          var fmt = s
+            ? cfg.categoryFmt.replace('{slug}', '{slug}/' + s)
+            : cfg.categoryFmt;
+          url = _buildCatUrl(fmt, category, p, cfg.catPageBase || 1, cfg.catPage1Omit !== false);
+        } else if (category && cfg.categoryFmt) {
           url = _buildCatUrl(cfg.categoryFmt, category, p, cfg.catPageBase || 1, cfg.catPage1Omit !== false);
+          // Append sort unless the URL already carries that param (avoids ?sort=mv dupes).
+          if (s && url.indexOf(sp + '=') === -1) {
+            url += (url.indexOf('?') >= 0 ? '&' : '?') + sp + '=' + s;
+          }
         } else {
           url = cfg.browseUrl(p);
-        }
-        // Append sort unless the URL already carries that param (avoids ?sort=mv dupes).
-        if (s && url.indexOf(sp + '=') === -1) {
-          url += (url.indexOf('?') >= 0 ? '&' : '?') + sp + '=' + s;
+          if (s && url.indexOf(sp + '=') === -1) {
+            url += (url.indexOf('?') >= 0 ? '&' : '?') + sp + '=' + s;
+          }
         }
         return cherryFetch(url).then(function(html) {
           var items = _kvsParseCards(html, cfg);
@@ -3028,7 +3042,7 @@ SOURCES.push({
     id: '3movs',
     name: '3Movs',
     host: '3movs.com',
-    cfg: { categories: _cats('milf:MILF,teen:Teens 18+,18-year-old:18 Year Old,anal:Anal,blowjob:Blowjob,big-tits:Big Tits,big-natural-tits:Big Natural Tits,amateur:Amateur,mature:Mature,asian:Asian,japanese:Japanese,lesbian:Lesbian,pov:POV,hardcore:Hardcore,threesome:Threesome,interracial:Interracial,ebony:Ebony,big-cock:Big Cock,cumshot:Cumshot,public:Public,casting:Casting,mom:Mom,squirting:Squirting,gangbang:Gangbang,russian:Russian,german:German,big-ass:Big Ass,bdsm:BDSM,massage:Massage,toys:Toys,deepthroat:Deepthroat,double-penetration:Double Penetration,handjob:Handjob,outdoor:Outdoor,pornstar:Pornstar,small-tits:Small Tits,group:Group,czech:Czech,homemade:Homemade'), sorts: [] },
+    cfg: { categories: _cats('milf:MILF,teen:Teens 18+,18-year-old:18 Year Old,anal:Anal,blowjob:Blowjob,big-tits:Big Tits,big-natural-tits:Big Natural Tits,amateur:Amateur,mature:Mature,asian:Asian,japanese:Japanese,lesbian:Lesbian,pov:POV,hardcore:Hardcore,threesome:Threesome,interracial:Interracial,ebony:Ebony,big-cock:Big Cock,cumshot:Cumshot,public:Public,casting:Casting,mom:Mom,squirting:Squirting,gangbang:Gangbang,russian:Russian,german:German,big-ass:Big Ass,bdsm:BDSM,massage:Massage,toys:Toys,deepthroat:Deepthroat,double-penetration:Double Penetration,handjob:Handjob,outdoor:Outdoor,pornstar:Pornstar,small-tits:Small Tits,group:Group,czech:Czech,homemade:Homemade'), sorts: _cats('most-viewed/all-time:По популярности,top-rated/all-time:По рейтингу,longest:Длинные,latest-updates:Свежее') },
 
     search: function (query, page) {
         var p = page || 1;
@@ -3039,12 +3053,15 @@ SOURCES.push({
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
-    browse: function (category, page) {
+    browse: function (category, page, sort) {
         var p = page || 1;
         if (category) {
             // 3movs serves a valid body with a 404 status on category page>1 —
             // use status-tolerant _fetchAny so pagination isn't dropped.
-            var curl = _buildCatUrl('https://3movs.com/categories/{slug}/{page}/', category, p, 1, true);
+            // Sort is a path segment after the slug (e.g. most-viewed/all-time);
+            // default = most-viewed/all-time (По популярности).
+            var s = sort || 'most-viewed/all-time';
+            var curl = _buildCatUrl('https://3movs.com/categories/{slug}/' + s + '/{page}/', category, p, 1, true);
             return _fetchAny(curl).then(function (html) {
                 var items = _3movsCards(html);
                 return { items: items, total_pages: _3movsPages(html, p, items.length) };
@@ -3852,7 +3869,8 @@ SOURCES.push(_kvsEngine({
     categoryFmt: 'https://crocotube.com/categories/{slug}/{page}/',
     catPageBase: 1, catPage1Omit: true,
     categories: _cats('amateur:Amateur,anal:Anal,arab:Arab,asian:Asian,ass:Ass,babes:Babes,bbw:BBW,big-ass:Big ass,big-black-cock:Big black cock,big-cock:Big dick,big-tits:Big tits,blonde:Blonde,blowjob:Blowjob,brunette:Brunette,creampie:Creampie,cumshot:Cumshot,deepthroat:Deepthroat,double-penetration:Double penetration,ebony:Ebony,fake-tits:Fake tits,gangbang:Gangbang,granny:Granny,group-sex:Group sex,hairy:Hairy,handjob:Handjob,hardcore:Hardcore,hd:HD,indian:Indian,interracial:Interracial,japanese:Japanese,latina:Latina,mature:Mature,milf:MILF,mom:Mom,natural-tits:Natural tits,perfect-body:Perfect body,pov:POV,public:Public,pussy:Pussy,redhead:Redhead,russian:Russian,small-tits:Small tits,stockings:Stockings,teen:Teen,threesome:Threesome,webcam:Webcam'),
-    sorts: [],
+    sortMode: 'path',
+    sorts: _cats('most-popular:По популярности,top-rated:По рейтингу,longest:Длинные'),
     searchUrl: function(query, page) {
         return page > 1
             ? 'https://crocotube.com/search/' + page + '/?q=' + encodeURIComponent(query)
@@ -3965,7 +3983,7 @@ SOURCES.push({
     id: 'ebun',
     name: 'Ebun',
     host: 'www1.ebun.tv',
-    cfg: { categories: _cats('russkoe:Русское,molodye:Молодые,zrelye:Зрелые,mamki:Мамки,anal:Анал,minet:Минет,domashnee:Домашнее,krasivye-devushki:Красивые девушки,bryunetki:Брюнетки,blondinki:Блондинки,bolshie-siski:Большие сиськи,bolshie-chleny:Большие члены,jopy:Жопы,hudye:Худые,chulki-i-kolgotki:Чулки и колготки,ot-pervogo-lica:От первого лица,seks-vtroem:Секс втроем,gruppovoe:Групповое,kasting:Кастинг,kasting-vudmana:Кастинг Вудмана,studenty:Студенты,izmena:Измена,jeny:Жены,jmj:ЖМЖ,mjm:МЖМ,negry:Негры,mejrassovoe:Межрассовое,aziatki:Азиатки,latinki:Латинки,eblya:Ебля,rakom:Раком,krempay:Кремпай,sperma:Сперма,glubokaya-glotka:Глубокая глотка,skvirting:Сквиртинг,bdsm:БДСМ,fetish:Фетиш,masturbaciya:Мастурбация,pikap:Пикап,za-dengi:За деньги'), sorts: [] },
+    cfg: { categories: _cats('russkoe:Русское,molodye:Молодые,zrelye:Зрелые,mamki:Мамки,anal:Анал,minet:Минет,domashnee:Домашнее,krasivye-devushki:Красивые девушки,bryunetki:Брюнетки,blondinki:Блондинки,bolshie-siski:Большие сиськи,bolshie-chleny:Большие члены,jopy:Жопы,hudye:Худые,chulki-i-kolgotki:Чулки и колготки,ot-pervogo-lica:От первого лица,seks-vtroem:Секс втроем,gruppovoe:Групповое,kasting:Кастинг,kasting-vudmana:Кастинг Вудмана,studenty:Студенты,izmena:Измена,jeny:Жены,jmj:ЖМЖ,mjm:МЖМ,negry:Негры,mejrassovoe:Межрассовое,aziatki:Азиатки,latinki:Латинки,eblya:Ебля,rakom:Раком,krempay:Кремпай,sperma:Сперма,glubokaya-glotka:Глубокая глотка,skvirting:Сквиртинг,bdsm:БДСМ,fetish:Фетиш,masturbaciya:Мастурбация,pikap:Пикап,za-dengi:За деньги'), sorts: _cats('most-popular:По популярности,new:Свежее,top-rated:По рейтингу') },
 
     search: function (query, page) {
         var url = 'https://www1.ebun.tv/search/?q=' + encodeURIComponent(query) + '&page=' + page;
@@ -3974,10 +3992,13 @@ SOURCES.push({
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
-    browse: function (category, page) {
+    browse: function (category, page, sort) {
         var p = page || 1;
+        // Sort is a KVS path segment after the slug: /categories/{slug}/{sort}/{page}/
+        // Default = most-popular (По популярности).
+        var s = sort || 'most-popular';
         var url = category
-            ? _buildCatUrl('https://www1.ebun.tv/categories/{slug}/{page}/', category, p, 1, true)
+            ? _buildCatUrl('https://www1.ebun.tv/categories/{slug}/' + s + '/{page}/', category, p, 1, true)
             : 'https://www1.ebun.tv/latest-updates/?page=' + p;
         return cherryFetch(url).then(function (html) {
             return { items: _ebunCards(html), total_pages: _ebunPages(html) };
@@ -4238,7 +4259,7 @@ SOURCES.push({
     id: 'jopaonline',
     name: 'JopaOnline',
     host: 'jopaonline.mobi',
-    cfg: { categories: _cats('mamki:Мамки,russkoe:Русское,zhestkoe:Жесткое,zrelye:Зрелые,izmena:Измена,krasotki:Красотки,domashnee:Домашнее,big-cock:Большие члены,gruppovoe:Групповое,anal:Анал,asian:Азиатки,studenty:Студенты,blonde:Блондинки,bolshie-siski:Большие сиськи,bryunetki:Брюнетки,dvoynoe-proniknovenie:Двойное проникновение,hudenkie:Худые,krasiviy-seks:Красивый секс,lesbiyanki:Лесбиянки,masturbation:Мастурбация,mejrassovyy:Межрасовое,minet:Минет,molodye:Молодые,mulatki:Мулатки,pickap:Пикап,rakom:Раком,redhead:Рыжие,s-negrami:Негры,stockings:Чулки,v-vannoi:В ванной,zhopy:Жопы'), sorts: [] },
+    cfg: { categories: _cats('mamki:Мамки,russkoe:Русское,zhestkoe:Жесткое,zrelye:Зрелые,izmena:Измена,krasotki:Красотки,domashnee:Домашнее,big-cock:Большие члены,gruppovoe:Групповое,anal:Анал,asian:Азиатки,studenty:Студенты,blonde:Блондинки,bolshie-siski:Большие сиськи,bryunetki:Брюнетки,dvoynoe-proniknovenie:Двойное проникновение,hudenkie:Худые,krasiviy-seks:Красивый секс,lesbiyanki:Лесбиянки,masturbation:Мастурбация,mejrassovyy:Межрасовое,minet:Минет,molodye:Молодые,mulatki:Мулатки,pickap:Пикап,rakom:Раком,redhead:Рыжие,s-negrami:Негры,stockings:Чулки,v-vannoi:В ванной,zhopy:Жопы'), sorts: _cats('popular:По популярности,toprated:По рейтингу') },
 
     search: function (query, page) {
         // single-page site: DLE ?do=search returns one page (no page param) → total_pages 1.
@@ -4250,11 +4271,13 @@ SOURCES.push({
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
-    browse: function (category, page) {
+    browse: function (category, page, sort) {
         var p = page || 1;
-        // category → /categories/{slug}/{n} (no trailing slash); else home pagination /{n}.
+        // category → /categories/{slug}/{sort}/{n} (DLE path, no trailing slash); else home /{n}.
+        // Sort is a path segment after the slug; default = popular (По популярности).
+        var s = sort || 'popular';
         var url = category
-            ? _buildCatUrl('https://jopaonline.mobi/categories/{slug}/{page}', category, p, 1, true)
+            ? _buildCatUrl('https://jopaonline.mobi/categories/{slug}/' + s + '/{page}', category, p, 1, true)
             : (p > 1 ? 'https://jopaonline.mobi/' + p : 'https://jopaonline.mobi/');
         return cherryFetch(url).then(function (html) {
             var items = _jopaCards(html);
