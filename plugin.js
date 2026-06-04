@@ -137,6 +137,43 @@
     });
   }
 
+  /**
+   * POST a JSON body DIRECTLY to a worker-origin URL (NOT wrapped in /proxy?url=).
+   * Used by Sync for `${PROXY_URL}/favs` — the worker is CORS-open (sends `*`),
+   * so a plain fetch works on web/TV. On Android plain fetch may be blocked, so
+   * fall back to Lampa.Reguest's native POST when available.
+   * @param {string} url   absolute worker URL (already carries pin/key params)
+   * @param {Object} obj   JSON-serialisable body
+   * @returns {Promise<Object>}  parsed JSON response
+   */
+  function cherryPostJson(url, obj) {
+    var payload = JSON.stringify(obj || {});
+    if (_isAndroid() && window.Lampa && typeof window.Lampa.Reguest === 'function') {
+      return new Promise(function (resolve, reject) {
+        try {
+          var req = new window.Lampa.Reguest();
+          req.timeout(8000);
+          req.native(url, function (data) {
+            req.clear();
+            try { resolve(typeof data === 'object' ? data : JSON.parse(data)); }
+            catch (e) { reject(e); }
+          }, function (err) {
+            req.clear();
+            reject(err);
+          }, payload, { dataType: 'json', headers: { 'Content-Type': 'application/json' } });
+        } catch (e) { reject(e); }
+      });
+    }
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload
+    }).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    });
+  }
+
 
   // Picks the best available quality URL (highest numeric label wins).
   function bestQualityUrl(quality) {
@@ -235,49 +272,215 @@
   ];
 
   // ============================================================
-  // FAVORITES
+  // FAVORITES  (timestamped records + tombstones, for cross-device sync)
   // ============================================================
+  // Storage key `cherry_favs` now holds an array of RECORDS:
+  //   { id, source, title, thumb, url, duration, views, added, deleted }
+  // A record is ACTIVE when added > deleted. Deleting keeps the record and
+  // stamps `deleted` (a tombstone) so a later remote pull can't resurrect it
+  // and so last-write-wins merges resolve deterministically across devices.
+  // The PUBLIC API (all/has/toggle) keeps its old contract — callers
+  // (_gridLoad is_favorites path, cardRender, onMenu) are unchanged.
   var Fav = {
     _key: 'cherry_favs',
 
-    /** @returns {VideoCard[]} */
-    all: function () {
-      return Lampa.Storage.get(this._key, []);
+    /**
+     * Raw record array, migrating the legacy plain-item format on first read.
+     * Legacy items lack `added`/`deleted`; wrap each as {added:1, deleted:0}.
+     * added=1 ("old, low priority") loses to any real remote action's Date.now()
+     * stamp, so a deletion made on another device wins after a sync.
+     * @returns {Array}
+     */
+    _records: function () {
+      var list = Lampa.Storage.get(this._key, []);
+      if (!Array.isArray(list)) return [];
+      var migrated = false;
+      var recs = list.map(function (v) {
+        if (v && typeof v.added === 'number' && typeof v.deleted === 'number') return v;
+        migrated = true;
+        return {
+          id:       v.id,
+          source:   v.source,
+          title:    v.title    || '',
+          thumb:    v.thumb    || '',
+          url:      v.url      || '',
+          duration: v.duration || 0,
+          views:    v.views    || 0,
+          added:    1,
+          deleted:  0
+        };
+      });
+      if (migrated) Lampa.Storage.set(this._key, recs);
+      return recs;
     },
 
-    /** @param {VideoCard} video @returns {boolean} */
+    /** @returns {VideoCard[]} ACTIVE records mapped to the card shape. */
+    all: function () {
+      return this._records()
+        .filter(function (r) { return r.added > r.deleted; })
+        .map(function (r) {
+          return {
+            id:       r.id,
+            source:   r.source,
+            title:    r.title    || '',
+            thumb:    r.thumb    || '',
+            url:      r.url      || '',
+            duration: r.duration || 0,
+            views:    r.views    || 0
+          };
+        });
+    },
+
+    /** @param {VideoCard} video @returns {boolean} active (added>deleted) check. */
     has: function (video) {
-      return this.all().some(function (v) {
-        return v.id === video.id && v.source === video.source;
+      return this._records().some(function (r) {
+        return r.id === video.id && r.source === video.source && r.added > r.deleted;
       });
     },
 
     /**
      * Toggle favorite status.
      * @param {VideoCard} video
-     * @returns {boolean} true if added, false if removed
+     * @returns {boolean} true if now active (added), false if removed (tombstoned)
      */
     toggle: function (video) {
-      var list = this.all();
-      var idx = -1;
-      list.forEach(function (v, i) {
-        if (v.id === video.id && v.source === video.source) idx = i;
+      var list = this._records();
+      var rec = null;
+      list.forEach(function (r) {
+        if (r.id === video.id && r.source === video.source) rec = r;
       });
-      if (idx >= 0) {
-        list.splice(idx, 1);
+      var now = Date.now();
+      var active;
+      if (rec && rec.added > rec.deleted) {
+        // Currently active → tombstone (keep the record).
+        rec.deleted = now;
+        active = false;
       } else {
-        list.unshift({
-          id:       video.id,
-          source:   video.source,
-          title:    video.title   || '',
-          thumb:    video.thumb   || '',
-          url:      video.url     || '',
-          duration: video.duration || 0,
-          views:    video.views    || 0
-        });
+        // Absent or tombstoned → (re)activate + refresh fields.
+        if (!rec) {
+          rec = { id: video.id, source: video.source };
+          list.unshift(rec);
+        }
+        rec.title    = video.title    || '';
+        rec.thumb    = video.thumb    || '';
+        rec.url      = video.url      || '';
+        rec.duration = video.duration || 0;
+        rec.views    = video.views    || 0;
+        rec.added    = now;
+        rec.deleted  = 0;
+        active = true;
       }
       Lampa.Storage.set(this._key, list);
-      return idx < 0;
+      try { Sync.schedule(); } catch (e) {}
+      return active;
+    },
+
+    /**
+     * Merge remote records into local by id@source, last-write-wins on the
+     * newer of max(added,deleted). Persists the merged set.
+     * @param {Array} remote
+     */
+    _merge: function (remote) {
+      if (!Array.isArray(remote) || !remote.length) return;
+      var local = this._records();
+      var index = {};
+      local.forEach(function (r) { index[r.id + '@' + r.source] = r; });
+      remote.forEach(function (rr) {
+        if (!rr || rr.id == null) return;
+        var key = rr.id + '@' + rr.source;
+        var cur = index[key];
+        if (!cur) {
+          local.push(rr);
+          index[key] = rr;
+          return;
+        }
+        var curT = Math.max(cur.added || 0, cur.deleted || 0);
+        var remT = Math.max(rr.added || 0, rr.deleted || 0);
+        if (remT >= curT) {
+          // Remote is newer (or equal) → take its state.
+          cur.title    = rr.title    || cur.title    || '';
+          cur.thumb    = rr.thumb    || cur.thumb    || '';
+          cur.url      = rr.url      || cur.url      || '';
+          cur.duration = rr.duration || cur.duration || 0;
+          cur.views    = rr.views    || cur.views    || 0;
+          cur.added    = rr.added    || 0;
+          cur.deleted  = rr.deleted  || 0;
+        }
+      });
+      Lampa.Storage.set(this._key, local);
+    }
+  };
+
+  // ============================================================
+  // SYNC  — PIN-based cross-device favorites sync via the CF Worker.
+  // ============================================================
+  // One POST to `${PROXY_URL}/favs?pin=<pin>&key=<proxyKey>` does pull+merge+push:
+  // the worker merges the body's records with its stored bucket (last-write-wins)
+  // and returns the merged set, which we merge locally too (idempotent / safe).
+  // Local-first: any network failure leaves local favorites fully working.
+  var Sync = {
+    _running: false,
+    _timer:   null,
+
+    /** @returns {string} the sync PIN (default '1206' → shared bucket, zero setup). */
+    getPin: function () {
+      return Lampa.Storage.get('cherry_sync_pin', '1206');
+    },
+
+    /** @param {string} p 4–12 digits. Persists + triggers a run. */
+    setPin: function (p) {
+      p = ('' + (p || '')).trim();
+      if (!/^[0-9]{4,12}$/.test(p)) return false;
+      Lampa.Storage.set('cherry_sync_pin', p);
+      this.run();
+      return true;
+    },
+
+    /** Debounced run — batches rapid toggles (~1500ms). */
+    schedule: function () {
+      var self = this;
+      if (self._timer) clearTimeout(self._timer);
+      self._timer = setTimeout(function () {
+        self._timer = null;
+        self.run();
+      }, 1500);
+    },
+
+    /**
+     * Pull+merge+push in one POST. Swallows network errors (stays local).
+     * Guards against concurrent runs.
+     */
+    run: function () {
+      var self = this;
+      if (self._running) return Promise.resolve();
+      var pin = self.getPin();
+      if (!/^[0-9]{4,12}$/.test('' + pin)) return Promise.resolve();
+      self._running = true;
+      var url = PROXY_URL + '/favs?pin=' + encodeURIComponent(pin) +
+                '&key=' + encodeURIComponent(getProxyKey());
+      return cherryPostJson(url, { records: Fav._records() })
+        .then(function (res) {
+          if (res && Array.isArray(res.records)) {
+            Fav._merge(res.records);
+            Sync._refreshGrid();
+          }
+        })
+        .catch(function (err) {
+          console.warn('[Cherry] sync failed (offline?), keeping local favorites:', err);
+        })
+        .then(function () { self._running = false; });
+    },
+
+    /** Best-effort: repaint the favorites grid if it's the active activity. */
+    _refreshGrid: function () {
+      try {
+        var act = Lampa.Activity.active();
+        if (!act || !act.is_favorites) return;
+        var comp = act.activity && act.activity.component;
+        // InteractionCategory exposes create() — re-run it to rebuild cards from
+        // the merged Fav.all(). Guarded: a missing/odd shape is silently ignored.
+        if (comp && typeof comp.create === 'function') comp.create();
+      } catch (e) {}
     }
   };
 
@@ -981,7 +1184,9 @@
       results.push({ title: Lampa.Lang.translate('cherry_search'), img: '', _kind: 'search', _initial: '⌕', _action: true });
       // 2) Favorites entry.
       results.push({ title: Lampa.Lang.translate('cherry_favorites'), img: '', _kind: 'favorites', _initial: '♥', _action: true });
-      // 3) One card per registered source — stable brand colour + first letter.
+      // 3) Sync entry — set the cross-device PIN; opening Cherry also auto-syncs.
+      results.push({ title: Lampa.Lang.translate('cherry_sync'), img: '', _kind: 'sync', _initial: '⟲', _action: true });
+      // 4) One card per registered source — stable brand colour + first letter.
       SOURCES.forEach(function (src) {
         results.push({
           title:      src.name,
@@ -1002,6 +1207,9 @@
         root.addClass('cherry-cat cherry-home');
         root.find('.category-full').addClass('mapping--grid cols--8');
       } catch (e) {}
+
+      // Opening Cherry pulls the shared bucket (non-blocking, local-first).
+      try { Sync.run(); } catch (e) {}
     };
 
     comp.cardRender = function (object, element, card) {
@@ -1037,6 +1245,24 @@
             is_favorites: true,
             page:         1
           });
+        } else if (element._kind === 'sync') {
+          if (typeof Lampa.Input !== 'undefined' && Lampa.Input.edit) {
+            Lampa.Input.edit({
+              title:  Lampa.Lang.translate('cherry_sync'),
+              value:  Sync.getPin(),
+              free:   true,
+              nosave: true
+            }, function (v) {
+              Lampa.Controller.toggle('content');
+              var p = (v || '').trim();
+              if (/^[0-9]{4,12}$/.test(p)) {
+                Sync.setPin(p);
+                Lampa.Noty.show(Lampa.Lang.translate('cherry_sync') + ': PIN ' + p);
+              } else {
+                Lampa.Noty.show('PIN — 4–12 цифр');
+              }
+            });
+          }
         } else if (element._kind === 'source') {
           Lampa.Activity.push({
             component: 'cherry_grid',
@@ -1122,6 +1348,7 @@
       cherry_search_hint: { ru: 'Введите запрос',      en: 'Enter a query'      },
       cherry_sources:     { ru: 'Источники',           en: 'Sources'            },
       cherry_favorites:   { ru: 'Избранное',           en: 'Favorites'          },
+      cherry_sync:        { ru: 'Синхронизация',       en: 'Sync'               },
       cherry_no_results:  { ru: 'Нет результатов',     en: 'No results'         },
       cherry_fav_empty_hint: { ru: 'Удерживайте ОК на видео чтобы добавить в избранное', en: 'Hold OK on a video to add it to favorites' },
       cherry_loading:     { ru: 'Загрузка…',           en: 'Loading…'           },
@@ -1252,6 +1479,10 @@
 
     // P3.4: persistent header filter button for cherry_grid screens.
     try { addFilterButton(); } catch (e) { console.warn('[Cherry] addFilterButton failed', e); }
+
+    // Startup sync — pull the shared bucket once (default PIN 1206). Non-blocking,
+    // local-first: a slow/failed sync never delays the UI.
+    setTimeout(function () { try { Sync.run(); } catch (e) {} }, 2000);
 
     var cherryIcon = [
       '<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">',

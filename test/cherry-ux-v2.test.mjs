@@ -1993,7 +1993,10 @@ describe('UI/UX v2: P2.2 title legibility CSS present', () => {
 describe('UI/UX v2: P2.3 home letter tiles', () => {
   var MAIN = (function () {
     var start = SRC.indexOf('function CherryMain(object)');
-    return SRC.slice(start, start + 4000);
+    // Bound to CherryMain's body (ends where addStyles begins), not a brittle
+    // fixed offset — the body grows as features (e.g. the sync tile) are added.
+    var end = SRC.indexOf('function addStyles', start);
+    return SRC.slice(start, end > -1 ? end : start + 4000);
   })();
 
   it('picker entries carry a stable _initial', () => {
