@@ -75,6 +75,20 @@ Pornhub categories are numeric ids; the existing webmasters JSON browse just nee
 ### L31: Bash quoted-heredoc still collapses `\\` → `\` for appended JS test files
 Appending a vitest file via `cat >> f << 'EOF'` turned `new RegExp("id:\\s*...")` into `"id:\s*..."`, and JS then read `"\s"` as `"s"` — the regex silently became `id:s*...[sS]` and never matched. Literal regexes (`/\{page\}/`) survived; only double-backslash strings broke. **Rule:** never write regex-bearing JS through a heredoc — use the Edit/Write tool, or prefer `indexOf`/`toContain` proximity checks over `new RegExp(string)` in anti-drift tests.
 
+## cherry-search-sort-fixes (2026-06-04) — Mode: medium
+
+### L36: "preview/Enter plays the neighbor video" was a parser off-by-one, not a render bug
+On-device, xnxx cards showed correct focus but played/previewed the NEIGHBOR. Root cause (investigation + architect review): xnxx `_parseCards` split on the INNER `thumb-under` caption, so each block's `data-src` thumb belonged to card i+1 while href/title were card i. Fix = split on the OUTER wrapper (`thumb-block`), like xvideos. **CRITICAL:** review caught that the other split parsers (xvideos/spankbang/youjizz/hellporno/hqporner) split on OUTER wrappers and are CORRECT — "fixing" them would break working channels. The old xnxx test fixture was non-representative (img INSIDE thumb-under) — that's why it shipped; replaced with real multi-card markup asserting `items[i].url` & `items[i].thumb` share the id.
+
+### L37: tests run against INLINE parser copies, not plugin.js (IIFE) — fix both or green-lies
+`test/cherry-engine.test.mjs` copies parser bodies inline. Fixing plugin.js alone leaves tests green against the stale inline copy; fixing only the copy diverges from shipped code. Fix BOTH and assert with a representative fixture.
+
+### L38: InteractionCategory header title = ACTIVITY title (object.title), NOT build({title})
+Active sort/category wasn't visible after the menu closed because the suffix went to `build({title})`, which the header ignores. Fix = put the filter label on `Lampa.Activity.push({title})`. Avoid double-suffix: once the activity title carries the filter, `build`/`resolve` use the bare activity title.
+
+### L39: per-channel category/sort can't be verified from a datacenter IP — device-critical
+Sweeping category URLs here gave 301s (http→https, fine with -L), 403s (spankbang), and per-site markers differ — unreliable. KVS `?sort_by=` verified working on BOTH category and default pages (xozilla/analdin) → default-popular sort is safe. "Which channel shows empty BBW" needs the user's residential IP + Lampa; defer to device-reported specifics rather than blind URL rewrites that risk breaking working channels. Owner constraint reaffirmed mid-task: don't change card-formation (parsing) or playback except clear bugs — browse-URL/sort changes are borderline, flag them.
+
 ## cherry-nav-fix (2026-06-04) — Mode: medium
 
 ### L35: Hand-rolled Lampa.Controller.add with move(dir) in handlers is fundamentally broken — use InteractionCategory/InteractionMain
