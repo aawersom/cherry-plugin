@@ -4,9 +4,22 @@ Out-of-scope bugs spotted during tasks. Critical/high → fix in flight. Medium/
 
 ---
 
+## Resolved / obsolete (2026-06-04, InteractionCategory migration)
+
+- **BL-1 — RESOLVED/OBSOLETE.** The `cherry_card` template was deleted in the dead-code purge; cards now render via Lampa's stock `.card`, which sets the title as TEXT (not innerHTML). Security review (2026-06-04) confirmed no scraped value reaches innerHTML. No XSS path.
+- **BL-3 — RESOLVED.** All `getRelated` paths now `.slice(0, 20)` (incl. pornhub relatedVideosJSON and the per-site getRelated added 2026-06-04).
+- **BL-4 — OBSOLETE.** Row mode (`renderRows`/`cherry_home_mode`) was removed in the InteractionCategory migration; CherryMain is now a single picker. No duplicate card-creation path.
+
+---
+
 ## cherry-ux-v2 (2026-06-03)
 
-### BL-1 (low, pre-existing) — `video.title` interpolated into cherry_card template without confirmed escaping
+### BL-2 (low, pre-existing, STILL OPEN) — thumb/preview src set without scheme allowlist
+**Where:** card thumb (via stock card `img`/`poster`) + `_startPreview` videoEl.src.
+**Risk:** Low (javascript:/data: inert for img/video media loads), but malformed values could trigger unexpected requests.
+**Fix:** validate `https?://`/`//` prefix before assignment. (Note: cards now use the stock `.card` renderer for thumbs; preview `<video>.src` is still set directly in `_startPreview`.)
+
+### BL-1 (RESOLVED — see top) — `video.title` interpolated into cherry_card template without confirmed escaping
 **Where:** `plugin.js` renderCards `Lampa.Template.get('cherry_card', {title:...})` + template `<div class="cherry-card__title">{title}</div>`
 **Risk:** `title` comes from untrusted scraped HTML. `_parseHtmlCards` runs `_decodeHtml` on it, which can turn `&lt;img&gt;` back into live `<img>`. If `Lampa.Template.get` does naive string replacement without HTML-escaping → stored-DOM XSS in the card grid.
 **Scope:** Pre-existing — affects ALL cards (browse/search/related), not introduced by Phase 1. The model badge already uses the safe `.text()` pattern (`modelBadge.text(...)`).
