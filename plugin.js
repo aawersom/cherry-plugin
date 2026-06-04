@@ -1939,15 +1939,18 @@ SOURCES.push({
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
-  cfg: { categories: _cats('amateur:Amateur,anal:Anal,asian:Asian,bbw:BBW,big-ass:Big Ass,big-tits:Big Tits,blonde:Blonde,blowjob:Blowjob,brunette:Brunette,creampie:Creampie,cumshot:Cumshot,ebony:Ebony,gangbang:Gangbang,hardcore:Hardcore,hentai:Hentai,interracial:Interracial,japanese:Japanese,latina:Latina,lesbian:Lesbian,massage:Massage,mature:Mature,milf:MILF,pov:POV,public:Public,redhead:Redhead,step-mom:Step Mom,teen:Teen,threesome:Threesome'), sorts: [] },
+  cfg: { categories: _cats('amateur:Amateur,anal:Anal,asian:Asian,bbw:BBW,big-ass:Big Ass,big-tits:Big Tits,blonde:Blonde,blowjob:Blowjob,brunette:Brunette,creampie:Creampie,cumshot:Cumshot,ebony:Ebony,gangbang:Gangbang,hardcore:Hardcore,hentai:Hentai,interracial:Interracial,japanese:Japanese,latina:Latina,lesbian:Lesbian,massage:Massage,mature:Mature,milf:MILF,pov:POV,public:Public,redhead:Redhead,step-mom:Step Mom,teen:Teen,threesome:Threesome'),
+    // Per-category PATH sort: /tags/{slug}/{sort}/{page} (views/uploaddate/rating/duration verified, 36 cards).
+    sorts: _cats('views:По популярности,uploaddate:Свежее,rating:По рейтингу,duration:Длинные') },
 
-  browse: function(category, page) {
+  browse: function(category, page, sort) {
     var self = this;
     var p = page || 1;
-    // xnxx categories use the native /tags/{slug}/{page} route (0-based page, page1 omits).
+    // xnxx categories use the native /tags/{slug}/{sort}/{page} route (0-based page, page1 omits).
+    // Sort is a PATH segment between slug and page; default = views (По популярности).
     // SEARCH still uses /search/{q}/ (unchanged) — only the CATEGORY path is /tags/.
     var url = category
-      ? _buildCatUrl('https://www.xnxx.com/tags/{slug}/{page}', category, p, 0, true)
+      ? _buildCatUrl('https://www.xnxx.com/tags/{slug}/' + (sort || 'views') + '/{page}', category, p, 0, true)
       : 'https://www.xnxx.com/?k=new&p=' + (p - 1);
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html);
@@ -2106,7 +2109,9 @@ SOURCES.push({
 SOURCES.push({
   id: 'spankbang',
   name: 'Spankbang',
-  cfg: { categories: _cats('amateur:Любительское,anal:Анал,anime:Аниме,arab:Арабское,asian:Азиатки,ass:Жопа,babe:Красотки,bbc:BBC,bbw:BBW,bdsm:БДСМ,blonde:Блондинки,blowjob:Минет,bondage:Бондаж,british:Британское,brunette:Брюнетки,busty:Грудастые,cam:Вебкам,casting:Кастинг,cheating:Измена,chinese:Китайское,compilation:Компиляция,cosplay:Косплей,creampie:Кремпай,cuckold:Куколд,cumshot:Камшот,ebony:Чёрные,feet:Ножки,femdom:Фемдом,fetish:Фетиш,gangbang:Групповуха,hentai:Хентай,indian:Индийское,japanese:Японское,latina:Латинки,massage:Массаж,milf:MILF,pov:POV,shemale:Трансы,solo:Соло,squirt:Сквирт,stepmom:Мачеха,teen:Молодые,big+tits:Большие сиськи,big+ass:Большая жопа'), sorts: [] },
+  cfg: { categories: _cats('amateur:Любительское,anal:Анал,anime:Аниме,arab:Арабское,asian:Азиатки,ass:Жопа,babe:Красотки,bbc:BBC,bbw:BBW,bdsm:БДСМ,blonde:Блондинки,blowjob:Минет,bondage:Бондаж,british:Британское,brunette:Брюнетки,busty:Грудастые,cam:Вебкам,casting:Кастинг,cheating:Измена,chinese:Китайское,compilation:Компиляция,cosplay:Косплей,creampie:Кремпай,cuckold:Куколд,cumshot:Камшот,ebony:Чёрные,feet:Ножки,femdom:Фемдом,fetish:Фетиш,gangbang:Групповуха,hentai:Хентай,indian:Индийское,japanese:Японское,latina:Латинки,massage:Массаж,milf:MILF,pov:POV,shemale:Трансы,solo:Соло,squirt:Сквирт,stepmom:Мачеха,teen:Молодые,big+tits:Большие сиськи,big+ass:Большая жопа'),
+    // GLOBAL-feed sorts: per-category sort unsupported; sort is a separate listing root /{sort}/{page}/.
+    sorts: _cats('most_popular:По популярности,trending_videos:В тренде,new_videos:Свежее,upcoming:Скоро') },
   host: 'ru.spankbang.com',
 
   _parseCards: function(html) {
@@ -2185,12 +2190,14 @@ SOURCES.push({
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
-  browse: function(category, page) {
+  browse: function(category, page, sort) {
     var self = this;
     var p = page || 1;
+    // CATEGORY (search-as-category) → /s/{slug}/{page}/ (no sort — site has no per-category sort).
+    // NO category → GLOBAL sorted feed /{sort}/{page}/, defaulting to most_popular (По популярности).
     var url = category
       ? _buildCatUrl('https://ru.spankbang.com/s/{slug}/{page}/', category, p, 1, true)
-      : 'https://ru.spankbang.com/new/' + p + '/';
+      : 'https://ru.spankbang.com/' + (sort || 'most_popular') + '/' + p + '/';
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html);
       var total = self._parseTotalPages(html);
@@ -2315,14 +2322,23 @@ SOURCES.push({
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
-  cfg: { categories: _cats('4k-porn:4K porn,1080p-porn:1080p porn,60fps-porn:60 FPS porn,amateur:Amateur,anal-sex-hd:Anal,asian:Asian,babe:Babe,bdsm:BDSM,beach-porn:Beach,big-ass:Big ass,big-dick:Big dick,big-tits:Big tits,bisexual:Bisexual,blonde:Blonde,blowjob:Blowjob,bondage:Bondage,brunette:Brunette,casting:Casting,creampie:Creampie,cumshot:Cumshot,deepthroat:Deepthroat,ebony:Ebony,fetish:Fetish,fingering:Fingering,fisting:Fisting,gangbang:Gangbang,group-sex:Group sex,hairy-pussy:Hairy pussy,handjob:Handjob,hentai:Hentai,interracial:Interracial,japanese-girls-porn:Japanese,latina:Latina,lesbian:Lesbian,long-hair:Long hair,masturbation:Masturbation,mature:Mature,milf:MILF,old-and-young:Old and young,orgasm:Orgasm,orgy:Orgy,outdoor:Outdoor,pickup:Pickup,pov:POV,public:Public,pussy-licking:Pussy licking,redhead:Redhead,russian:Russian,porn-massage:Sex massage,sex-parties:Sex party,shaved-pussy:Shaved pussy,shemale:Shemale,small-tits:Small tits,squirt:Squirt,stockings:Stockings,tattooed:Tattooed,teen-porn:Teen porn,threesome:Threesome,vintage:Vintage'), sorts: [] },
+  cfg: { categories: _cats('4k-porn:4K porn,1080p-porn:1080p porn,60fps-porn:60 FPS porn,amateur:Amateur,anal-sex-hd:Anal,asian:Asian,babe:Babe,bdsm:BDSM,beach-porn:Beach,big-ass:Big ass,big-dick:Big dick,big-tits:Big tits,bisexual:Bisexual,blonde:Blonde,blowjob:Blowjob,bondage:Bondage,brunette:Brunette,casting:Casting,creampie:Creampie,cumshot:Cumshot,deepthroat:Deepthroat,ebony:Ebony,fetish:Fetish,fingering:Fingering,fisting:Fisting,gangbang:Gangbang,group-sex:Group sex,hairy-pussy:Hairy pussy,handjob:Handjob,hentai:Hentai,interracial:Interracial,japanese-girls-porn:Japanese,latina:Latina,lesbian:Lesbian,long-hair:Long hair,masturbation:Masturbation,mature:Mature,milf:MILF,old-and-young:Old and young,orgasm:Orgasm,orgy:Orgy,outdoor:Outdoor,pickup:Pickup,pov:POV,public:Public,pussy-licking:Pussy licking,redhead:Redhead,russian:Russian,porn-massage:Sex massage,sex-parties:Sex party,shaved-pussy:Shaved pussy,shemale:Shemale,small-tits:Small tits,squirt:Squirt,stockings:Stockings,tattooed:Tattooed,teen-porn:Teen porn,threesome:Threesome,vintage:Vintage'),
+    // GLOBAL-feed sorts: per-category sort unsupported; sorts are base-path swaps.
+    // 'top/week'/'top/month' are slash-bearing path bases → https://hqporner.com/top/week/{p}.
+    sorts: _cats('top:По популярности,hdporn:Свежее,top/week:За неделю,top/month:За месяц') },
 
-  browse: function(category, page) {
+  browse: function(category, page, sort) {
     var self = this;
     var p = page || 1;
-    var url = category
-      ? _buildCatUrl('https://hqporner.com/category/{slug}/{page}', category, p, 1, true)
-      : (p > 1 ? 'https://hqporner.com/hdporn/' + p : 'https://hqporner.com/');
+    // CATEGORY → /category/{slug}/{page} (no sort — site has no per-category sort).
+    // NO category → GLOBAL feed base /{sort} (default top = По популярности); page appended as /{p} when p>1.
+    var url;
+    if (category) {
+      url = _buildCatUrl('https://hqporner.com/category/{slug}/{page}', category, p, 1, true);
+    } else {
+      var base = 'https://hqporner.com/' + (sort || 'top');
+      url = p > 1 ? base + '/' + p : base;
+    }
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html);
       // Pagination: look for highest page number in /hdporn/N links
@@ -2380,7 +2396,9 @@ SOURCES.push({
 SOURCES.push({
   id: 'youjizz',
   name: 'YouJizz',
-  cfg: { categories: _cats('amateur:Amateur,anal:Anal,asian:Asian,bbc:BBC,big-ass:Big Ass,big-tits:Big Tits,blonde:Blonde,blowjob:Blowjob,casting:Casting,compilation:Compilation,creampie:Creampie,daddy:Daddy,ebony:Ebony,gangbang:Gangbang,hentai:Hentai,homemade:Homemade,interracial:Interracial,japanese:Japanese,japanese-uncensored:Japanese Uncensored,japanese-wife:Japanese Wife,latina:Latina,massage:Massage,mature:Mature,milf:MILF,mind-control:Mind Control,pinay:Pinay,pov:POV,sister:Sister,sleeping:Sleeping,stepdaughter:Stepdaughter,stepmom:Stepmom,stepmom-and-son:Stepmom And Son,stepsister:Stepsister,superheroine:Superheroine,taboo:Taboo,teen:Teen,threesome:Threesome,ai-generated:AI Generated,czech-streets:Czech Streets,private-society:Private Society'), sorts: [] },
+  cfg: { categories: _cats('amateur:Amateur,anal:Anal,asian:Asian,bbc:BBC,big-ass:Big Ass,big-tits:Big Tits,blonde:Blonde,blowjob:Blowjob,casting:Casting,compilation:Compilation,creampie:Creampie,daddy:Daddy,ebony:Ebony,gangbang:Gangbang,hentai:Hentai,homemade:Homemade,interracial:Interracial,japanese:Japanese,japanese-uncensored:Japanese Uncensored,japanese-wife:Japanese Wife,latina:Latina,massage:Massage,mature:Mature,milf:MILF,mind-control:Mind Control,pinay:Pinay,pov:POV,sister:Sister,sleeping:Sleeping,stepdaughter:Stepdaughter,stepmom:Stepmom,stepmom-and-son:Stepmom And Son,stepsister:Stepsister,superheroine:Superheroine,taboo:Taboo,teen:Teen,threesome:Threesome,ai-generated:AI Generated,czech-streets:Czech Streets,private-society:Private Society'),
+    // GLOBAL-feed sorts: per-category sort unsupported; sort is a separate listing root /{sort}/{page}.html.
+    sorts: _cats('most-popular:По популярности,trending:В тренде,top-rated:По рейтингу,newest-clips:Свежее') },
   host: 'youjizz.com',
 
   _parseCards: function(html) {
@@ -2455,23 +2473,23 @@ SOURCES.push({
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
-  browse: function(category, page) {
+  browse: function(category, page, sort) {
     var self = this;
     var p = page || 1;
     if (category) {
-      // page number baked into the filename: {slug}-{page}.html (1-based)
+      // CATEGORY → /categories/{slug}-{page}.html (1-based page baked into filename; no sort).
       var curl = _buildCatUrl('https://www.youjizz.com/categories/{slug}-{page}.html', category, p, 1, false);
       return cherryFetch(curl).then(function(html) {
         var items = self._parseCards(html);
         return { items: items, total_pages: _derivePages(items.length, p, 20) };
       }).catch(function() { return { items: [], total_pages: 0 }; });
     }
-    // youjizz.com/videos/newest-N.html returns 500; use homepage instead.
-    // single-page site: homepage has no page param (newest-N 500s) → total_pages 1.
-    var url = 'https://www.youjizz.com/';
+    // NO category → GLOBAL sorted feed /{sort}/{page}.html (1-based), default most-popular (По популярности).
+    // (Replaces the old paginationless homepage browse, which also fixes its missing pagination.)
+    var url = 'https://www.youjizz.com/' + (sort || 'most-popular') + '/' + p + '.html';
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html);
-      return { items: items, total_pages: 1 };
+      return { items: items, total_pages: _derivePages(items.length, p, 20) };
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
@@ -3378,7 +3396,7 @@ SOURCES.push({
     name: 'Porndig',
     host: 'porndig.com',
     // Composite slug "{id}/{name}" (porndig channels need both). Browse: /channels/{id}/{name}/page/{n}.
-    cfg: { categories: _cats('33/anal:Anal,34/young:Young,35/cum-swallowing:Cum Swallowing,36/blonde:Blonde,38/asian:Asian,39/milf:MILF,40/lesbian:Lesbian,41/mature:Mature,42/orgy:Orgy,43/big-boobs:Big Boobs,45/black:Black,46/bbw:BBW,47/creampie:Creampie,48/masturbation:Masturbation,50/facial-ejaculation:Facial Ejaculation,51/hentai:Hentai,52/blowjob:Blowjob,53/interracial:Interracial,54/latina:Latina,55/bondage-bdsm:BDSM,57/fetish:Fetish,58/pov:POV,59/bukkake:Bukkake,60/redhead:Redhead,63/brunette:Brunette,64/double-penetration:Double Penetration,67/small-tits:Small Tits,68/squirters:Squirting,70/webcam:Webcam,74/massage:Massage,75/sexy-lingerie:Sexy Lingerie,799/cumshot:Cumshot,802/big-dick:Big Dick,816/stockings:Stockings,82/gangbang:GangBang,1043/threesome:Threesome,1117/european:European,1198/big-ass:Big Ass,1235/hardcore:Hardcore,1236/cuckold:Cuckold'), sorts: [] },
+    cfg: { categories: _cats('33/anal:Anal,34/young:Young,35/cum-swallowing:Cum Swallowing,36/blonde:Blonde,38/asian:Asian,39/milf:MILF,40/lesbian:Lesbian,41/mature:Mature,42/orgy:Orgy,43/big-boobs:Big Boobs,45/black:Black,46/bbw:BBW,47/creampie:Creampie,48/masturbation:Masturbation,50/facial-ejaculation:Facial Ejaculation,51/hentai:Hentai,52/blowjob:Blowjob,53/interracial:Interracial,54/latina:Latina,55/bondage-bdsm:BDSM,57/fetish:Fetish,58/pov:POV,59/bukkake:Bukkake,60/redhead:Redhead,63/brunette:Brunette,64/double-penetration:Double Penetration,67/small-tits:Small Tits,68/squirters:Squirting,70/webcam:Webcam,74/massage:Massage,75/sexy-lingerie:Sexy Lingerie,799/cumshot:Cumshot,802/big-dick:Big Dick,816/stockings:Stockings,82/gangbang:GangBang,1043/threesome:Threesome,1117/european:European,1198/big-ass:Big Ass,1235/hardcore:Hardcore,1236/cuckold:Cuckold'), sorts: [] /* sort not URL-addressable (DLE/AJAX POST) */ },
 
     search: function (query, page) {
         var p = page || 1;
@@ -3480,7 +3498,7 @@ SOURCES.push({
   name: 'Tizam',
   host: 'tv4.tizam.org',
   // Category pages render one page in static HTML (pagination is JS-only) → total_pages 1.
-  cfg: { categories: _cats('all_sex:Фильмы xxx,s_russkim_perevodom:С Русским переводом,russkoe_porno:Русские порнофильмы,novinki:Новинки по выбору года,polnometrazhnye:Полнометражные с сюжетом,zrelye:Зрелые женщины,podrostki_18:Молодые девушки +18,anal_seks_bol_shie_popki:Анал и Большие попки,bol_shaya_grud:Большие сиськи,minet:Оральный секс,groupvideo:Групповой секс,incest:Семейное порно,svingery:Свингеры и Измена,dominirovanie:Доминирование,zhenskaya_masturbaciya:Соло девушки,pyshechki:Пышечки,aziatki:Азиатские порнофильмы,temnokozhie:Темнокожие,italyan_porn:Итальянские порнофильмы,nemeckie_pornofil_my:Немецкие порнофильмы,klassika:Классика и Ретро'), sorts: [] },
+  cfg: { categories: _cats('all_sex:Фильмы xxx,s_russkim_perevodom:С Русским переводом,russkoe_porno:Русские порнофильмы,novinki:Новинки по выбору года,polnometrazhnye:Полнометражные с сюжетом,zrelye:Зрелые женщины,podrostki_18:Молодые девушки +18,anal_seks_bol_shie_popki:Анал и Большие попки,bol_shaya_grud:Большие сиськи,minet:Оральный секс,groupvideo:Групповой секс,incest:Семейное порно,svingery:Свингеры и Измена,dominirovanie:Доминирование,zhenskaya_masturbaciya:Соло девушки,pyshechki:Пышечки,aziatki:Азиатские порнофильмы,temnokozhie:Темнокожие,italyan_porn:Итальянские порнофильмы,nemeckie_pornofil_my:Немецкие порнофильмы,klassika:Классика и Ретро'), sorts: [] /* sort not URL-addressable (DLE/AJAX POST) */ },
 
   _parseCards: function(html) {
     var items = [];
@@ -4174,7 +4192,7 @@ SOURCES.push({
     id: '24rolika',
     name: '24Rolika',
     host: 'w2.huyalkino.com',
-    cfg: { categories: _cats('russia:Русское порно,russian:С переводом,gopa:Анал,retro:Ретро,asian-girl:Азиатки,bdsm:БДСМ,big-cock:Большие члены,big-tits:Большие сиськи,group:Групповуха,lesbi:Лесбиянки,teen:Молодые девушки,solo:Женская мастурбация,beautiful:Красивый секс,black:Межрасовое,homemade:Домашнее,incest:Инцест,orgasms:Оргазмы,movie:Порно фильмы,ok:Одноклассники,youtube-porno:Ютуб'), sorts: [] },
+    cfg: { categories: _cats('russia:Русское порно,russian:С переводом,gopa:Анал,retro:Ретро,asian-girl:Азиатки,bdsm:БДСМ,big-cock:Большие члены,big-tits:Большие сиськи,group:Групповуха,lesbi:Лесбиянки,teen:Молодые девушки,solo:Женская мастурбация,beautiful:Красивый секс,black:Межрасовое,homemade:Домашнее,incest:Инцест,orgasms:Оргазмы,movie:Порно фильмы,ok:Одноклассники,youtube-porno:Ютуб'), sorts: [] /* sort not URL-addressable (DLE/AJAX POST) */ },
 
     search: function (query, page) {
         // DLE search does not paginate natively — page param is advisory

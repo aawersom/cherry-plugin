@@ -1527,6 +1527,111 @@ describe('Android native stream — plugin.js source assertions (anti-drift)', (
   });
 });
 
+// ---------------------------------------------------------------------------
+// Final sort batch — xnxx PATH sort + youjizz/hqporner/spankbang GLOBAL feeds,
+// and the three confirmed-empty DLE/AJAX sources.
+// ---------------------------------------------------------------------------
+describe('Final sort batch: xnxx PATH + youjizz/hqporner/spankbang GLOBAL feeds', () => {
+  // sorts: _cats('...') for an array-literal (non-KVS) source body.
+  function sortsFor(id) {
+    var at = SRC.indexOf("id: '" + id + "'");
+    expect(at).toBeGreaterThan(-1);
+    var body = SRC.slice(at, at + 6000);
+    var m = body.match(/sorts: _cats\('([^']*)'\)/);
+    expect(m).toBeTruthy();
+    return m[1].split(',').map(function (p) {
+      var i = p.indexOf(':');
+      return { id: p.slice(0, i), label: p.slice(i + 1) };
+    });
+  }
+  function browseBodyOf(id) {
+    var at = SRC.indexOf("id: '" + id + "'");
+    expect(at).toBeGreaterThan(-1);
+    var bAt = SRC.indexOf('browse: function(category, page, sort)', at);
+    if (bAt < 0) bAt = SRC.indexOf('browse: function (category, page, sort)', at);
+    expect(bAt).toBeGreaterThan(-1);
+    return SRC.slice(bAt, bAt + 1100);
+  }
+
+  // ---- xnxx: per-category PATH sort ----
+  it('xnxx: views first «По популярности», Russian labels, exact ids', () => {
+    var s = sortsFor('xnxx');
+    expect(s.map(function (x) { return x.id; }))
+      .toEqual(['views', 'uploaddate', 'rating', 'duration']);
+    expect(s[0].label).toBe('По популярности');
+    s.forEach(function (x) {
+      expect(x.label).toMatch(/[А-Яа-я]/);
+      expect(x.label).not.toBe('Популярное');
+    });
+  });
+  it('xnxx category browse injects sort path /tags/{slug}/{sort}/{page} (default views)', () => {
+    var body = browseBodyOf('xnxx');
+    expect(body).toContain("'https://www.xnxx.com/tags/{slug}/' + (sort || 'views') + '/{page}'");
+  });
+
+  // ---- youjizz / hqporner / spankbang: GLOBAL-feed sorts ----
+  var globalSpecs = {
+    youjizz: {
+      ids:    ['most-popular', 'trending', 'top-rated', 'newest-clips'],
+      // no-category global feed shape
+      feed:   "'https://www.youjizz.com/' + (sort || 'most-popular') + '/' + p + '.html'",
+      // category shape stays unchanged (no sort)
+      cat:    "'https://www.youjizz.com/categories/{slug}-{page}.html'"
+    },
+    hqporner: {
+      ids:    ['top', 'hdporn', 'top/week', 'top/month'],
+      feed:   "var base = 'https://hqporner.com/' + (sort || 'top');",
+      cat:    "'https://hqporner.com/category/{slug}/{page}'"
+    },
+    spankbang: {
+      ids:    ['most_popular', 'trending_videos', 'new_videos', 'upcoming'],
+      feed:   "'https://ru.spankbang.com/' + (sort || 'most_popular') + '/' + p + '/'",
+      cat:    "'https://ru.spankbang.com/s/{slug}/{page}/'"
+    }
+  };
+  Object.keys(globalSpecs).forEach(function (id) {
+    var spec = globalSpecs[id];
+    it(id + ': popular first «По популярности», Russian labels, exact ids', () => {
+      var s = sortsFor(id);
+      expect(s.map(function (x) { return x.id; })).toEqual(spec.ids);
+      expect(s[0].label).toBe('По популярности');
+      s.forEach(function (x) {
+        expect(x.label).toMatch(/[А-Яа-я]/);
+        expect(x.label).not.toBe('Популярное');
+      });
+    });
+    it(id + ': no-category browse builds the GLOBAL sorted feed (default popular)', () => {
+      var body = browseBodyOf(id);
+      expect(body).toContain(spec.feed);
+      // browse signature carries sort
+      expect(body).toMatch(/^browse: function ?\(category, page, sort\)/);
+    });
+    it(id + ': category browse still builds the category URL (no sort)', () => {
+      var body = browseBodyOf(id);
+      expect(body).toContain(spec.cat);
+      // the category URL string must not interpolate sort
+      expect(body).not.toMatch(/category[\s\S]{0,40}\+ \(sort/);
+    });
+  });
+});
+
+describe('Final sort batch: DLE/AJAX sources stay sorts:[] (documented)', () => {
+  ['24rolika', 'porndig', 'tizam'].forEach(function (id) {
+    it(id + ': sorts is the empty array with a documenting comment', () => {
+      var at = SRC.indexOf("id: '" + id + "'");
+      expect(at).toBeGreaterThan(-1);
+      // Scope to this source's cfg line (the one with its own sorts: declaration).
+      var cfgAt = SRC.indexOf('sorts: [', at);
+      expect(cfgAt).toBeGreaterThan(-1);
+      var line = SRC.slice(cfgAt, SRC.indexOf('\n', cfgAt));
+      // Must remain the literal empty array with the documenting comment (not _cats).
+      expect(line).toMatch(/^sorts: \[\]/);
+      expect(line).not.toContain('_cats');
+      expect(line).toContain('not URL-addressable');
+    });
+  });
+});
+
 // ── Batch 1: KVS categories (_buildCatUrl + _kvsEngine cfg) ────────────────────
 describe('KVS categories — _buildCatUrl POST behaviour', () => {
   // Local mirror of plugin.js _buildCatUrl
@@ -1613,7 +1718,8 @@ describe('Batch 2 categories — plugin.js source assertions (anti-drift)', () =
 describe('Batch 3 categories — plugin.js source assertions (anti-drift)', () => {
   // Category-URL templates must be present (position-independent — cfg may sit far from id).
   var fmts = {
-    xnxx: 'https://www.xnxx.com/tags/{slug}/{page}',
+    // xnxx now injects a per-category sort path segment: /tags/{slug}/{sort}/{page}.
+    xnxx: "'https://www.xnxx.com/tags/{slug}/' + (sort || 'views') + '/{page}'",
     perfektdamen: 'https://www.perfektdamen.co/tags/{slug}/{page}/',
     hqporner: 'https://hqporner.com/category/{slug}/{page}'
   };
