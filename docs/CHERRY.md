@@ -569,6 +569,19 @@ Live testing session. All originally-reported broken channels fixed.
 
 ---
 
+## Categories & per-source filters (2026-06-04)
+
+All 24 active adapters now expose `cfg.categories` (and `cfg.sorts` where supported), surfaced in the right-edge action menu (Поиск → Сортировка → Категории).
+
+**Architecture:** one generic `_buildCatUrl(fmt, slug, page, pageBase, page1Omit)` builds every site's category URL from a `{slug}`/`{page}` template + flags — no per-site URL hacks. `_kvsEngine` exposes `cfg:{categories,sorts}` and uses `categoryFmt` in browse. Custom adapters add `cfg` + a `category` branch in their `browse` that calls `_buildCatUrl` (or, for API-based browse, the API path). Category lists were autonomously scraped + browse-verified per site → `tasks/cherry-categories.json`.
+
+**Per-site notes:**
+- HTML-parser sites reuse their existing card parser on the category page.
+- eporner: API keyword search (`query=slug`); pornone: HTML `/{slug}/` + `_pornoneCards`.
+- pornhub: webmasters `&category={id}` (numeric ids).
+- porndig: composite `{id}/{name}` channel slug. xnxx/xvideos: 0-based page. youjizz: page-in-filename. hqporner: singular `/category/`. 3movs: `_fetchAny` (404-but-valid body on page>1). tizam: single static page (JS pagination → total_pages 1).
+- **Sort** is query-based on pornhub/xvideos + KVS-engine; path-sort sites (eporner/pornone/crocotube/ebun) ship categories with sort deferred.
+
 ## UX v2 (cherry-ux-v2, 2026-06-04)
 
 Seven UI/UX features added in full-pipeline mode. No card-parsing / stream / proxy logic touched.

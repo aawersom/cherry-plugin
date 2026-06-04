@@ -57,6 +57,16 @@ Pattern `['"]src['"]` requires quotes around key name — fails on `{src:"url"}`
 
 ---
 
+## categories-batch2-5 (2026-06-04) — Mode: fast
+
+### L32: Category browse reuses the adapter's EXISTING card parser — match parser to page type
+A site's category page uses the same card markup as its browse/search page, so the adapter's existing parser works on it — EXCEPT when browse is API-based (eporner, pornone use JSON APIs). There the HTML category page needs a different parser: eporner → reuse the JSON API with `query=slug` (keyword≈category); pornone → fall to its HTML `_pornoneCards` parser on the `/{slug}/` page. **Rule:** before wiring category browse, check whether the adapter's default browse parses HTML or JSON — pick the matching path for the category page.
+
+### L33: pornhub categories ride the webmasters API `&category={id}` param (numeric ids)
+Pornhub categories are numeric ids; the existing webmasters JSON browse just needs `&category={id}` appended — reuses `_mapVideo`, no new parser. Can't live-verify while the residential proxy is down; works on Android-native and when proxy is restored.
+
+### Coverage: all 24 active adapters now expose `cfg.categories` (24× `categories: _cats(`). Search works everywhere (every adapter has `search`). Sort: pornhub/xvideos (query) + KVS-engine 4 (query `?sort_by=`/`?sort=`); path-sort sites (eporner/pornone/crocotube/ebun) ship categories with sorts deferred (would need path-segment sort in browse).
+
 ## categories-batch1 (2026-06-04) — Mode: fast
 
 ### L30: One generic URL builder beats 14 per-site category hacks
