@@ -749,10 +749,10 @@
         else Lampa.Noty.show(Lampa.Lang.translate('cherry_error'), { style: 'warn' });
       };
 
-      // P3.3: in all-sources search the grid blends 24 sites — tag each card
-      // with its origin. Visual overlay using existing element.source; no data
-      // shape change. Skipped in single-source modes (origin is obvious there).
-      if (object.all_sources && element.source) {
+      // P3.3 + E: in all-sources search AND favorites the grid blends sources —
+      // tag each card with its origin. Visual overlay using existing element.source;
+      // no data shape change. Skipped in single-source browse (origin is obvious).
+      if ((object.all_sources || object.is_favorites) && element.source) {
         try {
           var os = sourceById(element.source);
           if (os) {
@@ -912,7 +912,7 @@
       try {
         var root = this.render();
         root.addClass('cherry-cat cherry-home');
-        root.find('.category-full').addClass('mapping--grid cols--7');
+        root.find('.category-full').addClass('mapping--grid cols--8');
       } catch (e) {}
     };
 
@@ -993,16 +993,16 @@
       '  object-fit: cover;',
       '}',
 
-      /* ---- P2.1 Brand focus ring (single pink; kill native outer frame) -- */
+      /* ---- Focus: ONE frame — rely on Lampa's native focus, add only a zoom. */
+      /* (Custom pink ring removed: it stacked on top of the native frame = double.) */
       '.cherry-cat .card{transform-origin:center;}',
-      '.cherry-cat .card.focus{box-shadow:none !important;outline:none !important;}',
-      '.cherry-cat .card.focus .card__view{box-shadow:0 0 0 .16em #e75480,0 .5em 2em rgba(231,84,128,.45) !important;transform:scale(1.04);transition:transform .12s ease, box-shadow .12s ease;}',
+      '.cherry-cat .card.focus .card__view{transform:scale(1.04);transition:transform .12s ease;}',
 
       /* ---- Home picker: small SQUARE tiles, all sources visible -- */
       '.cherry-home .card__view{padding-bottom:100% !important;height:0 !important;position:relative;}',
 
       /* ---- P2.2 Title legibility (2-line clamp, full white) ----- */
-      '.cherry-cat .card__title{color:#fff;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;white-space:normal;overflow:hidden;max-height:2.6em;}',
+      '.cherry-cat .card__title{color:#fff;font-size:.9em;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;white-space:normal;overflow:hidden;max-height:2.6em;}',
 
       /* ---- P2.3 Home letter tiles ------------------------------ */
       '.cherry-cat .cherry-tile{position:absolute;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;border-radius:.6em;}',
@@ -1010,7 +1010,7 @@
       '.cherry-cat .cherry-tile--action{background:#e75480 !important;}',
 
       /* ---- P3.3 Source attribution badge (all-sources search) -- */
-      '.cherry-cat .cherry-src-badge{position:absolute;top:.4em;left:.5em;background:rgba(0,0,0,.78);color:#fff;font-size:.72em;font-weight:600;padding:.12em .5em;border-radius:.25em;max-width:80%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+      '.cherry-cat .cherry-src-badge{position:absolute;top:.4em;left:.5em;z-index:2;background:rgba(0,0,0,.78);color:#fff;font-size:.72em;font-weight:600;padding:.12em .5em;border-radius:.25em;max-width:80%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
 
       /* ---- P3.4 Cherry header filter button -------------------- */
       '.cherry-filter-btn{color:#fff;}',

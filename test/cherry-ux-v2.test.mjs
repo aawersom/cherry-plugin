@@ -1188,14 +1188,14 @@ describe('UI/UX v2: P0 dead CSS removed, live 16:9 kept', () => {
   });
 });
 
-describe('UI/UX v2: P2.1 brand focus ring CSS present', () => {
-  it('focused card view gets a pink box-shadow ring', () => {
-    expect(SRC).toMatch(/\.cherry-cat \.card\.focus \.card__view\{[^}]*box-shadow:0 0 0 \.16em #e75480/);
-  });
-  it('uses box-shadow not a layout-shifting border on focus', () => {
+describe('UI/UX v2: focus = single native frame + zoom (no competing custom ring)', () => {
+  it('focused card view gets only a scale zoom, not a custom box-shadow ring', () => {
     var m = SRC.match(/\.cherry-cat \.card\.focus \.card__view\{([^}]*)\}/);
     expect(m).not.toBeNull();
-    expect(m[1]).not.toMatch(/border:/);
+    expect(m[1]).toMatch(/transform:scale/);
+  });
+  it('no custom pink box-shadow ring (it stacked on the native frame = double)', () => {
+    expect(SRC).not.toMatch(/box-shadow:0 0 0 \.16em #e75480/);
   });
 });
 
@@ -1268,13 +1268,14 @@ describe('UI/UX v2: P3.2 error != empty + persistent fav hint', () => {
 });
 
 describe('UI/UX v2: P3.3 source attribution badge', () => {
-  it('cardRender injects a .cherry-src-badge in all_sources mode', () => {
-    expect(SRC).toMatch(/object\.all_sources\s*&&\s*element\.source/);
+  it('cardRender injects a .cherry-src-badge in all_sources AND favorites modes', () => {
+    expect(SRC).toMatch(/\(object\.all_sources\s*\|\|\s*object\.is_favorites\)\s*&&\s*element\.source/);
     expect(SRC).toContain('cherry-src-badge');
     expect(SRC).toMatch(/sourceById\(element\.source\)/);
   });
-  it('badge CSS is scoped under .cherry-cat', () => {
+  it('badge CSS is scoped under .cherry-cat and sits above the preview video (z-index)', () => {
     expect(SRC).toContain('.cherry-cat .cherry-src-badge{');
+    expect(SRC).toMatch(/\.cherry-src-badge\{[^}]*z-index:2/);
   });
 });
 
