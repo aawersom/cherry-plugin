@@ -89,6 +89,20 @@ Active sort/category wasn't visible after the menu closed because the suffix wen
 ### L39: per-channel category/sort can't be verified from a datacenter IP — device-critical
 Sweeping category URLs here gave 301s (http→https, fine with -L), 403s (spankbang), and per-site markers differ — unreliable. KVS `?sort_by=` verified working on BOTH category and default pages (xozilla/analdin) → default-popular sort is safe. "Which channel shows empty BBW" needs the user's residential IP + Lampa; defer to device-reported specifics rather than blind URL rewrites that risk breaking working channels. Owner constraint reaffirmed mid-task: don't change card-formation (parsing) or playback except clear bugs — browse-URL/sort changes are borderline, flag them.
 
+## cherry-channel-fixes A–F (2026-06-04) — Mode: medium
+
+### L40: 24-agent workflow with a complex output SCHEMA failed 22/24; free-text succeeded
+A Workflow fan-out (one agent per channel) with a rich StructuredOutput JSON schema had only 2/24 agents emit valid structured output — the rest exhausted their turn doing curl/reads and never satisfied the schema. Re-run WITHOUT schema (plain-markdown final message) → 22/22 succeeded. **Rule:** for many-agent fan-out audits, prefer free-text deliverables (or a TINY schema); reserve big schemas for single agents. Also: salvage failed-agent work by reading the longest assistant text / largest tool-input from each `agent-*.jsonl` transcript.
+
+### L41: pornhub "BBW empty" was a category-id scheme bug — API wants SLUGS, not numeric ids
+pornhub cfg used numeric category ids (`6:BBW`) but the webmasters API requires category SLUGS (`category=bbw`); numbers return `{Category does not exist!}`. The authoritative list is `https://www.pornhub.com/webmasters/categories` (id↔slug). redhead slug = `red-head` (hyphen), teen = `18-25`, no `hairy`. Sort ids `tr/mr` were also invalid (silently most-recent); valid orderings: mostviewed/rating/mostrecent/longest. The webmasters response has no total_pages key → derive pagination from batch fullness.
+
+### L42: systemic total_pages bug → derive from batch fullness, not fragile markup parsing
+~14 channels had fake total_pages (=1 → never loads more; or hardcoded 10 / synthetic p+10 → pages past the end). Shared `_derivePages(itemsLen, page, full)` (full page → page+1, short → last) fixes both modes universally without per-site pager regexes. Genuine single-page routes (no page param) must be left at 1 and commented, not faked (faking → 404 pages).
+
+### L43: parser/data fixes need real markup, not guesses — verify the actual attribute
+preview was a guessed `/preview.mp4` sibling (404s); the real attribute on xvideos AND xnxx is `data-pvv` (confirmed by curl of live listing pages; the audit's `data-videopreview` guess was wrong). Always curl real markup before writing a scraper field; leave a field unset rather than ship a different guess. Datacenter-IP caveat: some sites 403/redirect — note it; category/sort/stream verification ultimately needs the user's residential IP + device.
+
 ## cherry-nav-fix (2026-06-04) — Mode: medium
 
 ### L35: Hand-rolled Lampa.Controller.add with move(dir) in handlers is fundamentally broken — use InteractionCategory/InteractionMain
