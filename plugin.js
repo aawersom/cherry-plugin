@@ -2274,7 +2274,8 @@ SOURCES.push({
     sorts: [
       { id: 'new',   label: 'Свежее'           },
       { id: 'views', label: 'По просмотрам'    }
-    ]
+    ],
+    categories: _cats('Anal-12:Анал,Teen-13:Молодые,Ass-14:Жопа,Blowjob-15:Минет,Latina-16:Латинки,Cumshot-18:Камшот,Milf-19:MILF,Blonde-20:Блондинки,Big_Tits-23:Большие сиськи,Big_Ass-24:Большая жопа,Brunette-25:Брюнетки,Lesbian-26:Лесбиянки,Interracial-27:Межрасовое,Stockings-28:Чулки,Redhead-31:Рыжие,Asian_Woman-32:Азиатки,Big_Cock-34:Большой член,Mature-38:Зрелые,Creampie-40:Кремпай,bbw-51:BBW,Squirting-56:Сквирт,Amateur-65:Любительское,Gangbang-69:Групповуха,Indian-89:Индийское,Arab-159:Арабское')
   },
 
   search: function(query, page, sort) {
@@ -2292,9 +2293,15 @@ SOURCES.push({
     var self = this;
     var p = page || 1;
     var pageIdx = p - 1;
-    // sort='views': use /best/ prefix; sort='new' or default: /new/
-    var base = (sort === 'views') ? 'https://www.xvideos2.com/best/' : 'https://www.xvideos2.com/';
-    var url = pageIdx === 0 ? base : base + pageIdx;
+    var url;
+    if (category) {
+      // /c/{Label-id}/{page} — page is 0-based, omitted on page 1
+      url = _buildCatUrl('https://www.xvideos.com/c/{slug}/{page}', category, p, 0, true);
+    } else {
+      // sort='views': use /best/ prefix; sort='new' or default: /new/
+      var base = (sort === 'views') ? 'https://www.xvideos2.com/best/' : 'https://www.xvideos2.com/';
+      url = pageIdx === 0 ? base : base + pageIdx;
+    }
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html, p);
       return { items: items, total_pages: p + 10 };
@@ -2528,6 +2535,7 @@ SOURCES.push({
 SOURCES.push({
   id: 'spankbang',
   name: 'Spankbang',
+  cfg: { categories: _cats('amateur:Любительское,anal:Анал,anime:Аниме,arab:Арабское,asian:Азиатки,ass:Жопа,babe:Красотки,bbc:BBC,bbw:BBW,bdsm:БДСМ,blonde:Блондинки,blowjob:Минет,bondage:Бондаж,british:Британское,brunette:Брюнетки,busty:Грудастые,casting:Кастинг,compilation:Компиляция,cosplay:Косплей,creampie:Кремпай,cuckold:Куколд,cumshot:Камшот,ebony:Чёрные,feet:Ножки,femdom:Фемдом,fetish:Фетиш,gangbang:Групповуха,hentai:Хентай,indian:Индийское,japanese:Японское,latina:Латинки,massage:Массаж'), sorts: [] },
   host: 'ru.spankbang.com',
 
   _parseCards: function(html) {
@@ -2608,7 +2616,9 @@ SOURCES.push({
   browse: function(category, page) {
     var self = this;
     var p = page || 1;
-    var url = 'https://ru.spankbang.com/new/' + p + '/';
+    var url = category
+      ? _buildCatUrl('https://ru.spankbang.com/s/{slug}/{page}/', category, p, 1, true)
+      : 'https://ru.spankbang.com/new/' + p + '/';
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html);
       var total = self._parseTotalPages(html);
@@ -2798,6 +2808,7 @@ SOURCES.push({
 SOURCES.push({
   id: 'youjizz',
   name: 'YouJizz',
+  cfg: { categories: _cats('amateur:Любительское,anal:Анал,asian:Азиатки,bbc:BBC,big-ass:Большая жопа,big-tits:Большие сиськи,blonde:Блондинки,blowjob:Минет,casting:Кастинг,compilation:Компиляция,creampie:Кремпай,ebony:Чёрные,gangbang:Групповуха,hentai:Хентай,homemade:Домашнее,interracial:Межрасовое,japanese:Японское,latina:Латинки,massage:Массаж,mature:Зрелые,milf:MILF,pov:От первого лица,stepmom:Мачеха,teen:Молодые,threesome:Втроём'), sorts: [] },
   host: 'youjizz.com',
 
   _parseCards: function(html) {
@@ -2866,6 +2877,13 @@ SOURCES.push({
   browse: function(category, page) {
     var self = this;
     var p = page || 1;
+    if (category) {
+      // page number baked into the filename: {slug}-{page}.html (1-based)
+      var curl = _buildCatUrl('https://www.youjizz.com/categories/{slug}-{page}.html', category, p, 1, false);
+      return cherryFetch(curl).then(function(html) {
+        return { items: self._parseCards(html), total_pages: p + 5 };
+      }).catch(function() { return { items: [], total_pages: 0 }; });
+    }
     // youjizz.com/videos/newest-N.html returns 500; use homepage instead
     var url = 'https://www.youjizz.com/';
     return cherryFetch(url).then(function(html) {
@@ -3670,6 +3688,8 @@ SOURCES.push({
     id: 'porndig',
     name: 'Porndig',
     host: 'porndig.com',
+    // Composite slug "{id}/{name}" (porndig channels need both). Browse: /channels/{id}/{name}/page/{n}.
+    cfg: { categories: _cats('33/anal:Анал,34/young:Юные,36/blonde:Блондинки,38/asian:Азиатки,39/milf:MILF,40/lesbian:Лесбиянки,41/mature:Зрелые,42/orgy:Оргия,43/big-boobs:Большие сиськи,45/black:Чёрные,46/bbw:BBW,47/creampie:Кремпай,48/masturbation:Мастурбация,51/hentai:Хентай,52/blowjob:Минет,53/interracial:Межрасовое,54/latina:Латинки,55/bondage-bdsm:БДСМ,57/fetish:Фетиш,58/pov:От первого лица,60/redhead:Рыжие,63/brunette:Брюнетки,64/double-penetration:Двойное,67/small-tits:Маленькие сиськи,74/massage:Массаж,799/cumshot:Камшот,802/big-dick:Большой член,816/stockings:Чулки,82/gangbang:Групповуха,1198/big-ass:Большая жопа'), sorts: [] },
 
     search: function (query, page) {
         var q = encodeURIComponent(query);
@@ -3682,7 +3702,11 @@ SOURCES.push({
     },
 
     browse: function (category, page) {
-        var url = 'https://porndig.com/channels/33/anal/page/' + page;
+        var p = page || 1;
+        // category is a composite "{id}/{name}" channel slug.
+        var url = category
+            ? 'https://porndig.com/channels/' + category + (p > 1 ? '/page/' + p : '')
+            : 'https://porndig.com/channels/33/anal/page/' + p;
         return cherryFetch(url).then(function (html) {
             return { items: _porndigCards(html), total_pages: _porndigPages(html) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
@@ -3760,6 +3784,8 @@ SOURCES.push({
   id: 'tizam',
   name: 'Tizam',
   host: 'tv4.tizam.org',
+  // Category pages render one page in static HTML (pagination is JS-only) → total_pages 1.
+  cfg: { categories: _cats('all_sex:Все,anal_seks_bol_shie_popki:Анал,aziatki:Азиатки,bol_shaya_grud:Большая грудь,dominirovanie:Доминирование,groupvideo:Групповое,incest:Инцест,italyan_porn:Итальянское,klassika:Классика,minet:Минет,nemeckie_pornofil_my:Немецкое,novinki:Новинки,podrostki_18:Подростки 18+,polnometrazhnye:Полнометражные,pyshechki:Пышечки,russkoe_porno:Русское,s_russkim_perevodom:С переводом,svingery:Свингеры,temnokozhie:Темнокожие,zhenskaya_masturbaciya:Мастурбация,zrelye:Зрелые'), sorts: [] },
 
   _parseCards: function(html) {
     var items = [];
@@ -3837,6 +3863,13 @@ SOURCES.push({
   browse: function(category, page) {
     var self = this;
     var p = page || 1;
+    if (category) {
+      // Category page is a single static page (pagination is JS-rendered) → total_pages 1.
+      var curl = 'https://tv4.tizam.org/fil_my_dlya_vzroslyh/' + category + '/';
+      return cherryFetch(curl).then(function(html) {
+        return { items: self._parseCards(html), total_pages: 1 };
+      }).catch(function() { return { items: [], total_pages: 0 }; });
+    }
     // Zero-indexed: page 1 → ?p=0
     var url = 'https://tv4.tizam.org/fil_my_dlya_vzroslyh/s_russkim_perevodom/?p=' + (p - 1);
     return cherryFetch(url).then(function(html) {

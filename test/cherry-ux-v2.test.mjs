@@ -1229,3 +1229,26 @@ describe('Batch 3 categories — plugin.js source assertions (anti-drift)', () =
     expect(SRC).toContain('Бабушки');  // pornone granny
   });
 });
+
+// ── Batch 4: custom categories (xvideos, youjizz, spankbang, porndig, tizam) ──
+describe('Batch 4 categories — plugin.js source assertions (anti-drift)', () => {
+  it('xvideos category template /c/{slug}/{page}', () => {
+    expect(SRC).toContain('https://www.xvideos.com/c/{slug}/{page}');
+  });
+  it('youjizz page-in-filename template', () => {
+    expect(SRC).toContain('https://www.youjizz.com/categories/{slug}-{page}.html');
+  });
+  it('spankbang /s/{slug}/{page}/ template', () => {
+    expect(SRC).toContain('https://ru.spankbang.com/s/{slug}/{page}/');
+  });
+  it('porndig composite-slug channel browse', () => {
+    expect(SRC).toContain("'https://porndig.com/channels/' + category");
+  });
+  it('tizam category browse (single static page)', () => {
+    expect(SRC).toContain("'https://tv4.tizam.org/fil_my_dlya_vzroslyh/' + category");
+  });
+  it('shipped category labels for batch 4', () => {
+    expect(SRC).toContain('Косплей');  // spankbang cosplay
+    expect(SRC).toContain('С переводом'); // tizam
+  });
+});
