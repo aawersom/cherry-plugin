@@ -1195,6 +1195,97 @@ describe('Phase 3 A3(a): eporner SEARCH uses relevance order (no forced most-pop
   });
 });
 
+// ---------------------------------------------------------------------------
+// Step 2 — personalized sorts for query-param / API sort channels
+// ---------------------------------------------------------------------------
+describe('Step 2: query-param / API sorts (popular first, Russian labels)', () => {
+  // Pull the `sorts: _cats('...')` value for a given source id.
+  function sortsFor(id) {
+    var at = SRC.indexOf("id: '" + id + "'");
+    expect(at).toBeGreaterThan(-1);
+    var body = SRC.slice(at, at + 4000);
+    var m = body.match(/sorts: _cats\('([^']*)'\)/);
+    expect(m).toBeTruthy();
+    return m[1].split(',').map(function (p) {
+      var i = p.indexOf(':');
+      return { id: p.slice(0, i), label: p.slice(i + 1) };
+    });
+  }
+
+  it('_openSort no longer unshifts cherry_sort_default', () => {
+    var at = SRC.indexOf('function _openSort()');
+    var body = SRC.slice(at, at + 500);
+    expect(body).not.toContain('cherry_sort_default');
+    expect(body).not.toMatch(/items\.unshift/);
+  });
+
+  // KVS-engine + custom KVS adapters: sort_by values, popular first.
+  ['xozilla', 'analdin', 'hellporno', 'pornve', 'familyporn', 'perfektdamen'].forEach(function (id) {
+    it(id + ': popular first, labeled «По популярности», Russian labels', () => {
+      var s = sortsFor(id);
+      expect(s[0].id).toBe('video_viewed');
+      expect(s[0].label).toBe('По популярности');
+      // every label is Russian (Cyrillic), no leftover English/Популярное
+      s.forEach(function (x) {
+        expect(x.label).toMatch(/[А-Яа-я]/);
+        expect(x.label).not.toBe('Популярное');
+      });
+    });
+  });
+
+  it('hellporno drops invalid most_recent/latest values', () => {
+    var ids = sortsFor('hellporno').map(function (x) { return x.id; });
+    expect(ids).not.toContain('most_recent');
+    expect(ids).not.toContain('latest');
+    expect(ids).toEqual(['video_viewed', 'post_date', 'rating', 'duration', 'most_commented']);
+  });
+
+  it('pornobolt: mv (popular) first, mc по комментариям; only valid values', () => {
+    var s = sortsFor('pornobolt');
+    expect(s.map(function (x) { return x.id; })).toEqual(['mv', 'mc']);
+    expect(s[0].label).toBe('По популярности');
+    expect(s[1].label).toBe('По комментариям');
+  });
+
+  it('pornhub: 4 valid orderings, popular first, Russian labels', () => {
+    var s = sortsFor('pornhub');
+    expect(s.map(function (x) { return x.id; }))
+      .toEqual(['mostviewed', 'rating', 'mostrecent', 'longest']);
+    expect(s[0].label).toBe('По популярности');
+  });
+
+  it('eporner: popular label relabeled «По популярности», order ids preserved', () => {
+    var s = sortsFor('eporner');
+    expect(s.map(function (x) { return x.id; }))
+      .toEqual(['most-popular', 'latest', 'top-rated', 'longest', 'top-weekly', 'top-monthly']);
+    expect(s[0].label).toBe('По популярности');
+  });
+
+  it('lenporno: 2 (popular) first, 3 рейтинг; browse appends ?sort= and defaults popular', () => {
+    var s = sortsFor('lenporno');
+    expect(s.map(function (x) { return x.id; })).toEqual(['2', '3']);
+    expect(s[0].label).toBe('По популярности');
+    var at = SRC.indexOf("id: 'lenporno'");
+    var browseAt = SRC.indexOf('browse: function (category, page, sort)', at);
+    expect(browseAt).toBeGreaterThan(-1);
+    var browseBody = SRC.slice(browseAt, browseAt + 900);
+    expect(browseBody).toMatch(/var s = sort \|\| \(this\.cfg\.sorts\[0\]/);
+    expect(browseBody).toMatch(/\+ 'sort=' \+ s/);
+  });
+
+  // Custom KVS adapters must actually append sort_by to the category URL.
+  ['pornve', 'familyporn', 'perfektdamen'].forEach(function (id) {
+    it(id + ' browse appends ?sort_by= and defaults to popular', () => {
+      var at = SRC.indexOf("id: '" + id + "'");
+      var browseAt = SRC.indexOf('browse: function (category, page, sort)', at);
+      expect(browseAt).toBeGreaterThan(-1);
+      var browseBody = SRC.slice(browseAt, browseAt + 1200);
+      expect(browseBody).toMatch(/var s = sort \|\| \(this\.cfg\.sorts\[0\]/);
+      expect(browseBody).toMatch(/\+ 'sort_by=' \+ s/);
+    });
+  });
+});
+
 describe('Phase 3 A3(b): all_sources per-source title-match filter before slice', () => {
   it('filter uses indexOf(query) and runs before slice(0,10)', () => {
     var at = SRC.indexOf('All-sources search');
