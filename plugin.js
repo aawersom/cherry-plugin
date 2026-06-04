@@ -660,6 +660,12 @@
         currentPage = 1;
         _this.build({ title: screenTitle, results: items, total_pages: total });
         _this.activity.loader(false);
+        // 16:9 landscape cards, 5 per row (CSS scoped via .cherry-cat + Lampa cols--5)
+        try {
+          var root = _this.render();
+          root.addClass('cherry-cat');
+          root.find('.category-full').addClass('mapping--grid cols--5');
+        } catch (e) {}
 
         if (!items.length && object.is_favorites) {
           Lampa.Noty.show(Lampa.Lang.translate('cherry_fav_empty_hint'), { time: 10000 });
@@ -818,6 +824,12 @@
 
       this.build({ title: 'Cherry', results: results, total_pages: 1 });
       this.activity.loader(false);
+      // Match the grid: 16:9 cards, 5 per row.
+      try {
+        var root = this.render();
+        root.addClass('cherry-cat');
+        root.find('.category-full').addClass('mapping--grid cols--5');
+      } catch (e) {}
     };
 
     comp.cardRender = function (object, element, card) {
@@ -950,6 +962,19 @@
   // ============================================================
   function addStyles() {
     var rules = [
+      /* ---- 16:9 landscape cards for Cherry (override Lampa's poster card) ---- */
+      /* Scoped to .cherry-cat so the rest of Lampa keeps its poster layout.    */
+      '.cherry-cat .card__view {',
+      '  padding-bottom: 56.25% !important;',  /* 9/16 → 16:9 box */
+      '  height: 0 !important;',
+      '  position: relative;',
+      '}',
+      '.cherry-cat .card__img {',
+      '  position: absolute; top: 0; left: 0;',
+      '  width: 100%; height: 100%;',
+      '  object-fit: cover;',
+      '}',
+
       /* ---- Main screen ----------------------------------------- */
       '.cherry-main {',
       '  padding: 2.4em 3em;',
