@@ -564,6 +564,19 @@
       return id;
     }
 
+    // P3.1: surface the active sort/category in the grid header. Filters are
+    // otherwise invisible once the action menu closes. Resolves labels via the
+    // source cfg so the header reads e.g. "Pornhub  ·  MILF  ·  Most recent".
+    function _titleWithFilters() {
+      var parts = [screenTitle];
+      var cfg = source && source.cfg ? source.cfg : null;
+      if (cfg) {
+        if (currentCategory && cfg.categories) parts.push(_findLabel(cfg.categories, currentCategory));
+        if (currentSort     && cfg.sorts)      parts.push(_findLabel(cfg.sorts, currentSort));
+      }
+      return parts.join('  ·  ');
+    }
+
     // Reload the grid from page 1 with the updated sort/category. The base
     // class owns the rendered grid, so re-run create()'s build path.
     function _reload() {
@@ -658,7 +671,14 @@
 
       _gridLoad(object, 1, function (items, total) {
         currentPage = 1;
-        _this.build({ title: screenTitle, results: items, total_pages: total });
+        // P3.2: empty favorites shows a PERSISTENT hint (not a transient toast).
+        if (!items.length && object.is_favorites) {
+          _this.activity.loader(false);
+          _this.empty(Lampa.Lang.translate('cherry_fav_empty_hint'));
+          return;
+        }
+        // P3.1: header reflects the active sort/category filter.
+        _this.build({ title: _titleWithFilters(), results: items, total_pages: total });
         _this.activity.loader(false);
         // 16:9 landscape cards, 5 per row (CSS scoped via .cherry-cat + Lampa cols--5)
         try {
@@ -666,27 +686,50 @@
           root.addClass('cherry-cat');
           root.find('.category-full').addClass('mapping--grid cols--5');
         } catch (e) {}
-
-        if (!items.length && object.is_favorites) {
-          Lampa.Noty.show(Lampa.Lang.translate('cherry_fav_empty_hint'), { time: 10000 });
-        }
       }, function () {
+        // P3.2: a load failure is DISTINCT from "no results".
         _this.activity.loader(false);
-        _this.empty();
+        _this.empty(Lampa.Lang.translate('cherry_load_error'));
       });
     };
 
     comp.nextPageReuest = function (object, resolve, reject) {
       // Single-page modes never paginate.
       if (object.is_favorites || object._related_items || (object.all_sources && object.query)) {
-        resolve({ title: screenTitle, results: [], total_pages: 1 });
+        resolve({ title: _titleWithFilters(), results: [], total_pages: 1 });
         return;
       }
       var nextPage = currentPage + 1;
       _gridLoad(object, nextPage, function (items, total) {
         currentPage = nextPage;
-        resolve({ title: screenTitle, results: items, total_pages: total });
+        resolve({ title: _titleWithFilters(), results: items, total_pages: total });
       }, reject);
+    };
+
+    // P3.2: custom empty() that honours a message arg. Mirrors sisi_full.js's
+    // proven override (Lampa.Empty descr). The base InteractionCategory.empty
+    // may ignore a message on this build, so we own it to guarantee a distinct
+    // error vs no-results message and a persistent favorites hint.
+    comp.empty = function (msg) {
+      var _this = this;
+      var descr = typeof msg === 'string'
+        ? msg
+        : Lampa.Lang.translate('cherry_no_results');
+      try {
+        var box = new Lampa.Empty({ descr: descr });
+        Lampa.Activity.all().forEach(function (active) {
+          if (_this.activity === active.activity) {
+            var body = active.activity.render().find('.activity__body > div')[0];
+            if (body) body.appendChild(box.render(true));
+          }
+        });
+        this.start = box.start.bind(box);
+        this.activity.loader(false);
+        this.activity.toggle();
+      } catch (e) {
+        // Last-resort fallback if Lampa.Empty is unavailable on this build.
+        Lampa.Noty.show(descr, { time: 8000 });
+      }
     };
 
     comp.cardRender = function (object, element, card) {
@@ -696,6 +739,19 @@
         if (s) playVideo(element, s);
         else Lampa.Noty.show(Lampa.Lang.translate('cherry_error'), { style: 'warn' });
       };
+
+      // P3.3: in all-sources search the grid blends 24 sites — tag each card
+      // with its origin. Visual overlay using existing element.source; no data
+      // shape change. Skipped in single-source modes (origin is obvious there).
+      if (object.all_sources && element.source) {
+        try {
+          var os = sourceById(element.source);
+          if (os) {
+            var $v = card.render().find('.card__view');
+            if ($v.length) $v.append('<div class="cherry-src-badge">' + os.name + '</div>');
+          }
+        } catch (e) {}
+      }
 
       card.onMenu = function (target, card_data) {
         var isFav   = Fav.has(element);
@@ -783,6 +839,10 @@
       openActionsMenu();
     };
 
+    // P3.4: exposed so the persistent header filter button (addFilterButton)
+    // can open the same Поиск → Сортировка → Категории menu as the right edge.
+    comp.openActionsMenu = openActionsMenu;
+
     // Stop any playing preview when the component pauses / stops / dies.
     var _baseStop  = comp.stop  ? comp.stop.bind(comp)  : null;
     var _basePause = comp.pause ? comp.pause.bind(comp) : null;
@@ -796,6 +856,13 @@
   // CHERRY MAIN COMPONENT
   // Source list + global search bar + favorites button.
   // ============================================================
+
+  // Stable brand hue from a string seed → consistent per-source tile colour.
+  function _tileColor(seed) {
+    var h = 0, str = String(seed || '');
+    for (var i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 360;
+    return 'hsl(' + h + ',55%,42%)';
+  }
 
   /**
    * @constructor
@@ -814,12 +881,19 @@
 
       var results = [];
       // 1) Search entry — opens keyboard, then all-sources search grid.
-      results.push({ title: Lampa.Lang.translate('cherry_search'), img: '', _kind: 'search' });
+      results.push({ title: Lampa.Lang.translate('cherry_search'), img: '', _kind: 'search', _initial: '⌕', _action: true });
       // 2) Favorites entry.
-      results.push({ title: Lampa.Lang.translate('cherry_favorites'), img: '', _kind: 'favorites' });
-      // 3) One card per registered source.
+      results.push({ title: Lampa.Lang.translate('cherry_favorites'), img: '', _kind: 'favorites', _initial: '♥', _action: true });
+      // 3) One card per registered source — stable brand colour + first letter.
       SOURCES.forEach(function (src) {
-        results.push({ title: src.name, img: '', _kind: 'source', _source_id: src.id });
+        results.push({
+          title:      src.name,
+          img:        '',
+          _kind:      'source',
+          _source_id: src.id,
+          _initial:   (src.name || '?').charAt(0).toUpperCase(),
+          _color:     _tileColor(src.id)
+        });
       });
 
       this.build({ title: 'Cherry', results: results, total_pages: 1 });
@@ -871,88 +945,21 @@
           });
         }
       };
+
+      // Letter tile: the picker has no thumbnails, so paint a coloured initial
+      // into .card__view. Search/Favorites get the brand action tint; sources
+      // get a stable per-source hue. Visual only — routing above is untouched.
+      try {
+        var $view = card.render().find('.card__view');
+        if ($view.length) {
+          var cls = 'cherry-tile' + (element._action ? ' cherry-tile--action' : '');
+          var bg  = element._action ? '' : ' style="background:' + (element._color || '#444') + '"';
+          $view.append('<div class="' + cls + '"' + bg + '><span>' + (element._initial || '?') + '</span></div>');
+        }
+      } catch (e) {}
     };
 
     return comp;
-  }
-
-  // ============================================================
-  // TEMPLATES
-  // ============================================================
-  function addTemplates() {
-
-    Lampa.Template.add('cherry_main', [
-      '<div class="cherry-main layer--wheight">',
-        '<div class="cherry-main__head">',
-          '<div class="cherry-main__logo">',
-            '<svg width="36" height="36" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">',
-              '<path d="M12 21.593c-5.63-5.539-11-10.297-11-14.402 0-3.791 3.068-5.191',
-              ' 5.281-5.191 1.312 0 4.151.501 5.719 4.457 1.59-3.968 4.464-4.447',
-              ' 5.726-4.447 2.54 0 5.274 1.621 5.274 5.181 0 4.069-5.136',
-              ' 8.625-11 14.402z"/>',
-            '</svg>',
-          '</div>',
-          '<div class="cherry-main__title">Cherry</div>',
-          '<div class="cherry-main__search">',
-            '<input class="cherry-main__search-input selector" type="text" placeholder="#{cherry_search}&#8230;" autocomplete="off" />',
-            '<div class="cherry-main__search-btn selector">#{cherry_search}</div>',
-          '</div>',
-        '</div>',
-        '<div class="cherry-main__sources-label">#{cherry_sources}</div>',
-        '<div class="cherry-main__sources"></div>',
-      '</div>'
-    ].join(''));
-
-    Lampa.Template.add('cherry_source_card', [
-      '<div class="cherry-source-card selector">',
-        '<div class="cherry-source-card__initial">{initial}</div>',
-        '<div class="cherry-source-card__name">{name}</div>',
-      '</div>'
-    ].join(''));
-
-    Lampa.Template.add('cherry_grid', [
-      '<div class="cherry-grid layer--wheight">',
-        '<div class="cherry-grid__head">',
-          '<div class="cherry-grid__title">{title}</div>',
-        '</div>',
-        '<div class="cherry-grid__body"></div>',
-        '<div class="cherry-grid__loading">',
-          '<div class="cherry-grid__loading-spinner"></div>',
-          '<span>#{cherry_loading}</span>',
-        '</div>',
-        '<div class="cherry-grid__empty" style="display:none">',
-          '<div class="cherry-grid__empty-icon">&#9785;</div>',
-          '<div class="cherry-grid__empty-generic">#{cherry_no_results}</div>',
-          '<div class="cherry-grid__empty-fav-hint" style="display:none">#{cherry_fav_empty_hint}</div>',
-        '</div>',
-      '</div>'
-    ].join(''));
-
-    Lampa.Template.add('cherry_card', [
-      '<div class="cherry-card selector">',
-        '<div class="cherry-card__thumb">',
-          '<img class="cherry-card__img" src="" alt="" loading="lazy" />',
-          '<video class="cherry-card__preview" muted playsinline loop></video>',
-          '<div class="cherry-card__duration">{duration}</div>',
-          '<div class="cherry-card__fav" style="display:none" aria-label="Favorite">&#9829;</div>',
-          '<div class="cherry-card__model selector" style="display:none"></div>',
-        '</div>',
-        '<div class="cherry-card__info">',
-          '<div class="cherry-card__title">{title}</div>',
-          '<div class="cherry-card__views">{views}</div>',
-        '</div>',
-      '</div>'
-    ].join(''));
-
-    Lampa.Template.add('cherry_group_label', '<div class="cherry-group-label">{name}</div>');
-
-    Lampa.Template.add('cherry_source_row', [
-      '<div class="cherry-source-row">',
-        '<div class="cherry-source-row__label selector">{name}</div>',
-        '<div class="cherry-source-row__cards"></div>',
-        '<div class="cherry-source-row__loading">#{cherry_loading}</div>',
-      '</div>'
-    ].join(''));
   }
 
   // ============================================================
@@ -975,398 +982,24 @@
       '  object-fit: cover;',
       '}',
 
-      /* ---- Main screen ----------------------------------------- */
-      '.cherry-main {',
-      '  padding: 2.4em 3em;',
-      '  display: flex;',
-      '  flex-direction: column;',
-      '  gap: 2em;',
-      '  min-height: 100%;',
-      '  box-sizing: border-box;',
-      '}',
+      /* ---- P2.1 Brand focus ring (box-shadow, no layout shift) -- */
+      '.cherry-cat .card{transform-origin:center;}',
+      '.cherry-cat .card.focus .card__view{box-shadow:0 0 0 .16em #e75480,0 .5em 2em rgba(231,84,128,.45);transform:scale(1.04);transition:transform .12s ease, box-shadow .12s ease;}',
 
-      '.cherry-main__head {',
-      '  display: flex;',
-      '  align-items: center;',
-      '  gap: 1.5em;',
-      '}',
+      /* ---- P2.2 Title legibility (2-line clamp, full white) ----- */
+      '.cherry-cat .card__title{color:#fff;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;white-space:normal;overflow:hidden;max-height:2.6em;}',
 
-      '.cherry-main__logo {',
-      '  color: #e75480;',
-      '  flex-shrink: 0;',
-      '  line-height: 0;',
-      '}',
+      /* ---- P2.3 Home letter tiles ------------------------------ */
+      '.cherry-cat .cherry-tile{position:absolute;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;border-radius:.6em;}',
+      '.cherry-cat .cherry-tile span{font-size:2.6em;font-weight:800;color:#fff;text-shadow:0 .05em .2em rgba(0,0,0,.4);}',
+      '.cherry-cat .cherry-tile--action{background:#e75480 !important;}',
 
-      '.cherry-main__title {',
-      '  font-size: 2.2em;',
-      '  font-weight: 700;',
-      '  color: #e75480;',
-      '  letter-spacing: .04em;',
-      '  flex-shrink: 0;',
-      '}',
+      /* ---- P3.3 Source attribution badge (all-sources search) -- */
+      '.cherry-cat .cherry-src-badge{position:absolute;top:.4em;left:.5em;background:rgba(0,0,0,.78);color:#fff;font-size:.72em;font-weight:600;padding:.12em .5em;border-radius:.25em;max-width:80%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
 
-      '.cherry-main__search {',
-      '  display: flex;',
-      '  gap: .6em;',
-      '  flex: 1;',
-      '  align-items: center;',
-      '}',
-
-      '.cherry-main__search-input {',
-      '  flex: 1;',
-      '  padding: .5em 1em;',
-      '  border-radius: .5em;',
-      '  border: 2px solid rgba(255,255,255,.15);',
-      '  background: rgba(255,255,255,.07);',
-      '  color: #fff;',
-      '  font-size: 1.1em;',
-      '  outline: none;',
-      '  transition: border-color .15s;',
-      '}',
-
-      '.cherry-main__search-input.focus,',
-      '.cherry-main__search-input:focus {',
-      '  border-color: #e75480;',
-      '}',
-
-      '.cherry-main__search-btn {',
-      '  padding: .5em 1.6em;',
-      '  border-radius: .5em;',
-      '  background: #e75480;',
-      '  color: #fff;',
-      '  font-weight: 700;',
-      '  font-size: 1.05em;',
-      '  cursor: pointer;',
-      '  transition: background .15s, transform .1s;',
-      '  white-space: nowrap;',
-      '}',
-
-      '.cherry-main__search-btn.focus {',
-      '  background: #ff6b9d;',
-      '  transform: scale(1.04);',
-      '}',
-
-      '.cherry-main__sources-label {',
-      '  font-size: .9em;',
-      '  text-transform: uppercase;',
-      '  letter-spacing: .12em;',
-      '  color: rgba(255,255,255,.4);',
-      '  padding-bottom: .3em;',
-      '  border-bottom: 1px solid rgba(255,255,255,.08);',
-      '}',
-
-      '.cherry-main__sources {',
-      '  display: flex;',
-      '  flex-wrap: wrap;',
-      '  gap: 1.2em;',
-      '}',
-
-      /* ---- Source tile ----------------------------------------- */
-      '.cherry-source-card {',
-      '  width: 9em;',
-      '  min-height: 6em;',
-      '  display: flex;',
-      '  flex-direction: column;',
-      '  align-items: center;',
-      '  justify-content: center;',
-      '  border-radius: .7em;',
-      '  background: rgba(255,255,255,.06);',
-      '  border: 2px solid transparent;',
-      '  padding: 1em .8em;',
-      '  cursor: pointer;',
-      '  transition: border-color .15s, background .15s, transform .1s;',
-      '}',
-
-      '.cherry-source-card.focus {',
-      '  border-color: #e75480;',
-      '  background: rgba(231,84,128,.12);',
-      '  transform: scale(1.05);',
-      '}',
-
-      '.cherry-source-card__initial {',
-      '  font-size: 2em;',
-      '  font-weight: 700;',
-      '  color: #e75480;',
-      '  line-height: 1;',
-      '}',
-
-      '.cherry-source-card__name {',
-      '  font-size: .8em;',
-      '  text-align: center;',
-      '  color: rgba(255,255,255,.7);',
-      '  margin-top: .4em;',
-      '  word-break: break-word;',
-      '}',
-
-      '.cherry-source--fav .cherry-source-card__initial {',
-      '  color: #ff6b9d;',
-      '}',
-
-      /* ---- Grid screen ----------------------------------------- */
-      '.cherry-grid {',
-      '  padding: 1.6em 2.5em;',
-      '  display: flex;',
-      '  flex-direction: column;',
-      '  gap: 1.2em;',
-      '  min-height: 100%;',
-      '  box-sizing: border-box;',
-      '}',
-
-      '.cherry-grid__head {',
-      '  flex-shrink: 0;',
-      '}',
-
-      '.cherry-grid__title {',
-      '  font-size: 1.6em;',
-      '  font-weight: 700;',
-      '  color: #fff;',
-      '}',
-
-      '.cherry-grid__body {',
-      '  flex: 1;',
-      '}',
-
-      /* Loading spinner */
-      '.cherry-grid__loading {',
-      '  display: none;',        /* toggled by JS */
-      '  align-items: center;',
-      '  justify-content: center;',
-      '  gap: .8em;',
-      '  padding: 3em;',
-      '  color: rgba(255,255,255,.5);',
-      '  font-size: 1em;',
-      '}',
-
-      '.cherry-grid__loading[style*="block"] {',
-      '  display: flex !important;',
-      '}',
-
-      '@keyframes cherry-spin {',
-      '  to { transform: rotate(360deg); }',
-      '}',
-
-      '.cherry-grid__loading-spinner {',
-      '  width: 2em;',
-      '  height: 2em;',
-      '  border: .22em solid rgba(255,255,255,.15);',
-      '  border-top-color: #e75480;',
-      '  border-radius: 50%;',
-      '  animation: cherry-spin .8s linear infinite;',
-      '  flex-shrink: 0;',
-      '}',
-
-      /* Empty state */
-      '.cherry-grid__empty {',
-      '  flex: 1;',
-      '  display: flex;',
-      '  flex-direction: column;',
-      '  align-items: center;',
-      '  justify-content: center;',
-      '  gap: .6em;',
-      '  color: rgba(255,255,255,.35);',
-      '  font-size: 1.1em;',
-      '}',
-
-      '.cherry-grid__empty-icon {',
-      '  font-size: 3em;',
-      '  line-height: 1;',
-      '}',
-
-      '.cherry-grid__empty-fav-hint {',
-      '  font-size: .9em;',
-      '  opacity: .75;',
-      '  text-align: center;',
-      '  max-width: 24em;',
-      '  line-height: 1.5;',
-      '  margin: 0 auto;',
-      '}',
-
-      /* ---- Video card ------------------------------------------ */
-      /*
-       * Target 4 cards per row on 1920px with sidebar ~260px ≈ 1660px wide.
-       * (1660 - 4*16gap) / 4 ≈ 403px. At 20px base that is ~20.15em.
-       * We use 19.5em so cards breathe a little.
-       */
-      /* Grid wrapper — fills scroll body, auto-flow responsive columns */
-      '.cherry-cards-wrap {',
-      '  display: grid;',
-      '  grid-template-columns: repeat(auto-fill, minmax(13em, 1fr));',
-      '  gap: .9em;',
-      '  padding: .4em 0;',
-      '  width: 100%;',
-      '  box-sizing: border-box;',
-      '}',
-
-      '.cherry-card {',
-      '  width: 100%;',
-      '  border-radius: .6em;',
-      '  overflow: hidden;',
-      '  background: rgba(255,255,255,.05);',
-      '  border: 2px solid transparent;',
-      '  cursor: pointer;',
-      '  transition: border-color .15s, transform .12s, box-shadow .15s;',
-      '}',
-
-      '.cherry-card.focus {',
-      '  border-color: #e75480;',
-      '  transform: scale(1.04);',
-      '  box-shadow: 0 .4em 2em rgba(231,84,128,.35);',
-      '  z-index: 2;',
-      '  position: relative;',
-      '}',
-
-      /* Thumbnail area — 16:9 */
-      '.cherry-card__thumb {',
-      '  position: relative;',
-      '  width: 100%;',
-      '  padding-top: 56.25%;',  /* 9/16 */
-      '  background: #111;',
-      '  overflow: hidden;',
-      '}',
-
-      '.cherry-card__img {',
-      '  position: absolute;',
-      '  inset: 0;',
-      '  width: 100%;',
-      '  height: 100%;',
-      '  object-fit: cover;',
-      '  display: block;',
-      '}',
-
-      /* Duration badge */
-      '.cherry-card__duration {',
-      '  position: absolute;',
-      '  bottom: .35em;',
-      '  right: .45em;',
-      '  background: rgba(0,0,0,.75);',
-      '  color: #fff;',
-      '  font-size: .72em;',
-      '  padding: .12em .4em;',
-      '  border-radius: .25em;',
-      '  font-weight: 600;',
-      '  pointer-events: none;',
-      '}',
-
-      /* Favourite heart badge */
-      '.cherry-card__fav {',
-      '  position: absolute;',
-      '  top: .35em;',
-      '  right: .45em;',
-      '  color: #e75480;',
-      '  font-size: 1.2em;',
-      '  text-shadow: 0 1px 4px rgba(0,0,0,.6);',
-      '  pointer-events: none;',
-      '}',
-
-      /* Info row */
-      '.cherry-card__info {',
-      '  padding: .55em .7em .65em;',
-      '}',
-
-      '.cherry-card__title {',
-      '  font-size: .88em;',
-      '  color: rgba(255,255,255,.92);',
-      '  overflow: hidden;',
-      '  display: -webkit-box;',
-      '  -webkit-line-clamp: 2;',
-      '  -webkit-box-orient: vertical;',
-      '  line-height: 1.35;',
-      '  word-break: break-word;',
-      '}',
-
-      '.cherry-card__views {',
-      '  font-size: .75em;',
-      '  color: rgba(255,255,255,.4);',
-      '  margin-top: .25em;',
-      '}',
-
-      /* REQ-2: Preview video overlay */
-      '.cherry-card__preview {',
-      '  position: absolute;',
-      '  top: 0; left: 0;',
-      '  width: 100%; height: 100%;',
-      '  object-fit: cover;',
-      '  display: none;',
-      '}',
-
-      /* REQ-3: Model/performer badge */
-      '.cherry-card__model {',
-      '  display: none;',
-      '  position: absolute;',
-      '  bottom: .35em;',
-      '  left: .45em;',
-      '  background: rgba(0,0,0,.75);',
-      '  color: #fff;',
-      '  font-size: .68em;',
-      '  padding: .1em .35em;',
-      '  border-radius: .25em;',
-      '  max-width: 8em;',
-      '  overflow: hidden;',
-      '  text-overflow: ellipsis;',
-      '  white-space: nowrap;',
-      '  cursor: pointer;',
-      '}',
-      '.cherry-card__model.focus {',
-      '  outline: 1px solid #e75480;',
-      '}',
-
-      '.cherry-group-label {',
-      '  grid-column: 1 / -1;',
-      '  font-size: .8em;',
-      '  text-transform: uppercase;',
-      '  letter-spacing: .1em;',
-      '  color: rgba(255,255,255,.4);',
-      '  padding: .8em 0 .3em;',
-      '  border-bottom: 1px solid rgba(255,255,255,.08);',
-      '  margin-bottom: .3em;',
-      '}',
-      /* ---- Row mode (UX-A) ------------------------------------- */
-      '.cherry-main__sources--rows {',
-      '  flex-direction: column;',
-      '  gap: 2em;',
-      '}',
-      '.cherry-source-row {',
-      '  display: flex;',
-      '  flex-direction: column;',
-      '  gap: .6em;',
-      '}',
-      '.cherry-source-row__label {',
-      '  font-size: .85em;',
-      '  font-weight: 600;',
-      '  text-transform: uppercase;',
-      '  letter-spacing: .1em;',
-      '  color: rgba(255,255,255,.5);',
-      '  cursor: pointer;',
-      '  border: 1px solid transparent;',
-      '  border-radius: .3em;',
-      '  padding: .2em .4em;',
-      '  align-self: flex-start;',
-      '}',
-      '.cherry-source-row__label.focus {',
-      '  border-color: #e75480;',
-      '  color: #fff;',
-      '}',
-      // overflow-x:scroll (not hidden) makes the strip scrollable so D-pad focus on
-      // out-of-view cards causes the browser to auto-scroll the element into view.
-      '.cherry-source-row__cards {',
-      '  display: flex;',
-      '  gap: .7em;',
-      '  overflow-x: scroll;',
-      '  scrollbar-width: none;',
-      '  -ms-overflow-style: none;',
-      '  padding: .3em 0;',
-      '}',
-      '.cherry-source-row__cards::-webkit-scrollbar { display: none; }',
-      '.cherry-source-row__cards .cherry-card {',
-      '  width: 12em;',
-      '  flex-shrink: 0;',
-      '}',
-      '.cherry-source-row__loading {',
-      '  display: none;',
-      '  font-size: .8em;',
-      '  color: rgba(255,255,255,.4);',
-      '  padding: .4em 0;',
-      '}',
+      /* ---- P3.4 Cherry header filter button -------------------- */
+      '.cherry-filter-btn{color:#fff;}',
+      '.cherry-filter-btn.focus{color:#e75480;}',
     ];
 
     var style = document.createElement('style');
@@ -1388,6 +1021,7 @@
       cherry_fav_empty_hint: { ru: 'Удерживайте ОК на видео чтобы добавить в избранное', en: 'Hold OK on a video to add it to favorites' },
       cherry_loading:     { ru: 'Загрузка…',           en: 'Loading…'           },
       cherry_error:       { ru: 'Ошибка загрузки',     en: 'Load error'         },
+      cherry_load_error:  { ru: 'Не удалось загрузить. Проверьте соединение.', en: 'Failed to load. Check your connection.' },
       cherry_add_fav:        { ru: 'Добавлено в избранное',  en: 'Added to favorites'    },
       cherry_rem_fav:        { ru: 'Убрано из избранного',   en: 'Removed from favorites' },
       cherry_add_fav_action: { ru: 'Добавить в избранное',   en: 'Add to favorites'       },
@@ -1408,6 +1042,72 @@
   }
 
   // ============================================================
+  // P3.4 — Persistent header filter button (Cherry grids only)
+  // Mirrors sisi_full.js addFilter: a focusable header action that opens the
+  // same Поиск → Сортировка → Категории menu as the right edge, so filters are
+  // discoverable without hunting for the right-edge gesture. Shown only while a
+  // cherry_grid activity is on top; hidden everywhere else in Lampa.
+  //
+  // NOTE (global search): Lampa's global-search registration API
+  // (Lampa.Search component) is NOT exercised by the reference (sisi defines a
+  // `Search` object but never registers it — addSourceSearch() is commented
+  // out). Registering Cherry into the system-wide search bar is therefore
+  // unverified and risky; left as a TODO rather than guessed. The header button
+  // below is the safe, clear win that satisfies the discoverability goal.
+  // TODO(global-search): register Cherry into Lampa.Search once the API is
+  // confirmed on a live runtime (open the all-sources search grid for the query).
+  // ============================================================
+  function addFilterButton() {
+    if (window.cherry_filter_btn_ready) return;
+    if (!$('.head .open--search').length) return; // header not present
+    window.cherry_filter_btn_ready = true;
+
+    var activi;
+    var timer;
+    var button = $(
+      '<div class="head__action selector cherry-filter-btn">' +
+        '<svg height="36" viewBox="0 0 38 36" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+          '<rect x="1.5" y="1.5" width="35" height="33" rx="1.5" stroke="currentColor" stroke-width="3"></rect>' +
+          '<rect x="7" y="8" width="24" height="3" rx="1.5" fill="currentColor"></rect>' +
+          '<rect x="7" y="16" width="24" height="3" rx="1.5" fill="currentColor"></rect>' +
+          '<rect x="7" y="25" width="24" height="3" rx="1.5" fill="currentColor"></rect>' +
+          '<circle cx="13.5" cy="17.5" r="3.5" fill="currentColor"></circle>' +
+          '<circle cx="23.5" cy="26.5" r="3.5" fill="currentColor"></circle>' +
+          '<circle cx="21.5" cy="9.5" r="3.5" fill="currentColor"></circle>' +
+        '</svg>' +
+      '</div>'
+    );
+
+    button.hide().on('hover:enter', function () {
+      // Resolve the live component instance (Manifest digital quirk: in newer
+      // builds activity.component is the instance; in older it is a factory).
+      if (!activi) return;
+      var inst = (Lampa.Manifest && Lampa.Manifest.app_digital >= 300)
+        ? activi.activity.component
+        : (typeof activi.activity.component === 'function' ? activi.activity.component() : activi.activity.component);
+      if (inst && inst.openActionsMenu) inst.openActionsMenu();
+    });
+
+    $('.head .open--search').after(button);
+
+    Lampa.Listener.follow('activity', function (e) {
+      if (e.type === 'start') activi = e.object;
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        if (activi && activi.component !== 'cherry_grid') {
+          button.hide();
+          activi = false;
+        }
+      }, 1000);
+
+      if (e.type === 'start' && e.component === 'cherry_grid') {
+        button.show();
+        activi = e.object;
+      }
+    });
+  }
+
+  // ============================================================
   // INIT
   // ============================================================
   function startPlugin() {
@@ -1420,7 +1120,6 @@
     }
 
     addLang();
-    addTemplates();
     addStyles();
 
     // UX-C: register preview toggle in Lampa settings. Long-press on the main
@@ -1444,6 +1143,9 @@
 
     Lampa.Component.add('cherry_main', CherryMain);
     Lampa.Component.add('cherry_grid', CherryGrid);
+
+    // P3.4: persistent header filter button for cherry_grid screens.
+    try { addFilterButton(); } catch (e) { console.warn('[Cherry] addFilterButton failed', e); }
 
     var cherryIcon = [
       '<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">',
