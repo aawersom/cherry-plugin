@@ -20,107 +20,44 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
 // ============================================================
-// Minimal DOM tracker
-// Simulates jQuery show/hide/find/css on a flat class map.
-// Initial state is parsed from a template HTML string.
+// P3.2 — Empty-state routing (behaviour documentation)
+//
+// The custom cherry_grid template (with .cherry-grid__empty* children) was
+// removed in P0; InteractionCategory owns the DOM. The empty state is now a
+// single comp.empty(msg) call whose message DISTINGUISHES three cases:
+//   - load failure        → cherry_load_error  (network/source error)
+//   - empty favorites      → cherry_fav_empty_hint (persistent how-to hint)
+//   - generic no results   → cherry_no_results (default when no msg given)
+// The mirror below reproduces that message-selection decision.
 // ============================================================
 
-function makeHtml(templateStr) {
-  // Parse all class names from the template, recording their initial display state.
-  // For each class, look at the nearest style="display:none" in the surrounding context.
-  var displayMap = {};
-
-  var classRe = /class="([^"]+)"/g;
-  var m;
-  while ((m = classRe.exec(templateStr)) !== null) {
-    var classes = m[1].trim().split(/\s+/);
-    // Grab a short window around this attribute to detect inline display:none
-    var window_start = Math.max(0, m.index);
-    var window_end   = Math.min(templateStr.length, m.index + 160);
-    var snippet      = templateStr.slice(window_start, window_end);
-    var isHidden     = /style\s*=\s*["'][^"']*display\s*:\s*none/i.test(snippet);
-
-    classes.forEach(function (cls) {
-      if (!(cls in displayMap)) {
-        displayMap[cls] = isHidden ? 'none' : 'block';
-      }
-    });
-  }
-
-  function jq(selector) {
-    var cls = selector.replace(/^\./, '');
-    return {
-      show:      function () { displayMap[cls] = 'block'; return this; },
-      hide:      function () { displayMap[cls] = 'none';  return this; },
-      isVisible: function () { return displayMap[cls] !== 'none'; },
-      css:       function (prop) {
-        if (prop === 'display') return displayMap[cls] || 'block';
-        return '';
-      }
-    };
-  }
-
-  return { find: jq, _map: displayMap };
-}
-
-// ============================================================
-// Template strings
-// ============================================================
-
-// cherry_grid template (mirrors plugin.js post-Phase-1):
-// .cherry-grid__empty carries icon + .cherry-grid__empty-generic + .cherry-grid__empty-fav-hint.
-var TEMPLATE_POST = [
-  '<div class="cherry-grid layer--wheight">',
-    '<div class="cherry-grid__head">',
-      '<div class="cherry-grid__title">{title}</div>',
-    '</div>',
-    '<div class="cherry-grid__body"></div>',
-    '<div class="cherry-grid__loading"></div>',
-    '<div class="cherry-grid__empty" style="display:none">',
-      '<div class="cherry-grid__empty-icon">&#9785;</div>',
-      '<div class="cherry-grid__empty-generic">#{cherry_no_results}</div>',
-      '<div class="cherry-grid__empty-fav-hint" style="display:none">#{cherry_fav_empty_hint}</div>',
-    '</div>',
-  '</div>'
-].join('');
-
-// ============================================================
-// UX-E — Empty Favorites Hint (behaviour documentation)
-// ============================================================
-
-describe('UX-E: is_favorites 0 items — child visibility (POST branch)', function () {
+describe('P3.2: empty-state message routing (POST behaviour)', function () {
   /**
-   * is_favorites empty branch (plugin.js): hide generic, show fav-hint, show parent.
+   * Mirror of CherryGrid.create()'s three branches plus comp.empty()'s default.
+   * Returns the lang key that comp.empty(msg) ultimately renders as descr.
    */
-  function runPostBranch(html) {
-    html.find('.cherry-grid__empty-generic').hide();
-    html.find('.cherry-grid__empty-fav-hint').show();
-    html.find('.cherry-grid__empty').show();
+  function emptyMessageFor(scenario) {
+    if (scenario === 'load_failure') return 'cherry_load_error';
+    if (scenario === 'empty_favorites') return 'cherry_fav_empty_hint';
+    // generic empty: create() does not call empty() (build renders 0 cards), but
+    // if empty() is ever called with no arg the override falls back to no_results.
+    return 'cherry_no_results';
   }
 
-  it('POST: generic is hidden', function () {
-    var html = makeHtml(TEMPLATE_POST);
-    runPostBranch(html);
-    expect(html.find('.cherry-grid__empty-generic').isVisible()).toBe(false);
+  it('load failure → cherry_load_error (distinct from no-results)', function () {
+    expect(emptyMessageFor('load_failure')).toBe('cherry_load_error');
   });
 
-  it('POST: fav-hint is visible', function () {
-    var html = makeHtml(TEMPLATE_POST);
-    runPostBranch(html);
-    expect(html.find('.cherry-grid__empty-fav-hint').isVisible()).toBe(true);
+  it('empty favorites → persistent cherry_fav_empty_hint', function () {
+    expect(emptyMessageFor('empty_favorites')).toBe('cherry_fav_empty_hint');
   });
 
-  it('POST: parent .cherry-grid__empty is visible', function () {
-    var html = makeHtml(TEMPLATE_POST);
-    runPostBranch(html);
-    expect(html.find('.cherry-grid__empty').isVisible()).toBe(true);
+  it('no-arg empty() falls back to cherry_no_results', function () {
+    expect(emptyMessageFor('generic')).toBe('cherry_no_results');
   });
 
-  it('non-fav empty state: fav-hint stays hidden (loadPage path only shows parent)', function () {
-    var html = makeHtml(TEMPLATE_POST);
-    // loadPage empty-result path: just show parent, never touch fav-hint
-    html.find('.cherry-grid__empty').show();
-    expect(html.find('.cherry-grid__empty-fav-hint').isVisible()).toBe(false);
+  it('load_error and no_results are different keys (error != empty)', function () {
+    expect(emptyMessageFor('load_failure')).not.toBe(emptyMessageFor('generic'));
   });
 });
 
@@ -323,9 +260,16 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
 
 describe('plugin.js source assertions (anti-drift)', () => {
-  it('UX-E: template has empty-generic and empty-fav-hint', () => {
-    expect(SRC).toContain('cherry-grid__empty-generic');
-    expect(SRC).toContain('cherry-grid__empty-fav-hint');
+  it('UX-E: dead cherry_grid template classes are gone (InteractionCategory owns DOM)', () => {
+    // The custom template layer was orphaned by the InteractionCategory migration
+    // and removed in P0. The empty state is now driven by comp.empty(msg).
+    expect(SRC).not.toContain('cherry-grid__empty-generic');
+    expect(SRC).not.toContain('cherry-grid__empty-fav-hint');
+  });
+  it('UX-E: empty favorites surfaces a PERSISTENT hint via empty(), not a toast', () => {
+    // P3.2: empty favorites now calls this.empty(cherry_fav_empty_hint) so the
+    // hint stays on screen, instead of the old transient Lampa.Noty toast.
+    expect(SRC).toMatch(/is_favorites[\s\S]{0,120}\.empty\(\s*Lampa\.Lang\.translate\(\s*'cherry_fav_empty_hint'/);
   });
   it('UX-E: cherry_fav_empty_hint lang key registered', () => {
     expect(SRC).toMatch(/cherry_fav_empty_hint\s*:/);
@@ -460,13 +404,11 @@ describe('P2: groupResults — POST behaviour', function () {
 // ============================================================
 
 describe('P2: plugin.js source assertions (anti-drift)', () => {
-  it('cherry_group_label template/class present', () => {
-    expect(SRC).toContain('cherry-group-label');
-  });
-
-  it('cherry_group_label template is registered', () => {
-    // Lampa.Template.add('cherry_group_label', ...) OR Lampa.Template.get('cherry_group_label', ...)
-    expect(SRC).toMatch(/cherry_group_label/);
+  it('dead cherry_group_label template/class removed (P0)', () => {
+    // The grouped-render label was orphaned by the InteractionCategory migration
+    // (all_sources flattens results) and removed in P0.
+    expect(SRC).not.toContain('cherry-group-label');
+    expect(SRC).not.toContain('cherry_group_label');
   });
 
   it('sort/category reload re-runs create() from page 1 (no DOM card surgery)', () => {
@@ -947,7 +889,10 @@ describe('UX-A: plugin.js source assertions (anti-drift)', () => {
   var MAIN = (function () {
     var start = SRC.indexOf('function CherryMain(object)');
     expect(start).toBeGreaterThan(-1);
-    return SRC.slice(start, start + 3000);
+    // Bound the slice to CherryMain's body (ends where addStyles begins) so the
+    // P2.3 letter-tile JS is captured but the CSS string layer is excluded.
+    var end = SRC.indexOf('function addStyles', start);
+    return SRC.slice(start, end > -1 ? end : start + 4500);
   })();
 
   it('CherryMain is built on Lampa.InteractionCategory', () => {
@@ -1201,5 +1146,142 @@ describe('nav recursion guard — fully retired (anti-drift)', () => {
   it('both cherry components are built on Lampa.InteractionCategory', () => {
     var n = (SRC.match(/new\s+Lampa\.InteractionCategory\(/g) || []).length;
     expect(n).toBe(2); // CherryMain + CherryGrid
+  });
+});
+
+// ============================================================
+// UI/UX v2 batch — P0 dead-code removal + P2/P3 additions (anti-drift)
+// ============================================================
+describe('UI/UX v2: P0 dead templates removed', () => {
+  it('addTemplates() function is gone', () => {
+    expect(SRC).not.toMatch(/function addTemplates\(/);
+    expect(SRC).not.toMatch(/addTemplates\(\)\s*;/);
+  });
+  it('no dead Lampa.Template.add cherry_* calls remain', () => {
+    expect(SRC).not.toMatch(/Lampa\.Template\.add\(\s*'cherry_/);
+  });
+});
+
+describe('UI/UX v2: P0 dead CSS removed, live 16:9 kept', () => {
+  it('live 16:9 card rules are kept', () => {
+    expect(SRC).toContain('.cherry-cat .card__view');
+    expect(SRC).toContain('.cherry-cat .card__img');
+  });
+  it('dead cherry-main / source-card / grid__ / card__ / source-row CSS gone', () => {
+    expect(SRC).not.toContain('.cherry-main');
+    expect(SRC).not.toContain('.cherry-source-card');
+    expect(SRC).not.toContain('.cherry-grid__');
+    expect(SRC).not.toContain('.cherry-source-row');
+    expect(SRC).not.toContain('.cherry-cards-wrap');
+  });
+  it('@keyframes cherry-spin removed', () => {
+    expect(SRC).not.toContain('cherry-spin');
+  });
+});
+
+describe('UI/UX v2: P2.1 brand focus ring CSS present', () => {
+  it('focused card view gets a pink box-shadow ring', () => {
+    expect(SRC).toMatch(/\.cherry-cat \.card\.focus \.card__view\{[^}]*box-shadow:0 0 0 \.16em #e75480/);
+  });
+  it('uses box-shadow not a layout-shifting border on focus', () => {
+    var m = SRC.match(/\.cherry-cat \.card\.focus \.card__view\{([^}]*)\}/);
+    expect(m).not.toBeNull();
+    expect(m[1]).not.toMatch(/border:/);
+  });
+});
+
+describe('UI/UX v2: P2.2 title legibility CSS present', () => {
+  it('card title is full white with a 2-line clamp', () => {
+    expect(SRC).toMatch(/\.cherry-cat \.card__title\{[^}]*color:#fff/);
+    expect(SRC).toMatch(/\.cherry-cat \.card__title\{[^}]*-webkit-line-clamp:2/);
+  });
+});
+
+describe('UI/UX v2: P2.3 home letter tiles', () => {
+  var MAIN = (function () {
+    var start = SRC.indexOf('function CherryMain(object)');
+    return SRC.slice(start, start + 4000);
+  })();
+
+  it('picker entries carry a stable _initial', () => {
+    expect(MAIN).toMatch(/_initial:/);
+  });
+  it('search/favorites use glyph initials (⌕ / ♥) marked as actions', () => {
+    expect(MAIN).toContain('⌕');
+    expect(MAIN).toContain('♥');
+    expect(MAIN).toMatch(/_action:\s*true/);
+  });
+  it('source entries derive a stable colour via _tileColor', () => {
+    expect(SRC).toMatch(/function _tileColor\(/);
+    expect(MAIN).toMatch(/_color:\s*_tileColor\(src\.id\)/);
+  });
+  it('cardRender injects a .cherry-tile into .card__view', () => {
+    expect(MAIN).toContain('cherry-tile');
+    expect(MAIN).toMatch(/card\.render\(\)\.find\(\s*'\.card__view'\s*\)/);
+  });
+  it('action tiles get the brand tint class', () => {
+    expect(MAIN).toContain('cherry-tile--action');
+  });
+  it('tile CSS is scoped under .cherry-cat', () => {
+    expect(SRC).toContain('.cherry-cat .cherry-tile{');
+    expect(SRC).toContain('.cherry-cat .cherry-tile--action{');
+  });
+});
+
+describe('UI/UX v2: P3.1 active filter in grid title', () => {
+  it('_titleWithFilters helper resolves labels via _findLabel', () => {
+    expect(SRC).toMatch(/function _titleWithFilters\(\)/);
+    expect(SRC).toMatch(/_titleWithFilters[\s\S]{0,300}_findLabel\(/);
+  });
+  it('build()/resolve() use the filtered title, not bare screenTitle', () => {
+    expect(SRC).toMatch(/\.build\(\{\s*title:\s*_titleWithFilters\(\)/);
+    expect(SRC).toMatch(/resolve\(\{\s*title:\s*_titleWithFilters\(\)/);
+  });
+});
+
+describe('UI/UX v2: P3.2 error != empty + persistent fav hint', () => {
+  it('cherry_load_error lang string added (RU + EN)', () => {
+    expect(SRC).toMatch(/cherry_load_error:\s*\{\s*ru:\s*'Не удалось загрузить\. Проверьте соединение\.'/);
+    expect(SRC).toMatch(/cherry_load_error:[\s\S]{0,120}en:\s*'Failed to load\. Check your connection\.'/);
+  });
+  it('load failure branch calls empty(cherry_load_error)', () => {
+    expect(SRC).toMatch(/\.empty\(\s*Lampa\.Lang\.translate\(\s*'cherry_load_error'\s*\)\s*\)/);
+  });
+  it('empty favorites calls empty(cherry_fav_empty_hint), not a toast', () => {
+    expect(SRC).toMatch(/\.empty\(\s*Lampa\.Lang\.translate\(\s*'cherry_fav_empty_hint'\s*\)\s*\)/);
+    // the old transient toast for empty favorites must be gone
+    expect(SRC).not.toMatch(/cherry_fav_empty_hint'\),\s*\{\s*time:\s*10000/);
+  });
+  it('custom comp.empty(msg) override honours a message arg via Lampa.Empty', () => {
+    expect(SRC).toMatch(/comp\.empty\s*=\s*function\s*\(\s*msg\s*\)/);
+    expect(SRC).toMatch(/new\s+Lampa\.Empty\(\{\s*descr:/);
+  });
+});
+
+describe('UI/UX v2: P3.3 source attribution badge', () => {
+  it('cardRender injects a .cherry-src-badge in all_sources mode', () => {
+    expect(SRC).toMatch(/object\.all_sources\s*&&\s*element\.source/);
+    expect(SRC).toContain('cherry-src-badge');
+    expect(SRC).toMatch(/sourceById\(element\.source\)/);
+  });
+  it('badge CSS is scoped under .cherry-cat', () => {
+    expect(SRC).toContain('.cherry-cat .cherry-src-badge{');
+  });
+});
+
+describe('UI/UX v2: P3.4 header filter button + global-search note', () => {
+  it('addFilterButton() is defined and called from startPlugin', () => {
+    expect(SRC).toMatch(/function addFilterButton\(\)/);
+    expect(SRC).toMatch(/addFilterButton\(\)/);
+  });
+  it('button is scoped to cherry_grid activities only', () => {
+    expect(SRC).toMatch(/e\.component\s*===\s*'cherry_grid'/);
+  });
+  it('button opens the same action menu as onRight (openActionsMenu)', () => {
+    expect(SRC).toMatch(/comp\.openActionsMenu\s*=\s*openActionsMenu/);
+    expect(SRC).toMatch(/inst\.openActionsMenu\(\)/);
+  });
+  it('global-search registration is left as an explicit TODO (not guessed)', () => {
+    expect(SRC).toMatch(/TODO\(global-search\)/);
   });
 });
