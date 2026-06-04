@@ -622,6 +622,25 @@
 
     var _currentPreviewEl = null;
 
+    // Cross-page dedup guard. Some sites don't return empty past the last page —
+    // they CLAMP (always serve a full page, e.g. pornhub API), WRAP to page 1, or
+    // ignore the page param (e.g. xnxx /tags/, xvideos /best/). With a generous
+    // total_pages that would scroll forever feeding DUPLICATES. So we track seen
+    // id@source and drop already-seen cards; when a page yields ZERO new cards we
+    // treat it as end-of-list and stop. Universal — fixes every clamp/wrap channel.
+    var _seenIds = {};
+    function _dedupNew(items) {
+      var out = [];
+      (items || []).forEach(function (v) {
+        if (!v) return;
+        var k = v.id + '@' + (v.source || '');
+        if (_seenIds[k]) return;
+        _seenIds[k] = 1;
+        out.push(v);
+      });
+      return out;
+    }
+
     var source      = object.is_favorites ? null : sourceById(object.source_id);
     var screenTitle = object.title || (source ? source.name : 'Cherry');
 
@@ -952,8 +971,10 @@
       currentPage = 1;
       this.activity.loader(true);
 
+      _seenIds = {};                 // reset dedup tracking for a fresh grid
       _gridLoad(object, 1, function (items, total) {
         currentPage = 1;
+        items = _dedupNew(items);    // seed seen-set (page 1 is all new)
         // P3.2: empty favorites shows a PERSISTENT hint (not a transient toast).
         if (!items.length && object.is_favorites) {
           _this.activity.loader(false);
@@ -987,7 +1008,14 @@
       var nextPage = currentPage + 1;
       _gridLoad(object, nextPage, function (items, total) {
         currentPage = nextPage;
-        resolve({ title: screenTitle, results: items, total_pages: total });
+        var fresh = _dedupNew(items);
+        // No new cards on this page → the site clamped/wrapped/ignored the page →
+        // end of list. Resolve empty + cap total_pages so the base class stops.
+        if (!fresh.length) {
+          resolve({ title: screenTitle, results: [], total_pages: nextPage });
+          return;
+        }
+        resolve({ title: screenTitle, results: fresh, total_pages: total });
       }, reject);
     };
 
@@ -2192,17 +2220,17 @@ SOURCES.push({
   },
 
   cfg: { categories: _cats('amateur:Amateur,anal:Anal,asian:Asian,bbw:BBW,big-ass:Big Ass,big-tits:Big Tits,blonde:Blonde,blowjob:Blowjob,brunette:Brunette,creampie:Creampie,cumshot:Cumshot,ebony:Ebony,gangbang:Gangbang,hardcore:Hardcore,hentai:Hentai,interracial:Interracial,japanese:Japanese,latina:Latina,lesbian:Lesbian,massage:Massage,mature:Mature,milf:MILF,pov:POV,public:Public,redhead:Redhead,step-mom:Step Mom,teen:Teen,threesome:Threesome'),
-    // Per-category PATH sort: /tags/{slug}/{sort}/{page} (views/uploaddate/rating/duration verified, 36 cards).
-    sorts: _cats('views:По популярности,uploaddate:Свежее,rating:По рейтингу,duration:Длинные') },
+    // No sorts: the /tags/{slug}/{sort} route ignores the page param (every page = page 1)
+    // and mis-parses the sort segment. Categories use the paginating /search/ route instead.
+    sorts: [] },
 
   browse: function(category, page, sort) {
     var self = this;
     var p = page || 1;
-    // xnxx categories use the native /tags/{slug}/{sort}/{page} route (0-based page, page1 omits).
-    // Sort is a PATH segment between slug and page; default = views (По популярности).
-    // SEARCH still uses /search/{q}/ (unchanged) — only the CATEGORY path is /tags/.
+    // xnxx categories via the /search/{slug}/{page} route, which DOES paginate
+    // (the /tags/ route ignores the page number → infinite page-1 duplicates).
     var url = category
-      ? _buildCatUrl('https://www.xnxx.com/tags/{slug}/' + (sort || 'views') + '/{page}', category, p, 0, true)
+      ? 'https://www.xnxx.com/search/' + encodeURIComponent(category) + '/' + p
       : 'https://www.xnxx.com/?k=new&p=' + (p - 1);
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html);
