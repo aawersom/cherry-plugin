@@ -797,173 +797,143 @@ describe('P1: plugin.js source assertions (anti-drift)', () => {
 });
 
 // ============================================================
-// UX-A — Home Screen Row Mode (Phase 5)
+// UX-A — Home as an InteractionCategory source picker
 // (behaviour documentation)
 //
-// CherryMain gains a second presentation: one horizontal strip per source.
-// Mode is stored as cherry_home_mode ('tiles'|'rows'), default 'tiles', and
-// toggled from the long-press menu on .cherry-main__title (alongside the
-// existing preview toggle). Pure functions below mirror the load-bearing
-// decisions: mode toggle, menu label selection, per-row card cap, and the
-// collectionSet gate. No DOM, no Lampa, no async — exact-truthiness asserts.
+// CherryMain is now a single-page source picker built on
+// Lampa.InteractionCategory (same proven pattern as CherryGrid). create() emits
+// one result per pickable target — [Поиск] + [Избранное] + one card per
+// SOURCE — each tagged with a `_kind`. cardRender's onEnter routes by _kind.
+// Pure functions below mirror those two load-bearing decisions: the result-list
+// shape and the route chosen for each kind. No DOM, no Lampa, no async.
 // ============================================================
 
-describe('UX-A: nextHomeMode — POST behaviour', function () {
+describe('UX-A: buildPickerResults — POST behaviour', function () {
   /**
-   * Mirror of: var newMode = mode === 'rows' ? 'tiles' : 'rows';
-   * Toggles between the two valid modes. Anything not 'rows' becomes 'rows'
-   * (so the default 'tiles' flips to 'rows' on first toggle).
+   * Mirror of CherryMain.create()'s results array: a Search entry, a Favorites
+   * entry, then one entry per source — order is fixed (search, favorites,
+   * sources in adapter order). Each carries a `_kind` discriminator; source
+   * entries also carry `_source_id`.
    */
-  function nextHomeMode(current) {
-    return current === 'rows' ? 'tiles' : 'rows';
+  function buildPickerResults(sources) {
+    var results = [];
+    results.push({ title: 'cherry_search', img: '', _kind: 'search' });
+    results.push({ title: 'cherry_favorites', img: '', _kind: 'favorites' });
+    (sources || []).forEach(function (src) {
+      results.push({ title: src.name, img: '', _kind: 'source', _source_id: src.id });
+    });
+    return results;
   }
 
-  it('tiles -> rows', function () {
-    expect(nextHomeMode('tiles')).toBe('rows');
+  var SRCS = [
+    { id: 'xnxx', name: 'XNXX' },
+    { id: 'eporner', name: 'Eporner' }
+  ];
+
+  it('first entry is the Search picker', function () {
+    expect(buildPickerResults(SRCS)[0]._kind).toBe('search');
   });
 
-  it('rows -> tiles', function () {
-    expect(nextHomeMode('rows')).toBe('tiles');
+  it('second entry is the Favorites picker', function () {
+    expect(buildPickerResults(SRCS)[1]._kind).toBe('favorites');
   });
 
-  it('toggling twice returns to the original mode (rows)', function () {
-    expect(nextHomeMode(nextHomeMode('rows'))).toBe('rows');
+  it('one source entry per registered adapter, in order', function () {
+    var r = buildPickerResults(SRCS).filter(function (e) { return e._kind === 'source'; });
+    expect(r.map(function (e) { return e._source_id; })).toEqual(['xnxx', 'eporner']);
   });
 
-  it('toggling twice returns to the original mode (tiles)', function () {
-    expect(nextHomeMode(nextHomeMode('tiles'))).toBe('tiles');
+  it('source entries carry both title and _source_id', function () {
+    var first = buildPickerResults(SRCS).filter(function (e) { return e._kind === 'source'; })[0];
+    expect(first.title).toBe('XNXX');
+    expect(first._source_id).toBe('xnxx');
   });
 
-  it('undefined/unknown current defaults toward rows (only "rows" maps to tiles)', function () {
-    expect(nextHomeMode(undefined)).toBe('rows');
-    expect(nextHomeMode('')).toBe('rows');
-  });
-});
-
-describe('UX-A: homeModeLabel — POST behaviour', function () {
-  /**
-   * Mirror of the menu label selection:
-   *   var modeLabel = mode === 'rows'
-   *     ? Lampa.Lang.translate('cherry_view_tiles')
-   *     : Lampa.Lang.translate('cherry_view_rows');
-   * The label always advertises the OPPOSITE (target) action: in tiles mode
-   * show "switch to rows", in rows mode show "switch to tiles". Returns the
-   * lang KEY (translate() is identity in tests).
-   */
-  function homeModeLabel(mode) {
-    return mode === 'rows' ? 'cherry_view_tiles' : 'cherry_view_rows';
-  }
-
-  it('tiles mode advertises switch-to-rows', function () {
-    expect(homeModeLabel('tiles')).toBe('cherry_view_rows');
+  it('with no sources, only Search + Favorites remain', function () {
+    var r = buildPickerResults([]);
+    expect(r).toHaveLength(2);
+    expect(r.map(function (e) { return e._kind; })).toEqual(['search', 'favorites']);
   });
 
-  it('rows mode advertises switch-to-tiles', function () {
-    expect(homeModeLabel('rows')).toBe('cherry_view_tiles');
-  });
-
-  it('default (undefined) mode advertises switch-to-rows', function () {
-    expect(homeModeLabel(undefined)).toBe('cherry_view_rows');
-  });
-
-  it('label key always matches the target of nextHomeMode', function () {
-    // homeModeLabel must name the mode you would land in after a toggle.
-    function nextHomeMode(c) { return c === 'rows' ? 'tiles' : 'rows'; }
-    var keyForMode = { tiles: 'cherry_view_tiles', rows: 'cherry_view_rows' };
-    ['tiles', 'rows'].forEach(function (m) {
-      expect(homeModeLabel(m)).toBe(keyForMode[nextHomeMode(m)]);
+  it('every entry carries a _kind discriminator', function () {
+    buildPickerResults(SRCS).forEach(function (e) {
+      expect(['search', 'favorites', 'source']).toContain(e._kind);
     });
   });
 });
 
-describe('UX-A: rowCardsCap — POST behaviour', function () {
+describe('UX-A: pickerRoute — POST behaviour', function () {
   /**
-   * Mirror of: result.items.slice(0, 12)
-   * Each source row shows at most 12 cards, in adapter order, never sorted.
+   * Mirror of cardRender's onEnter routing. Returns the Activity.push payload
+   * (or a marker for the keyboard-gated search) for a given picker element.
+   * SOURCES[0] is the search/favorites fallback source_id.
    */
-  var CAP = 12;
-  function rowCardsCap(items) {
-    return (items || []).slice(0, CAP);
-  }
-
-  function cards(n) {
-    var arr = [];
-    for (var i = 0; i < n; i++) arr.push({ title: 'v' + i });
-    return arr;
-  }
-
-  it('caps a long row at 12 cards', function () {
-    expect(rowCardsCap(cards(40))).toHaveLength(12);
-  });
-
-  it('keeps the first 12 in adapter order (not sorted)', function () {
-    var titles = rowCardsCap(cards(40)).map(function (c) { return c.title; });
-    expect(titles).toEqual([
-      'v0', 'v1', 'v2', 'v3', 'v4', 'v5',
-      'v6', 'v7', 'v8', 'v9', 'v10', 'v11'
-    ]);
-  });
-
-  it('exactly 12 items are kept intact (boundary)', function () {
-    expect(rowCardsCap(cards(12))).toHaveLength(12);
-  });
-
-  it('fewer than 12 items returns them all', function () {
-    expect(rowCardsCap(cards(5))).toHaveLength(5);
-  });
-
-  it('empty items returns empty', function () {
-    expect(rowCardsCap([])).toHaveLength(0);
-  });
-
-  it('null/undefined items is treated as empty', function () {
-    expect(rowCardsCap(null)).toHaveLength(0);
-    expect(rowCardsCap(undefined)).toHaveLength(0);
-  });
-});
-
-describe('UX-A: allRowsLoaded — POST behaviour', function () {
-  /**
-   * Mirror of the collectionSet gate:
-   *   resolvedCount++;
-   *   if (resolvedCount === SOURCES.length) Lampa.Controller.collectionSet(html);
-   * collectionSet fires exactly ONCE — when the last source resolves (success
-   * OR error, since both branches increment). It must NOT fire early, and the
-   * counter equality (not >=) means it triggers on precisely the last resolve.
-   */
-  function allRowsLoaded(resolvedCount, total) {
-    return resolvedCount === total;
-  }
-
-  it('not all resolved yet: false', function () {
-    expect(allRowsLoaded(1, 3)).toBe(false);
-    expect(allRowsLoaded(2, 3)).toBe(false);
-  });
-
-  it('last source resolves: true', function () {
-    expect(allRowsLoaded(3, 3)).toBe(true);
-  });
-
-  it('zero resolved with sources pending: false', function () {
-    expect(allRowsLoaded(0, 3)).toBe(false);
-  });
-
-  it('exactly one source: fires on first resolve', function () {
-    expect(allRowsLoaded(1, 1)).toBe(true);
-  });
-
-  it('strict equality — does not re-fire past the total', function () {
-    // Counter overshoot must not re-trigger (equality, not >=).
-    expect(allRowsLoaded(4, 3)).toBe(false);
-  });
-
-  it('fires exactly once across a simulated resolve sequence', function () {
-    var total = 4;
-    var fired = 0;
-    for (var c = 1; c <= total; c++) {
-      if (allRowsLoaded(c, total)) fired++;
+  function pickerRoute(element, firstSourceId) {
+    if (element._kind === 'search') {
+      // Search opens the keyboard first; on enter it pushes an all-sources grid.
+      return { keyboard: true, onenter: function (q) {
+        return {
+          component:   'cherry_grid',
+          title:       'cherry_search: ' + q,
+          source_id:   firstSourceId || '',
+          query:       q,
+          all_sources: true,
+          page:        1
+        };
+      } };
     }
-    expect(fired).toBe(1);
+    if (element._kind === 'favorites') {
+      return {
+        component:    'cherry_grid',
+        title:        'cherry_favorites',
+        source_id:    firstSourceId || '',
+        is_favorites: true,
+        page:         1
+      };
+    }
+    if (element._kind === 'source') {
+      return {
+        component: 'cherry_grid',
+        title:     element.title,
+        source_id: element._source_id,
+        page:      1
+      };
+    }
+    return null;
+  }
+
+  it('source kind pushes a per-source grid (no query, no all_sources)', function () {
+    var r = pickerRoute({ _kind: 'source', title: 'XNXX', _source_id: 'xnxx' }, 'xnxx');
+    expect(r.component).toBe('cherry_grid');
+    expect(r.source_id).toBe('xnxx');
+    expect(r.query).toBeUndefined();
+    expect(r.all_sources).toBeUndefined();
+    expect(r.is_favorites).toBeUndefined();
+  });
+
+  it('favorites kind pushes the favorites grid', function () {
+    var r = pickerRoute({ _kind: 'favorites' }, 'xnxx');
+    expect(r.component).toBe('cherry_grid');
+    expect(r.is_favorites).toBe(true);
+    expect(r.source_id).toBe('xnxx');
+  });
+
+  it('search kind is keyboard-gated, then yields an all-sources grid', function () {
+    var r = pickerRoute({ _kind: 'search' }, 'xnxx');
+    expect(r.keyboard).toBe(true);
+    var pushed = r.onenter('milf');
+    expect(pushed.component).toBe('cherry_grid');
+    expect(pushed.all_sources).toBe(true);
+    expect(pushed.query).toBe('milf');
+  });
+
+  it('favorites/search source_id falls back to first source when present', function () {
+    expect(pickerRoute({ _kind: 'favorites' }, '').source_id).toBe('');
+    expect(pickerRoute({ _kind: 'favorites' }, 'xnxx').source_id).toBe('xnxx');
+  });
+
+  it('unknown kind routes nowhere', function () {
+    expect(pickerRoute({ _kind: 'mystery' }, 'xnxx')).toBeNull();
   });
 });
 
@@ -972,96 +942,72 @@ describe('UX-A: allRowsLoaded — POST behaviour', function () {
 // ============================================================
 
 describe('UX-A: plugin.js source assertions (anti-drift)', () => {
-  it('cherry_home_mode storage key referenced', () => {
-    expect(SRC).toContain('cherry_home_mode');
+  // Isolate the CherryMain factory body so the asserts cannot accidentally
+  // match CherryGrid (which is also an InteractionCategory).
+  var MAIN = (function () {
+    var start = SRC.indexOf('function CherryMain(object)');
+    expect(start).toBeGreaterThan(-1);
+    return SRC.slice(start, start + 3000);
+  })();
+
+  it('CherryMain is built on Lampa.InteractionCategory', () => {
+    expect(MAIN).toMatch(/new\s+Lampa\.InteractionCategory\(/);
   });
 
-  it('cherry_home_mode read with default "tiles"', () => {
-    expect(SRC).toMatch(/cherry_home_mode['"]\s*,\s*['"]tiles['"]/);
+  it('CherryMain.create emits the picker via this.build({results})', () => {
+    expect(MAIN).toMatch(/comp\.create\s*=\s*function/);
+    expect(MAIN).toMatch(/this\.build\(\s*\{[\s\S]{0,80}results:/);
   });
 
-  it('cherry_source_row template registered', () => {
-    // Lampa.Template.add('cherry_source_row', ...)
-    expect(SRC).toMatch(/Lampa\.Template\.add\(\s*['"]cherry_source_row['"]/);
+  it('create toggles activity.loader around the build', () => {
+    expect(MAIN).toMatch(/this\.activity\.loader\(true\)/);
+    expect(MAIN).toMatch(/this\.activity\.loader\(false\)/);
   });
 
-  it('cherry_source_row label/cards classes present', () => {
-    expect(SRC).toContain('cherry-source-row__label');
-    expect(SRC).toContain('cherry-source-row__cards');
+  it('picker emits search + favorites + per-source entries with _kind', () => {
+    expect(MAIN).toMatch(/_kind:\s*'search'/);
+    expect(MAIN).toMatch(/_kind:\s*'favorites'/);
+    expect(MAIN).toMatch(/_kind:\s*'source'[\s\S]{0,40}_source_id:\s*src\.id/);
   });
 
-  it('renderRows function defined', () => {
-    expect(SRC).toMatch(/function\s+renderRows\s*\(/);
+  it('one source entry per registered SOURCE (SOURCES.forEach)', () => {
+    expect(MAIN).toMatch(/SOURCES\.forEach\(/);
   });
 
-  it('renderRows applies the --rows modifier class', () => {
-    expect(SRC).toContain('cherry-main__sources--rows');
+  it('cardRender.onEnter routes by element._kind', () => {
+    expect(MAIN).toMatch(/comp\.cardRender\s*=\s*function/);
+    expect(MAIN).toMatch(/card\.onEnter\s*=\s*function/);
+    expect(MAIN).toMatch(/element\._kind\s*===\s*'search'/);
+    expect(MAIN).toMatch(/element\._kind\s*===\s*'favorites'/);
+    expect(MAIN).toMatch(/element\._kind\s*===\s*'source'/);
   });
 
-  it('row card sets video.source = src.id before render (Fav 7-field invariant)', () => {
-    expect(SRC).toMatch(/video\.source\s*=\s*src\.id/);
+  it('search kind opens Keyboard then pushes an all_sources grid', () => {
+    expect(MAIN).toMatch(/Lampa\.Keyboard\.show/);
+    expect(MAIN).toMatch(/all_sources:\s*true/);
   });
 
-  it('CherryMain has a destroyed flag', () => {
-    // The guard variable must be declared (and used in async row callbacks).
-    expect(SRC).toMatch(/var\s+destroyed\s*=\s*false/);
+  it('favorites kind pushes is_favorites grid', () => {
+    expect(MAIN).toMatch(/is_favorites:\s*true/);
   });
 
-  it('CherryMain.destroy sets destroyed = true', () => {
-    expect(SRC).toMatch(/this\.destroy\s*=\s*function[\s\S]{0,120}destroyed\s*=\s*true/);
+  it('source kind pushes a per-source grid using element._source_id', () => {
+    expect(MAIN).toMatch(/source_id:\s*element\._source_id/);
   });
 
-  it('lang key cherry_view_rows registered', () => {
-    expect(SRC).toMatch(/cherry_view_rows\s*:/);
+  it('Keyboard onback re-toggles the content controller (matches CherryGrid)', () => {
+    expect(MAIN).toMatch(/Lampa\.Controller\.toggle\(\s*['"]content['"]\s*\)/);
   });
 
-  it('lang key cherry_view_tiles registered', () => {
-    expect(SRC).toMatch(/cherry_view_tiles\s*:/);
+  it('CherryMain no longer hand-rolls a Controller', () => {
+    expect(MAIN).not.toMatch(/Lampa\.Controller\.add\(\s*['"]cherry_main['"]/);
   });
 
-  it('collectionSet gated by a resolved counter (fires once)', () => {
-    // resolvedCount (or similar) incremented, then compared to SOURCES.length.
-    expect(SRC).toMatch(/resolvedCount/);
-    expect(SRC).toMatch(/resolvedCount\s*===\s*SOURCES\.length/);
-  });
-
-  it('view_toggle action present in the long-press menu', () => {
-    expect(SRC).toMatch(/action:\s*'view_toggle'/);
-  });
-
-  it('view toggle re-pushes cherry_main after backward() with a setTimeout', () => {
-    // Mode switch: Lampa.Activity.backward() then setTimeout(... push cherry_main ...).
-    expect(SRC).toMatch(/Lampa\.Activity\.backward\(\)/);
-    expect(SRC).toMatch(/setTimeout\([\s\S]{0,200}cherry_main/);
-  });
-
-  it('view_toggle guarded by a _toggling re-entrancy flag (no destroyed-guard in re-push)', () => {
-    // The deferred re-push MUST fire even after backward() tears down the
-    // instance, so there is no destroyed-guard in the timer. Fast double-toggle
-    // is instead blocked up-front by a _toggling re-entrancy flag.
-    expect(SRC).toMatch(/var\s+_toggling\s*=\s*false/);
-    expect(SRC).toMatch(/if\s*\(\s*_toggling\s*\)\s*return/);
-    expect(SRC).toMatch(/_toggling\s*=\s*true/);
-  });
-
-  it('row mode wraps src.browse in Promise.resolve (thenable-safe)', () => {
-    // Promise.resolve(src.browse('', 1)) — a sync-throwing / null-returning
-    // adapter must land in .catch, not abort the whole forEach.
-    expect(SRC).toMatch(/Promise\.resolve\(\s*src\.browse\(/);
-  });
-
-  it('both cherry_view_rows and cherry_view_tiles reachable from the menu label branch', () => {
-    // modeLabel selects cherry_view_tiles in rows mode, cherry_view_rows otherwise.
-    expect(SRC).toMatch(/translate\(\s*['"]cherry_view_tiles['"]\s*\)/);
-    expect(SRC).toMatch(/translate\(\s*['"]cherry_view_rows['"]\s*\)/);
-  });
-
-  it('row card cap is slice(0, 12)', () => {
-    expect(SRC).toMatch(/slice\(\s*0\s*,\s*12\s*\)/);
-  });
-
-  it('row mode browses each source via src.browse with page 1', () => {
-    expect(SRC).toMatch(/src\.browse\(\s*['"]['"]\s*,\s*1\s*\)/);
+  it('CherryMain no longer references the removed row-mode internals', () => {
+    expect(MAIN).not.toMatch(/renderRows|renderSources|bindSearch/);
+    expect(MAIN).not.toContain('cherry_home_mode');
+    expect(MAIN).not.toMatch(/view_toggle/);
+    expect(MAIN).not.toMatch(/_navMoving/);
   });
 });
 
@@ -1236,22 +1182,24 @@ describe('categories coverage — every wired adapter ships a list', () => {
   });
 });
 
-// ── Navigation recursion guard (all directions, both controllers) ─────────────
-describe('nav recursion guard — plugin.js source assertions (anti-drift)', () => {
-  it('cherry_grid no longer hand-rolls a controller (migrated to InteractionCategory)', () => {
-    // CherryGrid must NOT declare _navMoving anymore; only CherryMain (separate
-    // phase) still uses the hand-rolled controller with its recursion guard.
-    var n = (SRC.match(/var _navMoving = false/g) || []).length;
-    expect(n).toBe(1); // CherryMain only
+// ── Navigation recursion guard fully retired (both components migrated) ───────
+// The hand-rolled Controller + move() re-dispatch recursion (the original
+// home-screen arrow-nav bug) is gone: CherryGrid AND CherryMain both run on
+// Lampa.InteractionCategory, which owns nav/scroll. No _navMoving guard, no
+// bare Controller.move handler, no Controller.add for either component.
+describe('nav recursion guard — fully retired (anti-drift)', () => {
+  it('no component hand-rolls a _navMoving recursion guard anymore', () => {
+    expect(SRC).not.toContain('_navMoving');
   });
-  it('CherryMain directional handlers stay guarded by _navMoving', () => {
-    // The only remaining hand-rolled controller (cherry_main) keeps all 4
-    // directions guarded against move() re-dispatch stack overflow.
-    var guarded = (SRC.match(/if \(_navMoving\) return; _navMoving = true; Lampa\.Controller\.move/g) || []).length;
-    expect(guarded).toBe(4); // up/down/left/right in cherry_main
+  it('no bare directional Controller.move handler remains', () => {
+    // The old pattern "up: function () { Lampa.Controller.move('up'); }" must be gone.
+    expect(SRC).not.toMatch(/(?:up|down|left|right):\s*function\s*\(\)\s*\{[^}]*Lampa\.Controller\.move\(/);
   });
-  it('no unguarded bare directional move remains in a controller handler', () => {
-    // The old pattern "up:    function () { Lampa.Controller.move('up'); }" must be gone
-    expect(SRC).not.toMatch(/up:\s*function \(\) \{ Lampa\.Controller\.move\('up'\); \}/);
+  it('neither cherry component hand-rolls Lampa.Controller.add', () => {
+    expect(SRC).not.toMatch(/Lampa\.Controller\.add\(\s*['"]cherry_(main|grid)['"]/);
+  });
+  it('both cherry components are built on Lampa.InteractionCategory', () => {
+    var n = (SRC.match(/new\s+Lampa\.InteractionCategory\(/g) || []).length;
+    expect(n).toBe(2); // CherryMain + CherryGrid
   });
 });

@@ -75,6 +75,13 @@ Pornhub categories are numeric ids; the existing webmasters JSON browse just nee
 ### L31: Bash quoted-heredoc still collapses `\\` → `\` for appended JS test files
 Appending a vitest file via `cat >> f << 'EOF'` turned `new RegExp("id:\\s*...")` into `"id:\s*..."`, and JS then read `"\s"` as `"s"` — the regex silently became `id:s*...[sS]` and never matched. Literal regexes (`/\{page\}/`) survived; only double-backslash strings broke. **Rule:** never write regex-bearing JS through a heredoc — use the Edit/Write tool, or prefer `indexOf`/`toContain` proximity checks over `new RegExp(string)` in anti-drift tests.
 
+## cherry-nav-fix (2026-06-04) — Mode: medium
+
+### L35: Hand-rolled Lampa.Controller.add with move(dir) in handlers is fundamentally broken — use InteractionCategory/InteractionMain
+Cherry's arrow navigation NEVER worked (months) because both components hand-rolled `Lampa.Controller.add({right:()=>Lampa.Controller.move('right'),...})`. `Controller.move(dir)` calls `run(dir)` → the same controller's `dir` handler → `move(dir)` → infinite recursion → dead controller. Guards/edge-detection only masked the crash while still blocking movement. The fix (confirmed by 3 research agents + the working reference plugin sisi.js, and VALIDATED on the user's Lampa): use the built-in `Lampa.InteractionCategory` (grid) / `Lampa.InteractionMain` (multi-line home) base classes — they own focus movement, scroll-into-view, and pagination; the plugin overrides ONLY `create` (load+`this.build(data)`), `nextPageReuest` (paging), `cardRender` (onEnter/onMenu/onFocus), and `onRight` (edge action). Never call `Controller.move` from a handler. **Rule:** for a navigable card grid in a Lampa plugin, ALWAYS extend InteractionCategory/InteractionMain — never hand-roll the controller.
+- `build(data)` (InteractionCategory): `{title, results:[card], total_pages}`. card: `title`, `img`/`poster`=thumb, optional `quality` badge; extra fields ride along to `cardRender`'s `element`.
+- `build(data)` (InteractionMain): array of lines `[{title, results:[card], url, collection:true, line_type:'none', card_events:{onMenu,onEnter}}]`.
+
 ## nav-recursion-alldirs (2026-06-04) — Mode: fast
 
 ### L34: The move()-re-dispatch recursion affects ALL directions, not just right — guard every handler
