@@ -1699,6 +1699,31 @@ SOURCES.push({
   }
 });
 
+// xvideos/xnxx video pages embed related as a JSON array `video_related=[...]`.
+function _xvideosRelated(html, host, sourceId) {
+  var m = html.match(/video_related\s*=\s*(\[[\s\S]*?\])\s*;/);
+  if (!m) return [];
+  var arr;
+  try { arr = JSON.parse(m[1]); } catch (e) { return []; }
+  var out = [];
+  arr.forEach(function (o) {
+    if (!o || !o.u) return;
+    var dur;
+    var dm = o.d && String(o.d).match(/(\d+)\s*min/);
+    if (dm) dur = parseInt(dm[1], 10) * 60;
+    out.push({
+      id:     o.eid || o.id,
+      title:  o.tf || o.t || '',
+      thumb:  o.i || o.il || '',
+      url:    host + o.u,
+      source: sourceId,
+      duration: dur,
+      hd:     o.hm ? 'HD' : undefined
+    });
+  });
+  return out;
+}
+
 // ---- Xvideos ----
 SOURCES.push({
   id: 'xvideos',
@@ -1812,10 +1837,11 @@ SOURCES.push({
   },
 
   getRelated: function(video) {
-    var self = this;
+    if (!video || !video.url) return Promise.resolve([]);
     return cherryFetch(video.url).then(function(html) {
-      // xvideos video pages include a related videos section with thumb-block cards
-      return self._parseCards(html, 1).slice(0, 20);
+      return _xvideosRelated(html, 'https://www.xvideos.com', 'xvideos').filter(function(v) {
+        return v.url !== video.url;
+      }).slice(0, 20);
     }).catch(function() { return []; });
   },
 
@@ -1930,6 +1956,15 @@ SOURCES.push({
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
+  getRelated: function(video) {
+    if (!video || !video.url) return Promise.resolve([]);
+    return cherryFetch(video.url).then(function(html) {
+      return _xvideosRelated(html, 'https://www.xnxx.com', 'xnxx').filter(function(v) {
+        return v.url !== video.url;
+      }).slice(0, 20);
+    }).catch(function() { return []; });
+  },
+
   getStream: function(video) {
     return cherryFetch(video.url).then(function(html) {
       var hlsMatch = html.match(/(?:html5player\.)?setVideoHLS\s*\(\s*['"]([^'"]+)['"]\)/);
@@ -1950,6 +1985,30 @@ SOURCES.push({
     }).catch(function() { return { url: '', quality: {} }; });
   }
 });
+
+// eporner VIDEO pages embed related as `mbcontent` HTML cards (the JSON API,
+// used by browse/_mapVideo, returns none for a video page). Each card:
+//   <div class="mbcontent"><a href="/video-XXX/slug/">
+//     <img ... data-src="THUMB" alt="TITLE" /></a> ... <div class="mvhdico"><span>720p</span>
+// Confirmed via curl on a real video page (2026-06).
+function _epornerRelated(html) {
+  var out = [];
+  var seen = {};
+  var rx = /<div class="mbcontent"><a href="(\/video-([^/"]+)\/[^"]*)"[^>]*>([\s\S]*?)<\/a>/g;
+  var m;
+  while ((m = rx.exec(html)) !== null) {
+    var path = m[1];
+    var id = m[2];
+    var inner = m[3];
+    if (seen[id]) continue;
+    seen[id] = true;
+    var url = 'https://www.eporner.com' + path;
+    var thumb = _attr(inner, /data-src="([^"]+)"/) || _attr(inner, /src="(https?:\/\/[^"]+\.jpe?g[^"]*)"/i) || '';
+    var title = _decodeHtml(_attr(inner, /alt="([^"]+)"/)) || _titleFromUrl(url);
+    out.push({ id: id, source: 'eporner', title: title, thumb: thumb, url: url });
+  }
+  return out;
+}
 
 // ---- Eporner ----
 SOURCES.push({
@@ -2006,6 +2065,15 @@ SOURCES.push({
       var data = JSON.parse(text);
       return { items: (data.videos || []).map(self._mapVideo), total_pages: parseInt(data.total_pages, 10) || 1 };
     }).catch(function() { return { items: [], total_pages: 0 }; });
+  },
+
+  getRelated: function(video) {
+    if (!video || !video.url) return Promise.resolve([]);
+    return cherryFetch(video.url).then(function(html) {
+      return _epornerRelated(html).filter(function(v) {
+        return v.url !== video.url;
+      }).slice(0, 20);
+    }).catch(function() { return []; });
   },
 
   getStream: function(video) {
@@ -2519,6 +2587,13 @@ SOURCES.push({
                 return { items: items, total_pages: _pornonePages(html, p, items.length) };
             }).catch(function () { return { items: [], total_pages: 0 }; });
         });
+    },
+
+    getRelated: function (video) {
+        if (!video || !video.url) return Promise.resolve([]);
+        return cherryFetch(video.url).then(function (html) {
+            return _pornoneCards(html).filter(function (v) { return v.url !== video.url; }).slice(0, 20);
+        }).catch(function () { return []; });
     },
 
     getStream: function (video) {

@@ -1424,6 +1424,132 @@ function _titleFromUrl(url) {
   } catch (e) { return ''; }
 }
 
+// ---- _xvideosRelated --------------------------------------------------------
+// Verbatim from plugin.js — xvideos/xnxx video pages embed related as a JSON
+// array `video_related=[...]`. Field map: u=path, tf=full title, i=thumb,
+// eid=id, d="12 min"/"12min"→sec, hm=1→HD. Kept IN SYNC with plugin.js.
+function _xvideosRelated(html, host, sourceId) {
+  var m = html.match(/video_related\s*=\s*(\[[\s\S]*?\])\s*;/);
+  if (!m) return [];
+  var arr;
+  try { arr = JSON.parse(m[1]); } catch (e) { return []; }
+  var out = [];
+  arr.forEach(function (o) {
+    if (!o || !o.u) return;
+    var dur;
+    var dm = o.d && String(o.d).match(/(\d+)\s*min/);
+    if (dm) dur = parseInt(dm[1], 10) * 60;
+    out.push({
+      id:     o.eid || o.id,
+      title:  o.tf || o.t || '',
+      thumb:  o.i || o.il || '',
+      url:    host + o.u,
+      source: sourceId,
+      duration: dur,
+      hd:     o.hm ? 'HD' : undefined
+    });
+  });
+  return out;
+}
+
+// ---- _epornerRelated --------------------------------------------------------
+// Verbatim from plugin.js — eporner video pages embed related as `mbcontent`
+// HTML cards. Kept IN SYNC with plugin.js.
+function _epornerRelated(html) {
+  var out = [];
+  var seen = {};
+  var rx = /<div class="mbcontent"><a href="(\/video-([^/"]+)\/[^"]*)"[^>]*>([\s\S]*?)<\/a>/g;
+  var m;
+  while ((m = rx.exec(html)) !== null) {
+    var path = m[1];
+    var id = m[2];
+    var inner = m[3];
+    if (seen[id]) continue;
+    seen[id] = true;
+    var url = 'https://www.eporner.com' + path;
+    var thumb = _attr(inner, /data-src="([^"]+)"/) || _attr(inner, /src="(https?:\/\/[^"]+\.jpe?g[^"]*)"/i) || '';
+    var title = _decodeHtml(_attr(inner, /alt="([^"]+)"/)) || _titleFromUrl(url);
+    out.push({ id: id, source: 'eporner', title: title, thumb: thumb, url: url });
+  }
+  return out;
+}
+
+describe('_xvideosRelated (xvideos/xnxx video_related JSON)', () => {
+  const host = 'https://www.xvideos.com';
+  const fixtureHtml =
+    'prefix var video_related=[' +
+    '{"u":"/video.aaa/one","tf":"First Clip","t":"x","i":"https://cdn/1.jpg","eid":"aaa","d":"12 min","hm":1},' +
+    '{"u":"/video.bbb/two","tf":"Second Clip","i":"https://cdn/2.jpg","eid":"bbb","d":"5min","hm":0}' +
+    ']; suffix';
+
+  it('maps JSON fields → cards (url=host+u, title=tf, thumb=i, id=eid, dur sec, hd)', () => {
+    const out = _xvideosRelated(fixtureHtml, host, 'xvideos');
+    expect(out.length).toBe(2);
+    expect(out[0]).toMatchObject({
+      id: 'aaa', title: 'First Clip', thumb: 'https://cdn/1.jpg',
+      url: host + '/video.aaa/one', source: 'xvideos', duration: 720, hd: 'HD'
+    });
+  });
+
+  it('parses "12 min" and "5min" → 720 / 300 seconds', () => {
+    const out = _xvideosRelated(fixtureHtml, host, 'xvideos');
+    expect(out[0].duration).toBe(720);
+    expect(out[1].duration).toBe(300);
+  });
+
+  it('hm:0 → hd undefined (no non-numeric duration / hd noise)', () => {
+    const out = _xvideosRelated(fixtureHtml, host, 'xvideos');
+    expect(out[1].hd).toBeUndefined();
+  });
+
+  it('excludes the current video url (caller filter contract)', () => {
+    const cur = host + '/video.aaa/one';
+    const out = _xvideosRelated(fixtureHtml, host, 'xvideos')
+      .filter((v) => v.url !== cur);
+    expect(out.map((v) => v.id)).toEqual(['bbb']);
+  });
+
+  it('returns [] when video_related var is absent', () => {
+    expect(_xvideosRelated('<html>no related here</html>', host, 'xvideos')).toEqual([]);
+  });
+
+  it('returns [] on malformed JSON (degrades safely)', () => {
+    expect(_xvideosRelated('video_related=[{bad json];', host, 'xvideos')).toEqual([]);
+  });
+});
+
+describe('_epornerRelated (mbcontent HTML cards)', () => {
+  const fixtureHtml =
+    '<div class="mbcontent"><a href="/video-rFWJVaXGkRx/late-night/">' +
+    '<img class="lazyimg" src="data:image/gif;base64,AAA" ' +
+    'data-src="https://static-eu-cdn.eporner.com/thumbs/1_240.jpg" ' +
+    'alt="Late Night Overtime" /></a><div class="mvhdico"><span>720p</span></div></div>' +
+    '<div class="mbcontent"><a href="/video-ZZZ/other-clip/">' +
+    '<img data-src="https://cdn/2.jpg" alt="Other Clip" /></a></div>';
+
+  it('parses cards: url=site+href, id from /video-XXX/, title=alt, thumb=data-src', () => {
+    const out = _epornerRelated(fixtureHtml);
+    expect(out.length).toBe(2);
+    expect(out[0]).toMatchObject({
+      id: 'rFWJVaXGkRx',
+      title: 'Late Night Overtime',
+      thumb: 'https://static-eu-cdn.eporner.com/thumbs/1_240.jpg',
+      url: 'https://www.eporner.com/video-rFWJVaXGkRx/late-night/',
+      source: 'eporner'
+    });
+  });
+
+  it('excludes the current video url (caller filter contract)', () => {
+    const cur = 'https://www.eporner.com/video-rFWJVaXGkRx/late-night/';
+    const out = _epornerRelated(fixtureHtml).filter((v) => v.url !== cur);
+    expect(out.map((v) => v.id)).toEqual(['ZZZ']);
+  });
+
+  it('returns [] when no mbcontent cards present', () => {
+    expect(_epornerRelated('<html>no cards</html>')).toEqual([]);
+  });
+});
+
 // Inline reimplementation of xnxx _parseCards — kept IN SYNC with plugin.js.
 // Splits on the OUTER thumb-block wrapper (like xvideos) so each block holds
 // BOTH this card's .thumb image and its .thumb-under caption (no off-by-one).
