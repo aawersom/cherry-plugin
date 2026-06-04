@@ -1325,18 +1325,21 @@ function xvParseCards(html) {
     var videoUrl = 'https://www.xvideos2.com' + href;
     var thumbMatch = block.match(/data-src="([^"]+)"/) || block.match(/src="([^"]+\.jpg[^"]*)"/);
     var thumb = thumbMatch ? thumbMatch[1] : '';
-    var preview = thumb ? thumb.replace(/\/[^\/]+$/, '/preview.mp4') : '';
+    var pvvMatch = block.match(/data-pvv="([^"]+)"/);
+    var preview = pvvMatch ? pvvMatch[1].replace(/\\\//g, '/') : '';
     var titleMatch = block.match(/<p[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)/) ||
                      block.match(/title="([^"]+)"/);
     var title = titleMatch ? stripTagsLocal(titleMatch[1]) : '';
     var durMatch = block.match(/<span[^>]*class="[^"]*duration[^"]*"[^>]*>([^<]+)/);
     var duration = durMatch ? parseDur(durMatch[1].trim()) : 0;
+    var hdMatch = block.match(/class="video-hd-mark"[^>]*>\s*(\d+)/);
+    var hd = hdMatch ? (parseInt(hdMatch[1], 10) >= 2160 ? '4K' : 'HD') : '';
     if (!numId && href) {
       var idFromHref = href.match(/video(\d+)\//);
       numId = idFromHref ? idFromHref[1] : String(i);
     }
     items.push({ id: 'xv' + numId, source: 'xvideos', title: title, thumb: thumb,
-                 preview: preview, url: videoUrl, duration: duration, views: 0 });
+                 preview: preview, hd: hd, url: videoUrl, duration: duration, views: 0 });
   }
   return items;
 }
@@ -1374,7 +1377,8 @@ function xnxxParseCards(html) {
     var videoUrl = 'https://www.xnxx.com' + href;
     var thumbMatch = block.match(/data-src="([^"]+)"/) || block.match(/src="([^"]+\.jpg[^"]*)"/);
     var thumb = thumbMatch ? thumbMatch[1] : '';
-    var preview = thumb ? thumb.replace(/\/[^\/]+$/, '/preview.mp4') : '';
+    var pvvMatch = block.match(/data-pvv="([^"]+)"/);
+    var preview = pvvMatch ? pvvMatch[1].replace(/\\\//g, '/') : '';
     var titleMatch = block.match(/class="title"[^>]*>([^<]+)/) ||
                      block.match(/title="([^"]+)"/) ||
                      block.match(/<a[^>]+>([^<]{5,})/);
@@ -1468,38 +1472,39 @@ describe('REQ-3 pornhub data-mediabook', function () {
   });
 });
 
-describe('REQ-2 xnxx video.preview (real thumb-block markup)', function () {
+describe('REQ-2 xnxx video.preview (real data-pvv attribute)', function () {
+  // S5: real preview is the data-pvv attr (confirmed via curl on xnxx /search
+  // listing markup: data-pvv="https://thumb-cdn77.xnxx-cdn.com/UUID/0/preview.mp4").
+  // The old guessed thumb→/preview.mp4 fallback is GONE.
   var UUID = '8f9a9694-d042-4f65-9a3b-c13ed3c0f91b';
   var THUMB = 'https://thumb-cdn77.xnxx-cdn.com/' + UUID + '/3/xn_15_t.jpg';
-  var PREVIEW = 'https://thumb-cdn77.xnxx-cdn.com/' + UUID + '/3/preview.mp4';
+  var PVV = 'https://thumb-cdn77.xnxx-cdn.com/' + UUID + '/0/preview.mp4';
 
-  // Real card: outer .thumb-block wraps .thumb (img) + .thumb-under (caption).
-  function card(href, thumb) {
+  // Real card: outer .thumb-block wraps .thumb (img + data-pvv) + .thumb-under.
+  function card(href, thumb, pvv) {
+    var pvvAttr = pvv ? ' data-pvv="' + pvv + '"' : '';
     return '<div class="thumb-block ">' +
-             '<div class="thumb"><a href="' + href + '"><img data-src="' + thumb + '"></a></div>' +
+             '<div class="thumb"><a href="' + href + '"><img data-src="' + thumb + '"' + pvvAttr + '></a></div>' +
              '<div class="thumb-under"><p class="title"><a href="' + href + '">Cap</a></p></div>' +
            '</div>';
   }
 
-  it('AC-P3a: populates preview from thumb URL', function () {
-    var html = '<div class="mozaique">' + card('/video-abc123/slug', THUMB) + '</div>';
+  it('AC-P3a: reads preview from data-pvv', function () {
+    var html = '<div class="mozaique">' + card('/video-abc123/slug', THUMB, PVV) + '</div>';
     var items = xnxxParseCards(html);
     expect(items.length).toBe(1);
-    expect(items[0].preview).toBe(PREVIEW);
+    expect(items[0].preview).toBe(PVV);
   });
 
-  it('AC-P3b: works for any extension (webp)', function () {
-    var thumb = 'https://thumb-cdn77.xnxx-cdn.com/' + UUID + '/3/xn_15_t.webp';
-    var html = '<div class="mozaique">' + card('/video-abc123/slug', thumb) + '</div>';
+  it('AC-P3b: unescapes \\/ in data-pvv', function () {
+    var escaped = 'https:\\/\\/thumb-cdn77.xnxx-cdn.com\\/' + UUID + '\\/0\\/preview.mp4';
+    var html = '<div class="mozaique">' + card('/video-abc123/slug', THUMB, escaped) + '</div>';
     var items = xnxxParseCards(html);
-    expect(items[0].preview).toBe('https://thumb-cdn77.xnxx-cdn.com/' + UUID + '/3/preview.mp4');
+    expect(items[0].preview).toBe(PVV);
   });
 
-  it('AC-P3c: empty thumb produces empty preview', function () {
-    var html = '<div class="mozaique"><div class="thumb-block ">' +
-               '<div class="thumb"><a href="/video-abc123/slug"></a></div>' +
-               '<div class="thumb-under"><p class="title"><a href="/video-abc123/slug">Cap</a></p></div>' +
-               '</div></div>';
+  it('AC-P3c: no data-pvv → empty preview (NO /preview.mp4 guess)', function () {
+    var html = '<div class="mozaique">' + card('/video-abc123/slug', THUMB, '') + '</div>';
     var items = xnxxParseCards(html);
     expect(items.length).toBe(1);
     expect(items[0].preview).toBe('');
@@ -1584,28 +1589,175 @@ describe('Fix D — _titleFromUrl slug fallback', function () {
   });
 });
 
-describe('REQ-1 xvideos video.preview', function () {
+describe('REQ-1 xvideos video.preview (real data-pvv attribute)', function () {
+  // S5: real preview is the data-pvv attr (confirmed via curl on xvideos.com:
+  // data-pvv="https://thumb-cdn77.xvideos-cdn.com/UUID/0/preview.mp4").
+  // NOT data-videopreview (that attr does not exist). Old guess is GONE.
   var UUID = '5854c00a-cf8f-4ff8-bcef-38a1133f1132';
   var THUMB = 'https://thumb-cdn77.xvideos-cdn.com/' + UUID + '/3/xv_14_t.jpg';
-  var PREVIEW = 'https://thumb-cdn77.xvideos-cdn.com/' + UUID + '/3/preview.mp4';
+  var PVV = 'https://thumb-cdn77.xvideos-cdn.com/' + UUID + '/0/preview.mp4';
 
-  it('AC-P1: populates preview from thumb URL (replace filename with preview.mp4)', function () {
+  it('AC-P1: reads preview from data-pvv', function () {
     var html = '<div class="thumb-block"><a href="/video.abc123/slug">' +
-               '<img data-src="' + THUMB + '"></a>' +
+               '<img data-src="' + THUMB + '" data-pvv="' + PVV + '"></a>' +
                '<p class="title">Test video</p></div>';
     var items = xvParseCards(html);
     expect(items.length).toBe(1);
-    expect(items[0].preview).toBe(PREVIEW);
+    expect(items[0].preview).toBe(PVV);
     expect(items[0].thumb).toBe(THUMB);
   });
 
-  it('AC-P2: empty thumb produces empty preview', function () {
+  it('AC-P2: no data-pvv → empty preview (NO /preview.mp4 guess)', function () {
     var html = '<div class="thumb-block"><a href="/video.abc123/slug">' +
-               '<p class="title">No thumb</p></a></div>';
+               '<img data-src="' + THUMB + '"></a>' +
+               '<p class="title">No preview</p></div>';
     var items = xvParseCards(html);
     expect(items.length).toBe(1);
     expect(items[0].preview).toBe('');
-    expect(items[0].thumb).toBe('');
+  });
+
+  it('AC-P-HD: video-hd-mark 1080p → hd "HD"', function () {
+    var html = '<div class="thumb-block"><a href="/video.abc123/slug">' +
+               '<img data-src="' + THUMB + '"></a>' +
+               '<span class="video-hd-mark">1080p</span>' +
+               '<p class="title">HD video</p></div>';
+    var items = xvParseCards(html);
+    expect(items[0].hd).toBe('HD');
+  });
+
+  it('AC-P-4K: video-hd-mark 2160p → hd "4K"', function () {
+    var html = '<div class="thumb-block"><a href="/video.abc123/slug">' +
+               '<img data-src="' + THUMB + '"></a>' +
+               '<span class="video-hd-mark">2160p</span>' +
+               '<p class="title">4K video</p></div>';
+    var items = xvParseCards(html);
+    expect(items[0].hd).toBe('4K');
+  });
+
+  it('AC-P-noHD: no video-hd-mark → hd ""', function () {
+    var html = '<div class="thumb-block"><a href="/video.abc123/slug">' +
+               '<img data-src="' + THUMB + '"></a>' +
+               '<p class="title">SD video</p></div>';
+    var items = xvParseCards(html);
+    expect(items[0].hd).toBe('');
+  });
+});
+
+// ============================================================
+// S2 toCard: HD/4K badge combined with duration in the quality slot
+// ============================================================
+// Verbatim from plugin.js secToTime (line ~293).
+function secToTime(s) {
+  s = parseInt(s, 10) || 0;
+  var m = Math.floor(s / 60);
+  var sec = s % 60;
+  return m + ':' + (sec < 10 ? '0' : '') + sec;
+}
+
+// The quality-slot composition from toCard (CherryGrid). Pure extract — the
+// rest of toCard (img/poster/source) is irrelevant to the quality logic.
+function toCardQuality(v) {
+  var _q = v.duration ? secToTime(v.duration) : '';
+  if (v.hd) _q = _q ? (v.hd + ' · ' + _q) : v.hd;
+  if (_q) v.quality = _q;
+  return v.quality;
+}
+
+describe('S2 toCard — hd + duration → quality slot', function () {
+  it('hd present + duration → "HD · 12:34"', function () {
+    expect(toCardQuality({ duration: 754, hd: 'HD' })).toBe('HD · 12:34');
+  });
+
+  it('4K present + duration → "4K · 1:05"', function () {
+    expect(toCardQuality({ duration: 65, hd: '4K' })).toBe('4K · 1:05');
+  });
+
+  it('no hd, duration only → "12:34" (unchanged)', function () {
+    expect(toCardQuality({ duration: 754 })).toBe('12:34');
+  });
+
+  it('hd present, no duration → "HD"', function () {
+    expect(toCardQuality({ hd: 'HD' })).toBe('HD');
+  });
+
+  it('neither hd nor duration → quality stays undefined', function () {
+    expect(toCardQuality({})).toBe(undefined);
+  });
+});
+
+// ============================================================
+// S2 youjizz: per-card i-hd marker → v.hd = 'HD'
+// ============================================================
+// Inline reimplementation of youjizz _parseCards — kept IN SYNC with plugin.js.
+function yjParseCards(html) {
+  var items = [];
+  var blocks = html.split('<div class="video-thumb"');
+  for (var i = 1; i < blocks.length; i++) {
+    var block = blocks[i];
+    var hrefMatch = block.match(/href="(\/videos\/[^"]+\.html)"/);
+    if (!hrefMatch) continue;
+    var href = hrefMatch[1];
+    var videoUrl = 'https://www.youjizz.com' + href;
+    var idMatch = href.match(/(\d+)\.html/);
+    var id = idMatch ? idMatch[1] : String(i);
+    var thumbMatch = block.match(/data-original="([^"?#]+\.jpe?g)/i) ||
+                     block.match(/data-src="([^"?#]+\.jpe?g)/i) ||
+                     block.match(/src="([^"?#]+\.jpe?g)/i);
+    var thumb = thumbMatch ? thumbMatch[1] : '';
+    var hd = /class="i-hd"/.test(block) ? 'HD' : '';
+    items.push({ id: 'yj-' + id, source: 'youjizz', thumb: thumb, hd: hd,
+                 url: videoUrl, duration: 0, views: 0 });
+  }
+  return items;
+}
+
+describe('S2 youjizz — i-hd marker → v.hd "HD"', function () {
+  // Real per-card marker: <span class="i-hd" data-i18n="video.videothumb.hd">HD</span>
+  // confirmed via curl on youjizz.com (22/24 cards carried it).
+  it('card with i-hd span → hd "HD"', function () {
+    var html = '<div class="video-thumb"><a href="/videos/slug-12345.html">' +
+               '<img data-original="https://cdn/x.jpg">' +
+               '<span class="i-hd" data-i18n="video.videothumb.hd">HD</span></a></div>';
+    var items = yjParseCards(html);
+    expect(items.length).toBe(1);
+    expect(items[0].hd).toBe('HD');
+  });
+
+  it('card without i-hd → hd ""', function () {
+    var html = '<div class="video-thumb"><a href="/videos/slug-12345.html">' +
+               '<img data-original="https://cdn/x.jpg"></a></div>';
+    var items = yjParseCards(html);
+    expect(items[0].hd).toBe('');
+  });
+});
+
+// ============================================================
+// S5/S2 anti-drift — plugin.js source assertions
+// ============================================================
+describe('S5/S2 plugin.js source assertions (anti-drift)', function () {
+  var PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+
+  it('xvideos/xnxx no longer guess preview via thumb→/preview.mp4', function () {
+    // The two adapters dropped the sibling-guess. (pornhub uses data-mediabook,
+    // which is a different path — this asserts the GUESS regex is gone for KVS too.)
+    expect(/\.replace\(\/\\\/\[\^\\\/\]\+\$\/, '\/preview\.mp4'\)/.test(PLUGIN)).toBe(false);
+  });
+
+  it('xvideos + xnxx read data-pvv for preview', function () {
+    var matches = PLUGIN.match(/data-pvv="\(\[\^"\]\+\)"/g) || [];
+    expect(matches.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('xvideos parses the video-hd-mark badge', function () {
+    expect(/class="video-hd-mark"\[\^>\]\*>\\s\*\(\\d\+\)/.test(PLUGIN)).toBe(true);
+  });
+
+  it('youjizz parses the i-hd badge', function () {
+    expect(/\/class="i-hd"\/\.test\(block\)/.test(PLUGIN)).toBe(true);
+  });
+
+  it('toCard combines hd before the quality slot', function () {
+    expect(/if \(v\.hd\) _q = _q \? \(v\.hd \+ ' · ' \+ _q\) : v\.hd;/.test(PLUGIN)).toBe(true);
   });
 });
 

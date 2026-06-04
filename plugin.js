@@ -434,7 +434,11 @@
     function toCard(v) {
       v.img    = v.thumb;
       v.poster = v.thumb;
-      if (v.duration) v.quality = secToTime(v.duration);
+      // Combine an HD/4K badge with duration in the quality slot. v.hd is an
+      // optional adapter field (like duration) — rides along, no shape change.
+      var _q = v.duration ? secToTime(v.duration) : '';
+      if (v.hd) _q = _q ? (v.hd + ' · ' + _q) : v.hd;
+      if (_q) v.quality = _q;
       v.source = v.source || object.source_id;
       return v;
     }
@@ -1715,7 +1719,10 @@ SOURCES.push({
 
       var thumbMatch = block.match(/data-src="([^"]+)"/) || block.match(/src="([^"]+\.jpg[^"]*)"/);
       var thumb = thumbMatch ? thumbMatch[1] : '';
-      var preview = thumb ? thumb.replace(/\/[^\/]+$/, '/preview.mp4') : '';
+      // Real preview: the data-pvv attr on the card (a .../preview.mp4 CDN URL).
+      // Confirmed via curl on xvideos.com listing markup. No /preview.mp4 guess.
+      var pvvMatch = block.match(/data-pvv="([^"]+)"/);
+      var preview = pvvMatch ? pvvMatch[1].replace(/\\\//g, '/') : '';
 
       var titleMatch = block.match(/<p[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)/) ||
                        block.match(/title="([^"]+)"/);
@@ -1724,6 +1731,11 @@ SOURCES.push({
 
       var durMatch = block.match(/<span[^>]*class="[^"]*duration[^"]*"[^>]*>([^<]+)/);
       var duration = durMatch ? parseDur(durMatch[1].trim()) : 0;
+
+      // HD/4K badge: real per-card marker <span class="video-hd-mark">1080p</span>
+      // (also 720p/1440p/2160p). Confirmed via curl. 2160 → '4K', else 'HD'.
+      var hdMatch = block.match(/class="video-hd-mark"[^>]*>\s*(\d+)/);
+      var hd = hdMatch ? (parseInt(hdMatch[1], 10) >= 2160 ? '4K' : 'HD') : '';
 
       if (!numId && href) {
         var idFromHref = href.match(/video(\d+)\//);
@@ -1736,6 +1748,7 @@ SOURCES.push({
         title: title,
         thumb: thumb,
         preview: preview,
+        hd: hd,
         url: videoUrl,
         duration: duration,
         views: 0
@@ -1857,7 +1870,10 @@ SOURCES.push({
 
       var thumbMatch = block.match(/data-src="([^"]+)"/) || block.match(/src="([^"]+\.jpg[^"]*)"/);
       var thumb = thumbMatch ? thumbMatch[1] : '';
-      var preview = thumb ? thumb.replace(/\/[^\/]+$/, '/preview.mp4') : '';
+      // Real preview: the data-pvv attr on the card (a .../preview.mp4 CDN URL).
+      // Confirmed via curl on xnxx.com/search listing markup. No /preview.mp4 guess.
+      var pvvMatch = block.match(/data-pvv="([^"]+)"/);
+      var preview = pvvMatch ? pvvMatch[1].replace(/\\\//g, '/') : '';
 
       var titleMatch = block.match(/class="title"[^>]*>([^<]+)/) ||
                        block.match(/title="([^"]+)"/) ||
@@ -2327,11 +2343,16 @@ SOURCES.push({
       var durMatch = block.match(/<div[^>]*class="[^"]*duration[^"]*"[^>]*>([^<]+)/);
       var duration = durMatch ? parseDur(durMatch[1].trim()) : 0;
 
+      // HD badge: real per-card marker <span class="i-hd" ...>HD</span>.
+      // Confirmed via curl on youjizz.com. No resolution exposed → 'HD' only.
+      var hd = /class="i-hd"/.test(block) ? 'HD' : '';
+
       items.push({
         id: 'yj-' + id,
         source: 'youjizz',
         title: title,
         thumb: thumb,
+        hd: hd,
         url: videoUrl,
         duration: duration,
         views: 0
