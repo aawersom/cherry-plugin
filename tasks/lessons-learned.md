@@ -89,6 +89,17 @@ Active sort/category wasn't visible after the menu closed because the suffix wen
 ### L39: per-channel category/sort can't be verified from a datacenter IP — device-critical
 Sweeping category URLs here gave 301s (http→https, fine with -L), 403s (spankbang), and per-site markers differ — unreliable. KVS `?sort_by=` verified working on BOTH category and default pages (xozilla/analdin) → default-popular sort is safe. "Which channel shows empty BBW" needs the user's residential IP + Lampa; defer to device-reported specifics rather than blind URL rewrites that risk breaking working channels. Owner constraint reaffirmed mid-task: don't change card-formation (parsing) or playback except clear bugs — browse-URL/sort changes are borderline, flag them.
 
+## cherry-cats-sorts-personalize (2026-06-04) — Mode: medium
+
+### L44: sort mechanisms are heterogeneous per site — query vs path vs API vs none
+A 24-agent extraction revealed sort is applied 4 different ways, so one engine approach can't fit all: (1) query param — `?sort_by=` (KVS: xozilla/analdin/hellporno/familyporn/perfektdamen/pornve), `?sort=` (pornobolt, lenporno); (2) API order — `&ordering=` (pornhub), `&order=` (eporner); (3) PATH segment — `/c/s:views/{slug}` (xvideos), `/categories/{slug}/{sort}/` (porntrex/3movs/crocotube/ebun/jopaonline/pornone), `/tags/{slug}/{sort}/` (xnxx); (4) NOT URL-addressable — DLE `dle_change_sort` POST/cookie + AJAX multifilter (24rolika/porndig/tizam) → leave `sorts:[]`. (5) GLOBAL-feed only, no per-category sort (youjizz/hqporner/spankbang) → sort swaps the no-category listing root. Gave `_kvsEngine` a `sortMode:'path'` flag for the KVS path-sort variants. Always curl-confirm the mechanism before wiring — query-on-a-path-sort-site silently returns the default order (looks like "sort doesn't work").
+
+### L45: label language = site CONTENT language for categories, but interface stays Russian
+User rule: the UI (menu items, sort names) is always Russian; CATEGORY names + video titles follow the site's own language (EN sites → English category labels `bbw:BBW, redhead:Redhead`; RU sites → Russian). So cfg.categories labels = native (verbatim from the site), cfg.sorts labels = Russian («По популярности» for the popular sort, which is the default).
+
+### L46: pornhub categories needed real slugs from /webmasters/categories (not numeric ids, not guesses)
+The authoritative category list is the `/webmasters/categories` endpoint (id↔slug). The API `&category=` takes the SLUG (`bbw`, `red-head`, `18-25`), and slugs differ from display names (redhead→`red-head`, teen→`18-25`, no `hairy`). Same lesson generalizes: get each site's real category index page for accurate slugs.
+
 ## cherry-channel-fixes A–F (2026-06-04) — Mode: medium
 
 ### L40: 24-agent workflow with a complex output SCHEMA failed 22/24; free-text succeeded
