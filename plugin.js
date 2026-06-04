@@ -591,25 +591,25 @@
     // P3.1: surface the active sort/category in the grid header. Filters are
     // otherwise invisible once the action menu closes. Resolves labels via the
     // source cfg so the header reads e.g. "Pornhub  ·  MILF  ·  Most recent".
-    function _titleWithFilters() {
-      var parts = [screenTitle];
-      var cfg = source && source.cfg ? source.cfg : null;
-      if (cfg) {
-        if (currentCategory && cfg.categories) parts.push(_findLabel(cfg.categories, currentCategory));
-        if (currentSort     && cfg.sorts)      parts.push(_findLabel(cfg.sorts, currentSort));
-      }
-      return parts.join('  ·  ');
-    }
-
     // Reload with a changed filter by pushing a fresh activity. Calling
     // comp.create() again does NOT re-render an InteractionCategory grid, so
     // sort/category changes were silently ignored — push the new params instead.
-    // _source.name is the clean base title; _titleWithFilters re-derives the suffix.
+    // The ACTIVITY title (top bar) carries the active filter so it stays visible
+    // after the menu closes (build()'s title alone isn't shown in the header).
+    function _filteredTitle(sort, category) {
+      var base = _source ? _source.name : screenTitle;
+      var parts = [base];
+      if (_source && _source.cfg) {
+        if (category && _source.cfg.categories) parts.push(_findLabel(_source.cfg.categories, category));
+        if (sort     && _source.cfg.sorts)      parts.push(_findLabel(_source.cfg.sorts, sort));
+      }
+      return parts.join('  ·  ');
+    }
     function _pushFiltered(sort, category) {
       Lampa.Activity.push({
         component: 'cherry_grid',
         source_id: object.source_id,
-        title:     _source ? _source.name : screenTitle,
+        title:     _filteredTitle(sort, category),
         query:     object.query || '',
         sort:      sort,
         category:  category,
@@ -742,7 +742,7 @@
           return;
         }
         // P3.1: header reflects the active sort/category filter.
-        _this.build({ title: _titleWithFilters(), results: items, total_pages: total });
+        _this.build({ title: screenTitle, results: items, total_pages: total });
         _this.activity.loader(false);
         // 16:9 landscape cards, 5 per row (CSS scoped via .cherry-cat + Lampa cols--5)
         try {
@@ -760,13 +760,13 @@
     comp.nextPageReuest = function (object, resolve, reject) {
       // Single-page modes never paginate.
       if (object.is_favorites || object._related_items || (object.all_sources && object.query)) {
-        resolve({ title: _titleWithFilters(), results: [], total_pages: 1 });
+        resolve({ title: screenTitle, results: [], total_pages: 1 });
         return;
       }
       var nextPage = currentPage + 1;
       _gridLoad(object, nextPage, function (items, total) {
         currentPage = nextPage;
-        resolve({ title: _titleWithFilters(), results: items, total_pages: total });
+        resolve({ title: screenTitle, results: items, total_pages: total });
       }, reject);
     };
 
@@ -2748,12 +2748,20 @@ function _porntrexPages(html) {
 
       browse: function(category, page, sort) {
         var p = page || 1;
+        // Default to the first configured sort (Популярное / video_viewed) when the
+        // user hasn't chosen one. Verified: KVS accepts ?sort_by= on BOTH category and
+        // default pages (xozilla/analdin return cards either way).
+        var s  = sort || (cfg.sorts && cfg.sorts[0] && cfg.sorts[0].id) || '';
+        var sp = cfg.sortParam || 'sort_by';
         var url;
         if (category && cfg.categoryFmt) {
           url = _buildCatUrl(cfg.categoryFmt, category, p, cfg.catPageBase || 1, cfg.catPage1Omit !== false);
-          if (sort) url += (url.indexOf('?') >= 0 ? '&' : '?') + (cfg.sortParam || 'sort_by') + '=' + sort;
         } else {
           url = cfg.browseUrl(p);
+        }
+        // Append sort unless the URL already carries that param (avoids ?sort=mv dupes).
+        if (s && url.indexOf(sp + '=') === -1) {
+          url += (url.indexOf('?') >= 0 ? '&' : '?') + sp + '=' + s;
         }
         return cherryFetch(url).then(function(html) {
           return {

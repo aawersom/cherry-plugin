@@ -1428,13 +1428,16 @@ describe('UI/UX v2: P2.3 home letter tiles', () => {
 });
 
 describe('UI/UX v2: P3.1 active filter in grid title', () => {
-  it('_titleWithFilters helper resolves labels via _findLabel', () => {
-    expect(SRC).toMatch(/function _titleWithFilters\(\)/);
-    expect(SRC).toMatch(/_titleWithFilters[\s\S]{0,300}_findLabel\(/);
+  it('active filter is carried on the ACTIVITY title via _filteredTitle + _findLabel', () => {
+    // The filter must live on the pushed activity title (top bar), not just build().
+    expect(SRC).toMatch(/function _filteredTitle\(sort, category\)/);
+    expect(SRC).toMatch(/_filteredTitle[\s\S]{0,300}_findLabel\(/);
+    expect(SRC).toMatch(/title:\s*_filteredTitle\(sort, category\)/);
   });
-  it('build()/resolve() use the filtered title, not bare screenTitle', () => {
-    expect(SRC).toMatch(/\.build\(\{\s*title:\s*_titleWithFilters\(\)/);
-    expect(SRC).toMatch(/resolve\(\{\s*title:\s*_titleWithFilters\(\)/);
+  it('build()/resolve() use screenTitle (which already equals the filtered activity title)', () => {
+    // No _titleWithFilters anymore — would double the suffix on top of the activity title.
+    expect(SRC).not.toMatch(/_titleWithFilters/);
+    expect(SRC).toMatch(/\.build\(\{\s*title:\s*screenTitle/);
   });
 });
 
