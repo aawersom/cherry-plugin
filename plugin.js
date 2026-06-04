@@ -492,6 +492,22 @@
       }
     }
 
+    // Geometric right-edge test: is the focused card the rightmost in its row?
+    // (no other card on the same row sits to its right). Independent of how
+    // Lampa.Controller.move reflects focus — robust across builds.
+    function _atRightEdge() {
+      var focused = html.find('.cherry-card.focus')[0];
+      if (!focused) return false;
+      var r = focused.getBoundingClientRect();
+      var cards = html.find('.cherry-card');
+      for (var i = 0; i < cards.length; i++) {
+        var o = cards[i].getBoundingClientRect();
+        // same row (tops within half a card height) AND to the right
+        if (Math.abs(o.top - r.top) < r.height / 2 && o.left > r.left + 2) return false;
+      }
+      return true;
+    }
+
     function _findLabel(arr, id) {
       for (var i = 0; i < arr.length; i++) {
         if (arr[i].id === id) return arr[i].label;
@@ -667,20 +683,16 @@
         up:    function () { if (_navMoving) return; _navMoving = true; Lampa.Controller.move('up');   _navMoving = false; },
         down:  function () { if (_navMoving) return; _navMoving = true; Lampa.Controller.move('down'); _navMoving = false; maybeLoadMore(); },
         left:  function () { if (_navMoving) return; _navMoving = true; Lampa.Controller.move('left'); _navMoving = false; },
-        // Right moves between cards; at the right edge (focus can't advance) it
-        // opens the Поиск → Сортировка → Категории action menu.
+        // Right moves between cards; only at the geometric right edge (no card
+        // to the right in this row) does it open the action menu. Geometric test
+        // avoids relying on move()'s focus-update timing.
         right: function () {
           if (_navMoving) return;            // nested edge re-dispatch — bail out
-          var before = html.find('.focus')[0];
+          if (_atRightEdge()) { openActionsMenu(); return; }
           _navMoving = true;
           Lampa.Controller.move('right');
           _navMoving = false;
-          var after = html.find('.focus')[0];
-          if (before && before === after) {
-            openActionsMenu();
-          } else {
-            maybeLoadMore();
-          }
+          maybeLoadMore();
         },
         back:  function () { Lampa.Activity.backward(); }
       });
