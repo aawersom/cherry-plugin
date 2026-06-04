@@ -1205,3 +1205,27 @@ describe('Batch 2 categories — plugin.js source assertions (anti-drift)', () =
     });
   });
 });
+
+// ── Batch 3: Deno-routed categories (xnxx, eporner, pornone, perfektdamen, hqporner) ──
+describe('Batch 3 categories — plugin.js source assertions (anti-drift)', () => {
+  // Category-URL templates must be present (position-independent — cfg may sit far from id).
+  var fmts = {
+    xnxx: 'https://www.xnxx.com/search/{slug}/{page}',
+    pornone: 'https://pornone.com/{slug}/{page}/',
+    perfektdamen: 'https://www.perfektdamen.co/tags/{slug}/{page}/',
+    hqporner: 'https://hqporner.com/category/{slug}/{page}'
+  };
+  Object.keys(fmts).forEach(function (id) {
+    it(id + ' wires its categoryFmt template', () => {
+      expect(SRC).toContain(fmts[id]);
+    });
+  });
+  it('eporner category uses API query (slug→keyword)', () => {
+    expect(SRC).toContain('category.replace(/-/g');
+  });
+  it('Deno adapters shipped category lists (representative labels present)', () => {
+    expect(SRC).toContain('Вебкам');   // eporner webcam
+    expect(SRC).toContain('Трансы');   // hqporner shemale
+    expect(SRC).toContain('Бабушки');  // pornone granny
+  });
+});

@@ -2409,10 +2409,15 @@ SOURCES.push({
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
+  cfg: { categories: _cats('amateur:Любительское,anal:Анал,asian:Азиатки,bbw:BBW,big-ass:Большая жопа,big-tits:Большие сиськи,blonde:Блондинки,blowjob:Минет,brunette:Брюнетки,creampie:Кремпай,cumshot:Камшот,ebony:Чёрные,hardcore:Жёсткое,hentai:Хентай,interracial:Межрасовое,japanese:Японское,latina:Латинки,lesbian:Лесбиянки,mature:Зрелые,milf:MILF,pov:От первого лица,public:На публике,redhead:Рыжие,teen:Молодые,threesome:Втроём'), sorts: [] },
+
   browse: function(category, page) {
     var self = this;
     var p = page || 1;
-    var url = 'https://www.xnxx.com/?k=new&p=' + (p - 1);
+    // xnxx has no category pages — browse-by-category is tag search /search/{slug}/{page} (0-based page)
+    var url = category
+      ? _buildCatUrl('https://www.xnxx.com/search/{slug}/{page}', category, p, 0, false)
+      : 'https://www.xnxx.com/?k=new&p=' + (p - 1);
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html);
       return { items: items, total_pages: p + 10 };
@@ -2445,6 +2450,7 @@ SOURCES.push({
   id: 'eporner',
   name: 'Eporner',
   host: 'eporner.com',
+  cfg: { categories: _cats('4k-porn:4K,amateur:Любительское,anal:Анал,asian:Азиатки,bbw:BBW,bdsm:БДСМ,big-ass:Большая жопа,big-dick:Большой член,big-tits:Большие сиськи,blonde:Блондинки,blowjob:Минет,brunette:Брюнетки,creampie:Кремпай,cumshot:Камшот,double-penetration:Двойное,ebony:Чёрные,fetish:Фетиш,group-sex:Групповое,handjob:Дрочка,hardcore:Жёсткое,hentai:Хентай,interracial:Межрасовое,japanese:Японское,latina:Латинки,lesbians:Лесбиянки,massage:Массаж,mature:Зрелые,milf:MILF,public:На публике,redhead:Рыжие,squirt:Сквирт,teens:Молодые,threesome:Втроём,toys:Игрушки,webcam:Вебкам'), sorts: [] },
 
   _apiFetch: function(url) {
     // eporner JSON search/browse API has Access-Control-Allow-Origin: * — direct fetch is safe here.
@@ -2481,7 +2487,9 @@ SOURCES.push({
   browse: function(category, page) {
     var self = this;
     var p = page || 1;
-    var url = 'https://www.eporner.com/api/v2/video/search/?query=&per_page=30&page=' + p +
+    // Category via the JSON API search (slug → keyword); reuses _mapVideo. Hyphen → space.
+    var q = category ? encodeURIComponent(category.replace(/-/g, ' ')) : '';
+    var url = 'https://www.eporner.com/api/v2/video/search/?query=' + q + '&per_page=30&page=' + p +
       '&thumbsize=medium&order=most-popular&gay=0&format=json';
     return self._apiFetch(url).then(function(text) {
       var data = JSON.parse(text);
@@ -2725,10 +2733,14 @@ SOURCES.push({
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
+  cfg: { categories: _cats('4k-porn:4K,amateur:Любительское,anal-sex-hd:Анал HD,asian:Азиатки,babe:Красотки,bdsm:БДСМ,big-ass:Большая жопа,big-dick:Большой член,big-tits:Большие сиськи,blonde:Блондинки,blowjob:Минет,brunette:Брюнетки,casting:Кастинг,creampie:Кремпай,cumshot:Камшот,ebony:Чёрные,fetish:Фетиш,gangbang:Групповуха,group-sex:Групповое,handjob:Дрочка,hentai:Хентай,interracial:Межрасовое,latina:Латинки,lesbian:Лесбиянки,mature:Зрелые,milf:MILF,pov:От первого лица,public:На публике,redhead:Рыжие,russian:Русское,shemale:Трансы,small-tits:Маленькие сиськи,squirt:Сквирт,stockings:Чулки,teen-porn:Молодые,threesome:Втроём'), sorts: [] },
+
   browse: function(category, page) {
     var self = this;
     var p = page || 1;
-    var url = p > 1 ? 'https://hqporner.com/hdporn/' + p : 'https://hqporner.com/';
+    var url = category
+      ? _buildCatUrl('https://hqporner.com/category/{slug}/{page}', category, p, 1, true)
+      : (p > 1 ? 'https://hqporner.com/hdporn/' + p : 'https://hqporner.com/');
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html);
       // Pagination: look for highest page number in /hdporn/N links
@@ -2894,6 +2906,7 @@ SOURCES.push({
     id: 'pornone',
     name: 'PornOne',
     host: 'pornone.com',
+    cfg: { categories: _cats('amateur:Любительское,anal:Анал,arab:Арабское,asian:Азиатки,ass:Жопа,babes:Красотки,bbc:BBC,bbw:BBW,bdsm:БДСМ,big-boobs:Большие сиськи,big-dick:Большой член,blonde:Блондинки,blowjob:Минет,brunette:Брюнетки,busty:Грудастые,casting:Кастинг,creampie:Кремпай,cumshot:Камшот,ebony:Чёрные,fetish:Фетиш,gangbang:Групповуха,granny:Бабушки,hairy:Волосатые,hardcore:Жёсткое,interracial:Межрасовое,japanese:Японское,latina:Латинки,lesbian:Лесбиянки,massage:Массаж,mature:Зрелые,milf:MILF,mom:Мамки,pov:От первого лица,public:На публике,russian:Русское,teen:Молодые,threesome:Втроём'), sorts: [] },
 
     // WP REST API is tried first; HTML scraping is the fallback.
     _fromApi: function (text) {
@@ -2936,6 +2949,13 @@ SOURCES.push({
     browse: function (category, page) {
         var self = this;
         var p = page || 1;
+        if (category) {
+            // Category browses at ROOT /{slug}/{page}/ (HTML); reuse _pornoneCards parser.
+            var curl = _buildCatUrl('https://pornone.com/{slug}/{page}/', category, p, 1, true);
+            return cherryFetch(curl).then(function (html) {
+                return { items: _pornoneCards(html), total_pages: _pornonePages(html) };
+            }).catch(function () { return { items: [], total_pages: 0 }; });
+        }
         var apiUrl = 'https://pornone.com/wp-json/wp/v2/posts?orderby=date&order=desc' +
             '&per_page=20&page=' + p +
             '&_embed=wp%3Afeaturedmedia&_fields=id,title,link,_embedded';
@@ -3838,6 +3858,7 @@ SOURCES.push({
     id: 'perfektdamen',
     name: 'PerfektDamen',
     host: 'perfektdamen.co',
+    cfg: { categories: _cats('anal:Анал,18-year-old:18 лет,3d-porn:3D,3some:Втроём'), sorts: [] },
 
     search: function (query, page) {
         var url = page > 1
@@ -3849,6 +3870,13 @@ SOURCES.push({
     },
 
     browse: function (category, page) {
+        var p = page || 1;
+        if (category) {
+            var curl = _buildCatUrl('https://www.perfektdamen.co/tags/{slug}/{page}/', category, p, 1, true);
+            return cherryFetch(curl).then(function (html) {
+                return { items: _perfektCards(html), total_pages: _perfektPages(html) };
+            }).catch(function () { return { items: [], total_pages: 0 }; });
+        }
         // Popular / front page; pagination handled via browse page number if site supports it
         var url = 'https://perfektdamen.co/popular/';
         return cherryFetch(url).then(function (html) {
