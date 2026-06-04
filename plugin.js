@@ -1509,33 +1509,36 @@ SOURCES.push({
   },
 
   cfg: {
-    sorts: [
-      { id: 'mv',   label: 'Популярное'  },
-      { id: 'tr',   label: 'Трендовое'   },
-      { id: 'mr',   label: 'Свежее'      }
-    ],
-    // Pornhub categories are numeric ids passed to the webmasters API (&category=).
-    categories: _cats('1:Азиатки,3:Любительское,4:Большая жопа,5:Красотки,6:BBW,7:Анал,8:Большой член,9:Большие сиськи,11:Блондинки,13:Минет,14:Бондаж,15:Брюнетки,17:Кремпай,18:Камшот,19:Чёрные,20:Фетиш,21:Волосатые,22:Дрочка,23:Жёсткое,24:Латинки,25:Лесбиянки,26:Зрелые,27:MILF,28:Порнозвёзды,29:От первого лица,30:На публике,31:Рыжие,35:Маленькие сиськи,36:Сквирт,38:Молодые 18+,39:Втроём,40:Игрушки,41:Межрасовое,72:Групповуха,73:Японское,75:Русское,84:Вебкам')
+    // Valid webmasters API orderings (verified): mostviewed, mostrecent, rating, longest.
+    sorts: _cats('mostviewed:Популярное,rating:Топ рейтинга,mostrecent:Свежее,longest:Длинные'),
+    // Pornhub categories are SLUGS passed to the webmasters API (&category=), not numeric ids.
+    // Slugs verified against the webmasters/categories endpoint.
+    categories: _cats('asian:Азиатки,amateur:Любительское,big-ass:Большая жопа,babe:Красотки,bbw:BBW,anal:Анал,big-dick:Большой член,big-tits:Большие сиськи,blonde:Блондинки,blowjob:Минет,bondage:Бондаж,brunette:Брюнетки,creampie:Кремпай,cumshot:Камшот,ebony:Чёрные,fetish:Фетиш,handjob:Дрочка,hardcore:Жёсткое,latina:Латинки,lesbian:Лесбиянки,mature:Зрелые,milf:MILF,pornstar:Порнозвёзды,pov:От первого лица,public:На публике,red-head:Рыжие,small-tits:Маленькие сиськи,squirt:Сквирт,18-25:Молодые 18+,threesome:Втроём,toys:Игрушки,interracial:Межрасовое,gangbang:Групповуха,japanese:Японское,russian:Русское,webcam:Вебкам')
   },
+
+  // Webmasters API returns {videos:[...]} with NO total_pages key. It serves a
+  // full batch of PAGE_SIZE per page, so a full batch => assume next page exists.
+  _PAGE_SIZE: 30,
 
   search: function(query, page, sort) {
     var self = this;
     var p = page || 1;
-    var ordering = (sort && sort !== 'mv') ? sort : 'mostviewed';
+    var ordering = sort || 'mostviewed';
     var url = 'https://www.pornhub.com/webmasters/search?search=' + encodeURIComponent(query) +
       '&page=' + p + '&ordering=' + ordering + '&thumbsize=medium_hd';
     return cherryFetch(url).then(function(text) {
       var data = JSON.parse(text);
       var videos = data.videos || (data.data && data.data.videos) || [];
       var items = videos.map(function(v) { return self._mapVideo(v); });
-      return { items: items, total_pages: parseInt(data.total_pages || data.pagesTotal || 1, 10) };
+      var total_pages = (items.length >= self._PAGE_SIZE) ? (p + 1) : p;
+      return { items: items, total_pages: total_pages };
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
   browse: function(category, page, sort) {
     var self = this;
     var p = page || 1;
-    var ordering = (sort && sort !== 'mv') ? sort : 'mostviewed';
+    var ordering = sort || 'mostviewed';
     var url = 'https://www.pornhub.com/webmasters/search?search=&page=' + p +
       '&ordering=' + ordering + '&thumbsize=medium_hd' +
       (category ? '&category=' + encodeURIComponent(category) : '');
@@ -1543,7 +1546,8 @@ SOURCES.push({
       var data = JSON.parse(text);
       var videos = data.videos || (data.data && data.data.videos) || [];
       var items = videos.map(function(v) { return self._mapVideo(v); });
-      return { items: items, total_pages: parseInt(data.total_pages || data.pagesTotal || 1, 10) };
+      var total_pages = (items.length >= self._PAGE_SIZE) ? (p + 1) : p;
+      return { items: items, total_pages: total_pages };
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
