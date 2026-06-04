@@ -424,6 +424,9 @@
     var _canSearch = !object.is_favorites && !object.all_sources && !object._related_items && !object.model_url;
     var _hasSorts  = !!(source && source.cfg && source.cfg.sorts && source.cfg.sorts.length);
     var _hasCats   = !!(source && source.cfg && source.cfg.categories && source.cfg.categories.length);
+    // A2: all_sources search has no single source to honor a server sort, so offer
+    // a lightweight CLIENT-side sort (relevance/duration) applied in _gridLoad.
+    var _hasClientSort = !!(object.all_sources && object.query);
 
     // ---- card mapping (adapter VideoCard → base-renderer card_data) -------
     // Mutate in place so id/url/source/preview/model/views/duration ride along
@@ -474,11 +477,30 @@
         });
         Promise.all(promises).then(function (results) {
           var flat = [];
+          // A3(b): per-source title-match filter BEFORE slice(0,10). Unranked top-N
+          // from each source let irrelevant results dominate; keep only cards whose
+          // title contains the query. Skip the filter for non-ASCII (Cyrillic)
+          // queries — scraped titles are often English so a Cyrillic substring would
+          // wrongly empty every source. If a source's filtered slice is empty, fall
+          // back to its unfiltered top-N (don't drop a whole source).
+          var ql = (object.query || '').toLowerCase();
+          var isLatin = /^[\x00-\x7F]*$/.test(ql);
           results.forEach(function (r) {
             if (r && r.items && r.items.length) {
-              flat = flat.concat(r.items.slice(0, 10));
+              var picked = r.items;
+              if (ql && isLatin) {
+                var matched = r.items.filter(function (v) { return (v.title || '').toLowerCase().indexOf(ql) !== -1; });
+                if (matched.length) picked = matched;
+              }
+              flat = flat.concat(picked.slice(0, 10));
             }
           });
+          // A2: client-side sort for all_sources search (no single source to honor
+          // a server sort). Only duration is uniformly available across adapters;
+          // 'relevance' keeps the natural per-source-interleaved order (default).
+          if (object.client_sort === 'duration') {
+            flat.sort(function (a, b) { return (b.duration || 0) - (a.duration || 0); });
+          }
           resolve(flat.map(toCard), 1);
         }).catch(function (err) {
           console.warn('[Cherry] loadAllSources error:', err);
@@ -605,9 +627,11 @@
         free:  true,
         nosave: true
       }, function (text) {
-        Lampa.Controller.toggle('content');
         var q = (text || '').trim();
-        if (!q) return;
+        // A1: toggle ONLY on the empty-query path (no push). On the push path the
+        // pushed cherry_grid's own start() re-binds the controller — toggling here
+        // first would bind to the OLD activity and leave focus nowhere (dead nav).
+        if (!q) { Lampa.Controller.toggle('content'); return; }
         Lampa.Activity.push({
           component: 'cherry_grid',
           title:     _source.name + ': ' + q,
@@ -646,6 +670,35 @@
       });
     }
 
+    // A2: client-side sort for all_sources search. Re-pushes the same all_sources
+    // activity with a client_sort param that _gridLoad applies after building flat.
+    // Only metadata that exists on every adapter card is offered (duration);
+    // 'relevance' is the natural per-source-interleaved order (client_sort unset).
+    // NOTE: per-adapter search(query,page) mostly IGNORES the sort param (only
+    // xvideos/pornhub/kvs honor it) — single-source search-sort is best-effort.
+    function _openClientSort() {
+      var items = [
+        { title: Lampa.Lang.translate('cherry_sort_relevance'), id: '' },
+        { title: Lampa.Lang.translate('cherry_sort_duration'),  id: 'duration' }
+      ];
+      Lampa.Select.show({
+        title: Lampa.Lang.translate('cherry_sort'),
+        items: items,
+        onSelect: function (item) {
+          Lampa.Activity.push({
+            component:   'cherry_grid',
+            title:       object.title,
+            source_id:   object.source_id,
+            query:       object.query,
+            all_sources: true,
+            client_sort: item.id,
+            page:        1
+          });
+        },
+        onBack: function () { Lampa.Controller.toggle('content'); }
+      });
+    }
+
     /**
      * Right-edge action menu. Opened by pressing RIGHT at the grid's right edge
      * (Lampa's native filter idiom). Items appear in fixed order:
@@ -654,17 +707,19 @@
      */
     function openActionsMenu() {
       var items = [];
-      if (_canSearch) items.push({ title: Lampa.Lang.translate('cherry_search'),   action: 'search' });
-      if (_hasSorts)  items.push({ title: Lampa.Lang.translate('cherry_sort'),     action: 'sort'   });
-      if (_hasCats)   items.push({ title: Lampa.Lang.translate('cherry_category'), action: 'cat'    });
+      if (_canSearch)     items.push({ title: Lampa.Lang.translate('cherry_search'),   action: 'search'     });
+      if (_hasSorts)      items.push({ title: Lampa.Lang.translate('cherry_sort'),     action: 'sort'       });
+      if (_hasClientSort) items.push({ title: Lampa.Lang.translate('cherry_sort'),     action: 'clientsort' });
+      if (_hasCats)       items.push({ title: Lampa.Lang.translate('cherry_category'), action: 'cat'        });
       if (!items.length) return false;
       Lampa.Select.show({
         title: _source ? _source.name : 'Cherry',
         items: items,
         onSelect: function (item) {
-          if      (item.action === 'search') _openSearch();
-          else if (item.action === 'sort')   _openSort();
-          else if (item.action === 'cat')    _openCat();
+          if      (item.action === 'search')     _openSearch();
+          else if (item.action === 'sort')       _openSort();
+          else if (item.action === 'clientsort') _openClientSort();
+          else if (item.action === 'cat')        _openCat();
         },
         onBack: function () { Lampa.Controller.toggle('content'); }
       });
@@ -926,9 +981,11 @@
               free:  true,
               nosave: true
             }, function (value) {
-              Lampa.Controller.toggle('content');
               var q = (value || '').trim();
-              if (!q) return;
+              // A1: toggle ONLY on the empty-query path (no push). On the push path
+              // the pushed cherry_grid's start() re-binds the controller; toggling
+              // here first would bind the OLD activity and kill arrow nav.
+              if (!q) { Lampa.Controller.toggle('content'); return; }
               Lampa.Activity.push({
                 component:   'cherry_grid',
                 title:       Lampa.Lang.translate('cherry_search') + ': ' + q,
@@ -1045,6 +1102,8 @@
       cherry_similar:          { ru: 'Похожие видео',       en: 'Similar videos'     },
       cherry_sort:             { ru: 'Сортировка',          en: 'Sort'               },
       cherry_sort_default:     { ru: 'По умолчанию',        en: 'Default'            },
+      cherry_sort_relevance:   { ru: 'Релевантность',       en: 'Relevance'          },
+      cherry_sort_duration:    { ru: 'По длительности',     en: 'By duration'        },
       cherry_category:         { ru: 'Категория',           en: 'Category'           },
       cherry_category_default: { ru: 'Все категории',       en: 'All categories'     },
       cherry_model_videos:     { ru: 'Видео модели',        en: 'Model videos'       },
@@ -1861,8 +1920,11 @@ SOURCES.push({
   search: function(query, page) {
     var self = this;
     var p = page || 1;
+    // A3(a): SEARCH uses eporner's default/relevance order (NO order param) so real
+    // title matches surface instead of being drowned by all-time-popular videos.
+    // browse() below keeps order=most-popular intentionally (category = popularity sort).
     var url = 'https://www.eporner.com/api/v2/video/search/?query=' + encodeURIComponent(query) +
-      '&per_page=30&page=' + p + '&thumbsize=medium&order=most-popular&gay=0&format=json';
+      '&per_page=30&page=' + p + '&thumbsize=medium&gay=0&format=json';
     return self._apiFetch(url).then(function(text) {
       var data = JSON.parse(text);
       return { items: (data.videos || []).map(self._mapVideo), total_pages: parseInt(data.total_pages, 10) || 1 };
