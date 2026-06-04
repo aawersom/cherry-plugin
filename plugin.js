@@ -407,9 +407,11 @@
     var comp = new Lampa.InteractionCategory(object);
 
     // Paging + filter state (the base class owns scroll/focus/nav; we own data).
+    // Filters live in the activity params so a change reloads via Activity.push
+    // (InteractionCategory does NOT re-render on a second create() call).
     var currentPage     = 1;
-    var currentSort     = '';
-    var currentCategory = '';
+    var currentSort     = object.sort || '';
+    var currentCategory = object.category || '';
 
     var _currentPreviewEl = null;
 
@@ -577,31 +579,42 @@
       return parts.join('  ·  ');
     }
 
-    // Reload the grid from page 1 with the updated sort/category. The base
-    // class owns the rendered grid, so re-run create()'s build path.
-    function _reload() {
-      currentPage = 1;
-      comp.create();
+    // Reload with a changed filter by pushing a fresh activity. Calling
+    // comp.create() again does NOT re-render an InteractionCategory grid, so
+    // sort/category changes were silently ignored — push the new params instead.
+    // _source.name is the clean base title; _titleWithFilters re-derives the suffix.
+    function _pushFiltered(sort, category) {
+      Lampa.Activity.push({
+        component: 'cherry_grid',
+        source_id: object.source_id,
+        title:     _source ? _source.name : screenTitle,
+        query:     object.query || '',
+        sort:      sort,
+        category:  category,
+        page:      1
+      });
+      Lampa.Controller.toggle('content');
     }
 
     function _openSearch() {
       if (!_source) return;
-      if (typeof Lampa.Keyboard === 'undefined' || !Lampa.Keyboard.show) return;
-      Lampa.Keyboard.show({
-        title:   Lampa.Lang.translate('cherry_search'),
-        value:   object.query || '',
-        onenter: function (text) {
-          var q = (text || '').trim();
-          if (!q) { Lampa.Controller.toggle('content'); return; }
-          Lampa.Activity.push({
-            component: 'cherry_grid',
-            title:     _source.name + ': ' + q,
-            source_id: object.source_id,
-            query:     q,
-            page:      1
-          });
-        },
-        onback: function () { Lampa.Controller.toggle('content'); }
+      if (typeof Lampa.Input === 'undefined' || !Lampa.Input.edit) return;
+      Lampa.Input.edit({
+        title: Lampa.Lang.translate('cherry_search'),
+        value: object.query || '',
+        free:  true,
+        nosave: true
+      }, function (text) {
+        Lampa.Controller.toggle('content');
+        var q = (text || '').trim();
+        if (!q) return;
+        Lampa.Activity.push({
+          component: 'cherry_grid',
+          title:     _source.name + ': ' + q,
+          source_id: object.source_id,
+          query:     q,
+          page:      1
+        });
       });
     }
 
@@ -613,9 +626,7 @@
         title: Lampa.Lang.translate('cherry_sort'),
         items: items,
         onSelect: function (item) {
-          currentSort = item.id;
-          _reload();
-          Lampa.Controller.toggle('content');
+          _pushFiltered(item.id, currentCategory);
         },
         onBack: function () { Lampa.Controller.toggle('content'); }
       });
@@ -629,9 +640,7 @@
         title: Lampa.Lang.translate('cherry_category'),
         items: items,
         onSelect: function (item) {
-          currentCategory = item.id;
-          _reload();
-          Lampa.Controller.toggle('content');
+          _pushFiltered(currentSort, item.id);
         },
         onBack: function () { Lampa.Controller.toggle('content'); }
       });
@@ -898,34 +907,36 @@
 
       this.build({ title: 'Cherry', results: results, total_pages: 1 });
       this.activity.loader(false);
-      // Match the grid: 16:9 cards, 5 per row.
+      // Picker = small square tiles, 7 per row, so all 26 sources fit on screen.
+      // .cherry-cat → tile + focus styling; .cherry-home → square aspect override.
       try {
         var root = this.render();
-        root.addClass('cherry-cat');
-        root.find('.category-full').addClass('mapping--grid cols--5');
+        root.addClass('cherry-cat cherry-home');
+        root.find('.category-full').addClass('mapping--grid cols--7');
       } catch (e) {}
     };
 
     comp.cardRender = function (object, element, card) {
       card.onEnter = function () {
         if (element._kind === 'search') {
-          if (typeof Lampa.Keyboard !== 'undefined' && Lampa.Keyboard.show) {
-            Lampa.Keyboard.show({
-              title:   Lampa.Lang.translate('cherry_search'),
-              value:   '',
-              onenter: function (value) {
-                var q = (value || '').trim();
-                if (!q) { Lampa.Controller.toggle('content'); return; }
-                Lampa.Activity.push({
-                  component:   'cherry_grid',
-                  title:       Lampa.Lang.translate('cherry_search') + ': ' + q,
-                  source_id:   (SOURCES[0] && SOURCES[0].id) || '',
-                  query:       q,
-                  all_sources: true,
-                  page:        1
-                });
-              },
-              onback: function () { Lampa.Controller.toggle('content'); }
+          if (typeof Lampa.Input !== 'undefined' && Lampa.Input.edit) {
+            Lampa.Input.edit({
+              title: Lampa.Lang.translate('cherry_search'),
+              value: '',
+              free:  true,
+              nosave: true
+            }, function (value) {
+              Lampa.Controller.toggle('content');
+              var q = (value || '').trim();
+              if (!q) return;
+              Lampa.Activity.push({
+                component:   'cherry_grid',
+                title:       Lampa.Lang.translate('cherry_search') + ': ' + q,
+                source_id:   (SOURCES[0] && SOURCES[0].id) || '',
+                query:       q,
+                all_sources: true,
+                page:        1
+              });
             });
           }
         } else if (element._kind === 'favorites') {
@@ -982,9 +993,13 @@
       '  object-fit: cover;',
       '}',
 
-      /* ---- P2.1 Brand focus ring (box-shadow, no layout shift) -- */
+      /* ---- P2.1 Brand focus ring (single pink; kill native outer frame) -- */
       '.cherry-cat .card{transform-origin:center;}',
-      '.cherry-cat .card.focus .card__view{box-shadow:0 0 0 .16em #e75480,0 .5em 2em rgba(231,84,128,.45);transform:scale(1.04);transition:transform .12s ease, box-shadow .12s ease;}',
+      '.cherry-cat .card.focus{box-shadow:none !important;outline:none !important;}',
+      '.cherry-cat .card.focus .card__view{box-shadow:0 0 0 .16em #e75480,0 .5em 2em rgba(231,84,128,.45) !important;transform:scale(1.04);transition:transform .12s ease, box-shadow .12s ease;}',
+
+      /* ---- Home picker: small SQUARE tiles, all sources visible -- */
+      '.cherry-home .card__view{padding-bottom:100% !important;height:0 !important;position:relative;}',
 
       /* ---- P2.2 Title legibility (2-line clamp, full white) ----- */
       '.cherry-cat .card__title{color:#fff;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;white-space:normal;overflow:hidden;max-height:2.6em;}',

@@ -411,10 +411,16 @@ describe('P2: plugin.js source assertions (anti-drift)', () => {
     expect(SRC).not.toContain('cherry_group_label');
   });
 
-  it('sort/category reload re-runs create() from page 1 (no DOM card surgery)', () => {
-    // The base class owns the rendered grid, so a filter change reloads via
-    // _reload() -> comp.create(); there is no manual .cherry-card removal.
-    expect(SRC).toMatch(/function _reload\(\)[\s\S]{0,120}comp\.create\(\)/);
+  it('filter change reloads via Activity.push (NOT a second create()) with sort+category', () => {
+    // InteractionCategory does not re-render on a second create() call, so a
+    // sort/category change pushes a fresh activity carrying the new params.
+    expect(SRC).toMatch(/function _pushFiltered\(sort, category\)[\s\S]{0,260}Lampa\.Activity\.push/);
+    expect(SRC).toMatch(/_pushFiltered\(item\.id, currentCategory\)/); // sort change
+    expect(SRC).toMatch(/_pushFiltered\(currentSort, item\.id\)/);     // category change
+    // Filters are seeded from the activity params on construction.
+    expect(SRC).toMatch(/currentSort\s*=\s*object\.sort/);
+    expect(SRC).toMatch(/currentCategory\s*=\s*object\.category/);
+    expect(SRC).not.toMatch(/function _reload\(\)/); // old broken reload gone
   });
 
   it('all_sources caps each source at 10 (slice(0, 10)) before flat concat', () => {
@@ -612,9 +618,11 @@ describe('P0: plugin.js source assertions (anti-drift)', () => {
     expect(SRC).not.toMatch(/function _atRightEdge\(/);
   });
 
-  it('per-source search opens Keyboard and pushes source_id without all_sources', () => {
-    expect(SRC).toMatch(/_openSearch[\s\S]{0,400}Lampa\.Keyboard\.show/);
+  it('per-source search opens Lampa.Input.edit and pushes source_id without all_sources', () => {
+    // Lampa.Keyboard.show does not exist on this build; Input.edit is the real API.
+    expect(SRC).toMatch(/_openSearch[\s\S]{0,400}Lampa\.Input\.edit/);
     expect(SRC).toMatch(/_openSearch[\s\S]{0,600}Lampa\.Activity\.push\([\s\S]{0,300}source_id/);
+    expect(SRC).not.toMatch(/Lampa\.Keyboard\.show/);
   });
 
   it('old chip classes (actions bar) are fully removed', () => {
@@ -927,9 +935,10 @@ describe('UX-A: plugin.js source assertions (anti-drift)', () => {
     expect(MAIN).toMatch(/element\._kind\s*===\s*'source'/);
   });
 
-  it('search kind opens Keyboard then pushes an all_sources grid', () => {
-    expect(MAIN).toMatch(/Lampa\.Keyboard\.show/);
+  it('search kind opens Lampa.Input.edit then pushes an all_sources grid', () => {
+    expect(MAIN).toMatch(/Lampa\.Input\.edit/);
     expect(MAIN).toMatch(/all_sources:\s*true/);
+    expect(MAIN).not.toMatch(/Lampa\.Keyboard\.show/);
   });
 
   it('favorites kind pushes is_favorites grid', () => {
