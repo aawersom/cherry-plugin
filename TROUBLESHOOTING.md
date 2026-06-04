@@ -2,9 +2,24 @@
 
 Фиксирует все нетривиальные проблемы, с которыми столкнулись при разработке, и их решения.
 
+> **⚠ Навигационный переезд (2026-06-04).** `cherry_grid` и `cherry_main` переписаны на
+> `Lampa.InteractionCategory` (базовый класс владеет фокусом, скроллом и пагинацией).
+> Из-за этого разделы **1, 2, 7** ниже и часть таблицы в разделе **10** описывают СТАРЫЙ
+> рукописный слой навигации/скролла и **более не отражают код**:
+> - `this.render = function(){return html}` — больше не нужен (рендерит базовый класс).
+> - `scroll.body().on('scroll', …)` и `new Lampa.Scroll(...)` — плагин их больше не вызывает
+>   (скролл + бесконечная пагинация у базового класса через `nextPageReuest`).
+> - CSS `.cherry-card*` / `.cherry-cards-wrap` grid — удалён; карточки = сток `.card`,
+>   рестайл через `.cherry-cat` (16:9, `cols--5`).
+> - `Lampa.Controller.add(name, {up,down,left,right})` — УДАЛЁН (его `Controller.move()`
+>   и вызывал бесконечную рекурсию). Остался только `Lampa.Controller.toggle('content')`.
+>
+> Разделы 6, 12, 14, 15 (прокси / HLS / токены) актуальны. Поиск открывается через
+> **`Lampa.Input.edit`**, а не `Lampa.Keyboard` (его нет на этой сборке).
+
 ---
 
-## 1. `this.component.render is not a function`
+## 1. `this.component.render is not a function`  *(устарело — см. переезд выше)*
 
 **Симптом:** При открытии любого экрана Lampa кидает TypeError в `ActivitySlide.create`.
 
@@ -18,7 +33,7 @@ this.render = function () { return html; };
 
 ---
 
-## 2. `scroll.listener.follow` / `scroll.follow` — not a function
+## 2. `scroll.listener.follow` / `scroll.follow` — not a function  *(устарело — скролл теперь у InteractionCategory)*
 
 **Симптом:** TypeError при открытии CherryGrid.
 
@@ -121,7 +136,7 @@ function proxyM3u8(m3u8Url) {
 
 ---
 
-## 7. Карточки прижаты влево, один ряд
+## 7. Карточки прижаты влево, один ряд  *(устарело — grid теперь стоковый `.card` + `.cherry-cat cols--5`)*
 
 **Симптом:** Все видео-карточки в одну строку слева.
 
@@ -174,17 +189,19 @@ if (Lampa.Storage.get('cherry_proxy_key', null) === null) {
 |---|---|
 | `scroll.listener.follow('end', fn)` | ❌ `listener` = undefined |
 | `scroll.follow('end', fn)` | ❌ метод не существует |
-| `scroll.body().on('scroll', fn)` | ✅ работает |
+| `scroll.body().on('scroll', fn)` | ⚠ работало, но плагин больше НЕ использует (скролл у InteractionCategory) |
+| `new Lampa.InteractionCategory(object)` | ✅ базовый класс для cherry_grid/cherry_main (нав + скролл + пагинация) |
+| `Lampa.Controller.add(name, {up,down,left,right})` | ❌ УДАЛЁН — `Controller.move()` внутри хендлера = бесконечная рекурсия |
+| `Lampa.Input.edit({title,value,free,nosave}, cb)` | ✅ TV-клавиатура для поиска (вместо несуществующего `Lampa.Keyboard.show`) |
+| `Lampa.Empty({ descr })` | ✅ кастомное empty/error/favorites-hint сообщение |
 | `Lampa.Reguest.quiet(url, resolve, reject)` | ❌ авто-парсит JSON, нет reject на HTTP ошибках |
 | `fetch(url).then(r => r.text())` | ✅ работает |
 | `Lampa.Player.play({ url, title, poster, quality })` | ✅ quality-dict передаётся в плеер |
-| `card.on('hover:enter', fn)` | ✅ нажатие OK на пульте |
-| `card.on('hover:long', fn)` | ✅ долгое нажатие |
-| `card.on('hover:focus', fn)` | ✅ фокус на карточке |
+| `card.onEnter / onMenu / onFocus` (в `cardRender`) | ✅ OK / долгое нажатие / фокус (хуки InteractionCategory) |
 | `Lampa.Select.show({ title, items, onSelect, onBack })` | ✅ выпадающее меню |
 | `Lampa.Activity.push({ component, ... })` | ✅ открыть новый экран |
 | `Lampa.Activity.backward()` | ✅ назад |
-| `Lampa.Controller.toggle('name')` | ✅ переключить контроллер |
+| `Lampa.Controller.toggle('content')` | ✅ вернуть фокус сетке после меню/пуша |
 | `Lampa.Storage.get(key, default)` | ✅ читает localStorage |
 | `Lampa.Storage.set(key, value)` | ✅ пишет localStorage |
 | `Lampa.Component.add('name', Ctor)` | ✅ регистрация компонента |

@@ -3,9 +3,12 @@
 ## Текущая архитектура тестов
 
 ```
-npx vitest run                      → 51 unit-тестов (mock-based, ~5s)
-node test/cherry-lampa-e2e.mjs     → 26 источников в реальном lampa.mx (~10-15 min)
+npx vitest run                      → ~463 unit-тестов (5 файлов, mock-based)
+node test/cherry-lampa-e2e.mjs     → источники в реальном lampa.mx (~10-15 min)
 ```
+
+> Навигация компонентов теперь на `Lampa.InteractionCategory` — unit-тесты покрывают
+> чистые helpers (парсеры/URL-билдеры/KVS-движок/UX-логику), а не DOM-навигацию.
 
 ### Что делает E2E-тест сейчас
 
@@ -121,7 +124,7 @@ v.play().catch(() => {});  // обязательно — иначе timeupdate �
 
 Текущий тест вызывает `s.browse()` и `s.getStream()` напрямую — минует `playVideo()`, которая применяет `bestQualityUrl()` и `px()`. Реальный путь: меню → карточка → кнопка Play → `playVideo()` → `Lampa.Player.play()`.
 
-**Статус:** не реализован. Требует `headful`-верификации событий `Lampa.Listener` перед реализацией. Низкий приоритет — `bestQualityUrl` покрыта unit-тестами (51 тест), `px()` покрыта worker-тестами.
+**Статус:** не реализован. Требует `headful`-верификации событий `Lampa.Listener` перед реализацией. Низкий приоритет — `bestQualityUrl` покрыта unit-тестами, `px()` покрыта worker-тестами.
 
 ### Пробел 2 — URL-паттерн в baseline (LOW)
 
@@ -148,16 +151,22 @@ KVS-источники (Tier B) выдают токены, привязанны�
 
 ## Unit-тесты (vitest)
 
-51 тест в 2 файлах:
+~463 теста в 5 файлах (default-паттерн `**/*.test.{js,mjs}`):
 
-| Файл | Тестируемые функции | Тестов |
+| Файл | Тестируемые функции | ~it()/test() |
 |---|---|---|
-| `test/plugin-helpers.test.js` | `parseDur`, `parseViews`, `bestQualityUrl`, `extractStreams`, `_kvsPickBest` | 29 |
+| `test/plugin-helpers.test.js` | `parseDur`, `parseViews`, `bestQualityUrl`, `extractStreams`, `_kvsPickBest`, `_titleFromUrl`, `_derivePages` | ~68 |
 | `test/worker-utils.test.js` | `isPrivateHostname`, `timingSafeEqual` | 22 |
+| `test/cherry-engine.test.mjs` | `_attr`, `_decodeHtml`, `_kvsPages`, `_kvsParseCards`, `_kvsEngine`, `_buildCatUrl`, `_cats` | ~124 |
+| `test/cherry-stream-fix.test.mjs` | stream extraction fixes (porndig srcSet, KVS get_file strip, Playerjs, FluidPlayer) | ~32 |
+| `test/cherry-ux-v2.test.mjs` | UX logic (toCard HD/quality, all_sources filter/paginate, action-menu gating, related/model menu) | ~239 |
+
+> `test/cherry-lampa-e2e.mjs` и `test/cherry-browser-test.mjs` запускаются через `node`
+> (Playwright), а не vitest — это live-проверки, не часть `npx vitest run`.
 
 ```
 npx vitest run
-# Ожидаем: 51 passed
+# Ожидаем: ~463 passed
 ```
 
 ---

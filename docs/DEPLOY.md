@@ -13,7 +13,7 @@ plugin.js  →  GitHub Pages (cherry-plugin)  →  пользователь в L
            целевые сайты (Pornhub, HellPorno, Xnxx, ...)
 ```
 
-`buildProxyUrl()` автоматически роутит запросы к `xnxx.com` и `spankbang.com` через Deno Deploy, все остальные — через CF Worker.
+`buildProxyUrl()` автоматически роутит запросы к хостам из `PROXY_URL_2_HOSTS` (xnxx, youjizz, tizam, eporner, ru.spankbang, pornone, porntrex, mydaddy, perfektdamen) и к `*.bigcdn.cc` / `*.pornone.com` через Deno Deploy, все остальные — через CF Worker.
 
 ---
 
@@ -144,7 +144,8 @@ curl "https://cherry-proxy.aawersom.deno.net/proxy?url=https://example.com&key=1
 ```powershell
 cd d:\Works\Lampa
 npx vitest run
-# Ожидаем: 51 тестов, все зелёные
+# Ожидаем: ~463 теста, все зелёные (5 файлов: plugin-helpers, worker-utils,
+#                                    cherry-engine, cherry-stream-fix, cherry-ux-v2)
 ```
 
 ---
@@ -153,7 +154,7 @@ npx vitest run
 
 ```
 1. Правка  →  d:\Works\Lampa\plugin.js
-2. Тесты   →  npx vitest run  (51 должны быть green)
+2. Тесты   →  npx vitest run  (~463 должны быть green)
 3. Синк    →  cp plugin.js plugin-release\plugin.js
 4. Пуш     →  cd plugin-release && git add . && git commit -m "..." && git push
 5. Если менялся CF воркер (src/index.js):

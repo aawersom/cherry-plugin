@@ -7,7 +7,14 @@ Lampa components (`cherry_main`, `cherry_grid`), routes all external HTTP throug
 Cloudflare Worker proxy, and exposes a uniform `SourceAdapter` interface over 25 heterogeneous
 backends.
 
-Entry file: `plugin.js` (single-file, ~4100 lines after cherry-ux-features)
+Entry file: `plugin.js` (single-file, ~4350 lines)
+
+> **Nav rewrite (2026-06-04):** `cherry_grid` and `cherry_main` were migrated from a
+> hand-rolled `Lampa.Controller.add({up,down,left,right})` to extending
+> **`Lampa.InteractionCategory`**. The base class now owns focus movement,
+> scroll-into-view and pagination; the plugin overrides only data/render hooks.
+> This migration orphaned the entire custom presentation layer — **6 `Lampa.Template.add`
+> templates and ~390 lines of CSS were removed**. See *Component Lifecycle* and *UI*.
 
 ---
 
@@ -15,20 +22,25 @@ Entry file: `plugin.js` (single-file, ~4100 lines after cherry-ux-features)
 
 ```
 plugin.js
-├── IIFE guard            lines 1-5       — window.plugin_cherry_ready idempotency flag
-├── CONFIG                lines 8-12      — PROXY_URL, PROXY_KEY (read from Lampa.Storage on load)
-├── PROXY HELPERS         lines 17-78     — buildProxyUrl, cherryFetch, cherryPost, proxyM3u8
-├── SOURCES registry      lines 83-120    — SOURCES[] array + JSDoc typedefs
-├── FAV                   lines 125-167   — Fav object (localStorage-backed favorites)
-├── UTILS                 lines 172-237   — secToTime, formatViews, sourceById, playVideo
-├── CherryGrid            lines 256-543   — paginated video card grid component
-├── CherryMain            lines 555-683   — source selector + search bar component
-├── TEMPLATES             lines 689-750   — cherry_main, cherry_source_card, cherry_grid, cherry_card
-├── CSS                   lines 757-1060  — inline styles injected into document.head
-├── LANG                  lines 1065-1079 — Lampa.Lang.add() — ru/en strings
-├── INIT (startPlugin)    lines 1084-1128 — wires everything, handles app:ready race
-└── SOURCE ADAPTERS       lines 1130-3700 — 25 adapters in two tiers + shared helpers
+├── IIFE guard            plugin.js:4      — window.plugin_cherry_ready idempotency flag
+├── CONFIG                plugin.js:10     — PROXY_URL / _2 / _3, PROXY_URL_2_HOSTS, getProxyKey()
+├── PROXY HELPERS         plugin.js:52     — buildProxyUrl, cherryFetch, _fetchAny, cherryPost, proxyM3u8
+├── SOURCES registry      plugin.js:199    — SOURCES[] array + JSDoc typedefs
+├── FAV                   plugin.js:240    — Fav object (localStorage-backed favorites, 7-field)
+├── UTILS                 plugin.js:288    — secToTime, formatViews, sourceById, bestQualityUrl, playVideo
+├── CherryGrid            plugin.js:406    — InteractionCategory subclass: paginated card grid
+├── CherryMain            plugin.js:968    — InteractionCategory subclass: source picker
+├── CSS (addStyles)       plugin.js:1071   — ~30 scoped lines injected into document.head (.cherry-cat scope)
+├── LANG (addLang)        plugin.js:1119   — Lampa.Lang.add() — ru/en strings
+├── addFilterButton       plugin.js:1168   — persistent header action button (cherry_grid only)
+├── INIT (startPlugin)    plugin.js:1221   — wires everything, SettingsApi, player listener, app:ready race
+└── SOURCE ADAPTERS       plugin.js:1317+  — 24 active adapters in two tiers + shared helpers
 ```
+
+> **There is no `addTemplates()` and no `Lampa.Template.add` call anymore.**
+> InteractionCategory builds its own DOM from Lampa's stock `.card`; the old
+> `cherry_main` / `cherry_source_card` / `cherry_grid` / `cherry_card` /
+> `cherry_group_label` / `cherry_source_row` templates were deleted.
 
 ---
 
@@ -57,10 +69,17 @@ plugin.js
 - `if (src.cfg && src.cfg.sorts)` — REQ-5 sort filter
 - `if (src.cfg && src.cfg.categories)` — REQ-5 category filter
 
-**Adapters implementing optional methods** (as of 2026-05-29):
-- `browseByModel`: `pornhub` (HTML scrape `/pornstar/{slug}/videos`), `xvideos`
-- `getRelated`: `pornhub` (relatedVideosJSON block), `xvideos` (_parseCards on video page)
-- `cfg.sorts`: `pornhub` (mv/tr/mr), `xvideos` (new/views)
+**Adapters implementing optional methods** (as of 2026-06-04):
+- `browseByModel`: **`pornhub`** only (HTML scrape `/pornstar/{slug}/videos`; `_mapVideo`
+  sets `card.model {name,url}` from JSON `pornstars[]`). xvideos defines `browseByModel`
+  but the model field is only on the video page, so it is never surfaced → effectively dead.
+- `getRelated`: ~16 channels — `xvideos`/`xnxx` (parse `video_related` JSON var on the video
+  page), `eporner` (`mbcontent` HTML on the video page), `pornhub` (`relatedVideosJSON`),
+  `pornone` (`_pornoneCards`), every `_kvsEngine` site + custom KVS-style adapters
+  (reuse their listing card parser on the video page via `_relatedFrom`).
+- `cfg.categories`: **all 24 active adapters** (personalized, native-language labels).
+- `cfg.sorts`: most adapters (heterogeneous mechanisms — see *Sorts* table). Empty (`sorts:[]`)
+  for DLE/AJAX-POST sites whose sort is not URL-addressable: `24rolika`, `porndig`, `tizam`.
 
 ### VideoCard
 
@@ -106,16 +125,41 @@ Fields `preview` and `model` are silently dropped on favourite — intentional (
 
 ## Component Lifecycle
 
-### CherryGrid (component: `cherry_grid`)
+Both components are **`Lampa.InteractionCategory` subclasses**, not hand-rolled controllers:
 
-| Lampa lifecycle call | Cherry implementation |
+```javascript
+function CherryGrid(object) {
+  var comp = new Lampa.InteractionCategory(object);
+  // ... override only the hooks below ...
+  return comp;
+}
+```
+
+**Why the rewrite (root cause).** The old version registered its own
+`Lampa.Controller.add('cherry_grid', {up,down,left,right})`. Calling
+`Lampa.Controller.move(dir)` from inside one of those handlers re-dispatched into the
+*same* handler → infinite recursion / dead navigation. `InteractionCategory` owns focus
+movement, scroll-into-view, edge detection and pagination internally, so the plugin no
+longer touches `Controller.move`. (See `docs/UI_and_UX/ui-audit.md` for the validation
+that sisi/AdultJS use the same stock-`.card` + InteractionCategory approach.)
+
+### CherryGrid (component: `cherry_grid`, `plugin.js:406`)
+
+Overrides (everything else is inherited from the base class):
+
+| Hook | Cherry implementation |
 |---|---|
-| `create()` | Builds DOM via `Lampa.Template.get('cherry_grid')`, creates `Lampa.Scroll`, triggers `loadPage(1)` or `loadAllSources()` or renders favorites inline |
-| `start()` | `Lampa.Controller.add('cherry_grid', ...)` + `Lampa.Controller.toggle('cherry_grid')` |
-| `render()` | Returns `html` (jQuery element) |
-| `pause()` | No-op (empty function) |
-| `stop()` | Detaches scroll listener; stops any active preview video (`_stopCurrentPreview()`) |
-| `destroy()` | Stops preview (`_stopCurrentPreview()`), sets `destroyed = true`, removes DOM |
+| `create()` `plugin.js:743` | `this.activity.loader(true)` → `_gridLoad(object,1,...)` → `this.build({title, results, total_pages})`; then `render().addClass('cherry-cat')` + `.category-full.addClass('mapping--grid cols--5')`. On no-results favorites → `empty(cherry_fav_empty_hint)`; on hard failure → `empty(cherry_load_error)` |
+| `nextPageReuest(object, resolve, reject)` `plugin.js:772` | Paging. Favorites / `_related_items` resolve a single empty page; everything else calls `_gridLoad(object, currentPage+1, ...)`. all_sources+query now paginates here too |
+| `cardRender(object, element, card)` `plugin.js:813` | Wires `card.onEnter` (→ `playVideo`), `card.onMenu` (Похожие / Похожие названия / Избранное / Модель), `card.onFocus` (preview start, wraps base onFocus). Appends `.cherry-src-badge` for all_sources & favorites grids |
+| `onRight()` `plugin.js:935` | Opens the action menu (`openActionsMenu`: Поиск → Сортировка → Категории), the native right-edge filter idiom |
+| `empty(msg)` `plugin.js:791` | Custom override honouring a message arg (base may ignore it). Builds `Lampa.Empty({descr: msg})` so an error message (`cherry_load_error`) is visually distinct from no-results, and the favorites-empty hint is persistent (not a transient toast) |
+| `stop()` / `pause()` `plugin.js:946` | Wrap the base impl to call `_stopCurrentPreview()` first |
+| `comp.openActionsMenu` | Exposed so `addFilterButton` (header) opens the same menu |
+
+`build(data)` shape consumed by the base renderer: `{ title, results: VideoCard[], total_pages: number }`.
+`toCard(v)` `plugin.js:434` maps a `VideoCard` to the base renderer's card_data in place
+(sets `v.img`/`v.poster` from `v.thumb`, composes the `quality` slot, guarantees `v.source`).
 
 **Activity params consumed:**
 
@@ -123,24 +167,198 @@ Fields `preview` and `model` are silently dropped on favourite — intentional (
 |---|---|---|
 | `source_id` | string | adapter id to browse/search |
 | `query` | string | search query (omit for browse) |
-| `all_sources` | boolean | when true, searches all adapters in parallel via `Promise.all` |
-| `is_favorites` | boolean | renders the favorites list instead |
-| `model_url` | string | REQ-3: model page URL → triggers `browseByModel(model_url, page)` |
-| `model_name` | string | REQ-3: display title for model browse screen |
-| `_related_items` | VideoCard[] | REQ-4: pre-fetched related cards; skips loadPage entirely |
-| `title` | string | screen title override |
-| `page` | number | declared but not used; scroll drives pagination |
+| `sort` | string | active sort id (reload happens via `Activity.push`, not re-`create()`) |
+| `category` | string | active category id |
+| `all_sources` | boolean | searches every adapter in parallel via `Promise.all`; paginates |
+| `client_sort` | string | all_sources only: client-side sort (`''` relevance \| `duration`) |
+| `is_favorites` | boolean | renders the favorites list (single page) |
+| `model_url` | string | model page URL → `browseByModel(model_url, page)` (pornhub) |
+| `_related_items` | VideoCard[] | pre-fetched related cards; one-shot, single page (no `getRelated` re-call) |
+| `title` | string | screen / activity-bar title (carries the active filter so it survives menu close) |
+| `page` | number | declared; base class drives actual paging via `nextPageReuest` |
 
-### CherryMain (component: `cherry_main`)
+> **Filter reload pattern.** Changing sort/category does NOT re-call `create()` (an
+> InteractionCategory grid does not re-render on a second `create()`). Instead
+> `_pushFiltered(sort, category)` does a fresh `Lampa.Activity.push` of `cherry_grid`
+> with the new params, then `Controller.toggle('content')`.
 
-| Lampa lifecycle call | Cherry implementation |
+### CherryMain (component: `cherry_main`, `plugin.js:968`)
+
+A single-page **source PICKER** of coloured letter-tiles. Overrides:
+
+| Hook | Cherry implementation |
 |---|---|
-| `create()` | `Lampa.Template.get('cherry_main')`, renders source tiles, binds search handlers |
-| `start()` | `Lampa.Controller.add('cherry_main', ...)` + `Lampa.Controller.toggle('cherry_main')` |
-| `render()` | Returns `html` |
-| `pause()` | No-op |
-| `stop()` | No-op |
-| `destroy()` | Removes DOM |
+| `create()` `plugin.js:976` | Builds `results`: `[Поиск ⌕]` + `[Избранное ♥]` (action tiles) + one tile per registered source; `build(...)`; `render().addClass('cherry-cat cherry-home')` + `.category-full.addClass('mapping--grid cols--8')` |
+| `cardRender(object, element, card)` `plugin.js:1007` | `card.onEnter` routes by `element._kind`: `search` (→ `Lampa.Input.edit` → all_sources grid), `favorites` (→ favorites grid), `source` (→ single-source browse grid). Paints a `.cherry-tile` coloured initial into `.card__view` (`_tileColor(seed)` gives a stable per-source hue; action tiles get the brand tint) |
+
+---
+
+## UI / Presentation
+
+After the InteractionCategory migration the plugin renders Lampa's **stock `.card`**,
+restyled by a small scoped CSS layer (`addStyles()`, `plugin.js:1071`, ~30 lines). All
+custom card/grid/spinner CSS and templates were deleted (see Module Structure note).
+
+| Surface | Mechanism |
+|---|---|
+| **Grid cards** | `.cherry-cat` scope: 16:9 landscape via `.card__view{padding-bottom:56.25%}`, image `object-fit:cover`; grid `cols--5` (5 per row) |
+| **Home picker** | `.cherry-home` square tiles (`.card__view{padding-bottom:100%}`), grid `cols--8`; `.cherry-tile` paints a coloured first-letter initial (no thumbnails) |
+| **Home content** | A source picker: `[Поиск ⌕]` + `[Избранное ♥]` rendered as action tiles (brand pink `--action`) + one tile per source (stable per-source hue from `_tileColor`) |
+| **Focus** | Single native Lampa frame + a subtle `transform:scale(1.04)` on `.card.focus .card__view` (no custom ring — a custom ring stacked on the native frame = double frame) |
+| **Card title** | 2-line white clamp (`-webkit-line-clamp:2`, `color:#fff`), `.card__title` font `.9em` |
+| **Source-origin badge** | `.cherry-src-badge` (z-index 2, above any preview) appended in `cardRender` on all_sources search AND favorites grids — those mix sources, so each card is tagged with its origin name |
+| **Header filter button** | `addFilterButton()` (`plugin.js:1168`) injects a persistent `.cherry-filter-btn` into the Lampa header next to search; visible only while a `cherry_grid` activity is on top; opens the same Поиск → Сортировка → Категории menu as the right edge |
+| **Preview clip** | `cardRender.onFocus` injects a muted/looping `<video.cherry-card__preview>` into the focused card when `element.preview` exists, `cherry_preview_enabled` is on, and not Android. Stopped on blur/stop/pause |
+
+**Removed in this iteration (dead code from the migration):** ~390 lines of CSS
+(`.cherry-card*`, `.cherry-grid*`, `.cherry-source-*`, `@keyframes cherry-spin`, etc.)
+and 6 `Lampa.Template.add` registrations (`cherry_main`, `cherry_source_card`,
+`cherry_grid`, `cherry_card`, `cherry_group_label`, `cherry_source_row`).
+
+---
+
+## Search
+
+| Mode | Entry | Behaviour |
+|---|---|---|
+| **Per-source** | in-grid action menu → Поиск (`_openSearch`, `plugin.js:634`) | `Lampa.Input.edit` opens the TV keyboard; pushes a single-source `cherry_grid` with `query` |
+| **Global (all sources)** | Home `⌕` tile (`plugin.js:1009`) | `Lampa.Input.edit` → pushes `cherry_grid` with `all_sources:true` |
+| **Похожие названия** | card menu → keyword search of the title words across all sources | `all_sources:true` grid |
+
+> Search is opened via **`Lampa.Input.edit`**, NOT `Lampa.Keyboard.show` — the latter
+> does not exist on this build.
+
+**all_sources mechanics** (`_gridLoad`, `plugin.js:477`): runs `src.search(query, page)`
+over every adapter in parallel (`Promise.all`, per-source failures swallowed). For Latin
+queries a per-source title-match filter is applied *before* `slice(0,10)` (Cyrillic queries
+skip the filter — scraped titles are mostly English). Results are concatenated per source.
+The page paginates: if any source returns a full raw batch (≥10) the next page is offered.
+An optional client-side `duration` sort (`client_sort`) can be applied per page.
+
+---
+
+## Categories — personalized per site, native labels
+
+Every active adapter exposes `cfg.categories` (`_cats('slug:Label,...')`, `plugin.js:2939`).
+**Labels are in the SITE's content language**, not the interface language:
+
+- EN sites → English labels (`bbw:BBW`, `redhead:Redhead`, `big-tits:Big Tits`).
+- RU sites → Russian labels (pornobolt/lenporno/tizam: `incest:Инцест`, `zrelye:Зрелые`).
+- The interface and menus themselves stay Russian.
+
+Slugs are real, per-site-verified values (autonomous extraction → browse-verified). Notable:
+
+- **pornhub** categories are real webmasters-API **slugs** (`bbw`, `red-head`, `18-25`),
+  passed as `&category=` — *not* numeric ids (`plugin.js:1570`).
+- **xnxx** category route is the native `/tags/{slug}/...`; search stays on `/search/`
+  (`plugin.js:1964`).
+
+URL building is centralized in **`_buildCatUrl(fmt, slug, page, pageBase, page1Omit)`**
+(`plugin.js:2924`) — one generic `{slug}`/`{page}` template + flags, no per-site URL hacks.
+`_kvsEngine` carries `categoryFmt`; custom adapters add a `category` branch that calls
+`_buildCatUrl` (or the API path for API-based browse).
+
+---
+
+## Sorts — personalized per site, heterogeneous mechanisms
+
+Sort **labels are Russian** (interface). The POPULAR sort is the default everywhere,
+labeled «По популярности». The old generic «По умолчанию» entry was removed — popular is
+the explicit named default. The category list adds an «Все категории» reset entry.
+
+| Mechanism | How | Sites |
+|---|---|---|
+| Query `?sort_by=` | KVS engine default (`sortParam`) | xozilla, analdin, hellporno, familyporn, perfektdamen, pornve |
+| Query `?sort=` | `sortParam:'sort'` (KVS) / custom | pornobolt, lenporno |
+| API `&ordering=` | webmasters API order | pornhub (`mostviewed`/`rating`/`mostrecent`/`longest`) |
+| API `&order=` | API order | eporner |
+| PATH segment | sort injected into the URL path | xvideos `/c/s:views/{slug}`, xnxx `/tags/{slug}/{sort}/`, porntrex, 3movs, crocotube, ebun, jopaonline, pornone |
+| GLOBAL feed only | no per-category sort; sort swaps the no-category listing **root** | youjizz, hqporner, spankbang |
+| NOT URL-addressable | DLE POST/AJAX → `sorts:[]` (categories only) | 24rolika, porndig, tizam |
+
+`_kvsEngine` gained a **`sortMode:'path'`** flag (`plugin.js:2975`): when set, the sort id
+is injected into the category path (`/categories/{slug}/{sort}/{page}/`) instead of being
+appended as a query param. Used by KVS path-sort sites (crocotube, ebun).
+
+---
+
+## Pagination — infinite scroll
+
+`InteractionCategory` drives paging via `nextPageReuest`. total_pages is derived, not
+hardcoded:
+
+- **`_derivePages(itemsLen, page, full)`** (`plugin.js:1446`): a full page (`itemsLen >= full`)
+  → `page+1`; a short page → `page` (last). Replaces the old fake/hardcoded `total_pages`
+  on ~14 channels.
+- **all_sources** (global search + «Похожие названия») now paginates (was 1 page): the next
+  page is offered while any source still returns a full batch.
+- Genuinely single-page-search sites (search has no page param) report `total_pages:1`:
+  `tizam`, `pornobolt`, `lenporno`, `24rolika`, `jopaonline`.
+
+---
+
+## Related ("Похожие") — two distinct menu items
+
+The card long-press menu (`cardRender.onMenu`, `plugin.js:834`) offers two related actions:
+
+1. **«Похожие»** — the SITE's own recommended videos (the block under the player). Built
+   per-site via `getRelated(video)`:
+   - `xvideos`/`xnxx`: parse the `video_related` JSON var on the video page (`plugin.js:1712`).
+   - `eporner`: parse the video-page `mbcontent` HTML cards (`plugin.js:2002`).
+   - `pornhub`: `relatedVideosJSON` block (`plugin.js:1651`).
+   - `pornone`: reuses `_pornoneCards` on the video page (`plugin.js:2622`).
+   - `_kvsEngine` sites + custom KVS-style adapters: reuse their listing card parser on the
+     video page via `_relatedFrom(parser)` (`plugin.js:2825`).
+   - Coverage ~16 channels. Only shown when `cardSrc.getRelated` exists.
+   - On player close, a related grid is auto-pushed if `getRelated` resolved in the
+     background (`playVideo` + the `player` `destroy` listener, REQ-4).
+2. **«Похожие названия»** — a keyword search of the video's title words across all sources
+   (`all_sources:true`), always offered.
+
+---
+
+## Model browsing
+
+Activated the previously-dead `browseByModel`/`model_url` path for **pornhub only**:
+`_mapVideo` sets `card.model {name, url}` from the JSON `pornstars[]` (`plugin.js:1556`).
+`cardRender.onMenu` adds a «Модель: <name>» item when `element.model.name` exists; selecting
+it pushes a `cherry_grid` with `model_url` → `browseByModel(model_url, page)` (`plugin.js:530`).
+xvideos defines `browseByModel` but the model is only on the video page (not in listings),
+so it is left dead.
+
+---
+
+## Metadata
+
+- **Real preview URLs** from the `data-pvv` card attribute (xvideos/xnxx, `plugin.js:1761`,
+  `plugin.js:1912`). The old *guessed* `/preview.mp4` URLs are gone.
+- **HD/4K badge** is composed with duration in the `quality` slot in `toCard`
+  (`plugin.js:439`): `v.hd ? (v.hd + ' · ' + secToTime(dur)) : secToTime(dur)`. `v.hd` is an
+  optional adapter field, populated where the site exposes it (xvideos `video-hd-mark`,
+  youjizz `i-hd`).
+- **`_titleFromUrl(url)`** (`plugin.js:1432`) slug fallback for empty titles, used across
+  ~14 parsers.
+
+---
+
+## Parser correctness
+
+- **xnxx** `_parseCards` (`plugin.js:1891`) splits on the OUTER `thumb-block` wrapper. It
+  previously split on the inner `thumb-under` caption → an off-by-one that bound a card's
+  thumbnail to the next card's link and played the neighbour video. Both xvideos and xnxx
+  now split on the outer wrapper (`plugin.js:1745`, `plugin.js:1895`); other split parsers
+  confirmed correct.
+
+---
+
+## States
+
+`empty(msg)` (`plugin.js:791`) distinguishes:
+- **Error** — `cherry_load_error` ("Не удалось загрузить. Проверьте соединение.") on a hard
+  load failure (`_gridLoad` reject).
+- **No results** — `cherry_no_results` (default message).
+- **Empty favorites** — a persistent `cherry_fav_empty_hint` ("Удерживайте ОК на видео чтобы
+  добавить в избранное"), not a transient toast.
 
 ---
 
@@ -203,17 +421,33 @@ SAME proxy tier as the page that generates those tokens.
 `PROXY_URL_3 = ''` (empty by default; fill with Beget VPS IP:PORT after deploying
 `workers/cherry-proxy-vps/index.js`). Currently unused.
 
-### buildProxyUrl(url, referer?)
+### buildProxyUrl(url, referer?) — `plugin.js:53`
 ```
-GET {base}/proxy?url={encoded}&key={PROXY_KEY}[&referer={encoded}]
+GET {base}/proxy?url={encoded}&key={getProxyKey()}[&referer={encoded}]
 ```
-Routing priority: `PROXY_URL_3` (if set + hostname in `PROXY_URL_3_HOSTS`) →
-`PROXY_URL_2` (if hostname in `PROXY_URL_2_HOSTS` or matches `/\.bigcdn\.cc$/`) →
-`PROXY_URL` (default, CF Worker).
+The proxy key is read per-request via **`getProxyKey()`** (`plugin.js:44`,
+`Lampa.Storage.get('cherry_proxy_key', '1206')`) — there is no module-level `PROXY_KEY`
+constant anymore. Routing priority:
+1. `PROXY_URL_3` (if set + hostname in `PROXY_URL_3_HOSTS`) — VPS, currently empty.
+2. `PROXY_URL_2` (Deno) if hostname in `PROXY_URL_2_HOSTS` **or** matches `/\.bigcdn\.cc$/`
+   **or** matches `/(?:^|\.)pornone\.com$/`.
+3. `PROXY_URL` (default, CF Worker).
 
-### cherryFetch(url, referer?)
-Wrapper around `fetch(buildProxyUrl(...))`. Returns `Promise<string>`.
+> **Contradiction flagged.** The *Primary proxy / RESIDENTIAL set* section above (which
+> describes the worker's `index.js`) lists `pornone.com` + `*.pornone.com` as CF SOCKS5.
+> The **plugin's** `buildProxyUrl` routes all `*.pornone.com` (and `pornone.com`,
+> `www.pornone.com` via `PROXY_URL_2_HOSTS`) to **Deno**, matching *Iteration 4* which moved
+> pornone to Deno for fixed-IP token affinity. The plugin-side routing (Deno) is current;
+> the worker-side RESIDENTIAL list may carry a stale pornone entry — verify against
+> `workers/cherry-proxy/src/index.js` before trusting the SOCKS5 claim.
+
+### cherryFetch(url, referer?) — `plugin.js:93`
+Wrapper around `fetch(buildProxyUrl(...))`. Returns `Promise<string>`; throws on non-2xx.
 On Android: tries `Lampa.Reguest.native()` first, falls back to fetch+proxy.
+
+### _fetchAny(url, referer?) — `plugin.js:114`
+Status-tolerant fetch: returns the body text regardless of HTTP status. Needed for sites
+(e.g. 3movs) that serve a valid full page body with a 404 status on category pagination.
 
 ### cherryPost(url, body)
 POST via native `fetch` directly (no proxy wrapper). Used by Spankbang stream API
@@ -285,13 +519,15 @@ Only safe for plain pass-through proxies that do NOT rewrite M3U8.
 When a CDN generates tokens bound to the requesting IP, the page that generates the token and the CDN that validates it must use the SAME proxy tier. Violating this causes 404/403 on media requests. Current pairs:
 - `mydaddy.cc` + `*.bigcdn.cc` → both Deno
 - `www.pornhub.com` + `*.phncdn.com` → both CF SOCKS5 (+ referer propagation in M3U8 rewrite)
-- `pornone.com` + `*.pornone.com` → both CF SOCKS5
+- `pornone.com` + `*.pornone.com` → both **Deno** in the plugin's `buildProxyUrl`
+  (the worker `index.js` may still list them as SOCKS5 — see the *buildProxyUrl* contradiction note)
 
-**UX extras** (REQ-2/3/4/5 features, see cherry-ux-features):
-- `cfg.sorts/categories` — filter bar in CherryGrid (REQ-5)
-- `browseByModel(modelUrl, page)` — model badge navigation (REQ-3)
-- `getRelated(video)` — related panel after playback (REQ-4)
-- `video.preview` — animated thumbnail preview on focus (REQ-2); currently populated by: **none** (backlog: xvideos `_169.mp4` transform, pornhub `data-mediabook`)
+**UX extras** (see the dedicated UI / Search / Categories / Sorts / Related / Model / Metadata sections):
+- `cfg.categories` (all 24) + `cfg.sorts` (heterogeneous) — right-edge action menu + header button
+- `browseByModel(modelUrl, page)` — model menu item (pornhub only)
+- `getRelated(video)` — «Похожие» menu item + auto related grid after playback (~16 channels)
+- `video.preview` — animated preview clip on focus; populated by **xvideos/xnxx** (`data-pvv`)
+  and **pornhub** (`data-mediabook`). The old guessed `/preview.mp4` URLs were removed.
 
 ---
 
@@ -299,13 +535,13 @@ When a CDN generates tokens bound to the requesting IP, the page that generates 
 
 Discovered 2026-05-29 by comparing with AdultJS implementation.
 
-| Adapter | Gap | Fix | Effort |
-|---------|-----|-----|--------|
-| `xvideos` + `xnxx` | `video.preview` not populated | Add `_169.mp4` URL transform in `_parseCards()` | ~5 lines each |
-| `pornhub` | `video.preview` not populated in webmasters browse | Add `data-mediabook` extraction in `_parseHtmlCards()` (used by browseByModel) | ~2 lines |
-| `pornhub` | Browse uses webmasters API (no preview/model in listing) | Switch to HTML scrape `rt.pornhub.com/video?page=N` + XPath; gets preview+model free | Medium effort, HTML more fragile |
-| `spankbang` | Quality map regex may miss formats | Add `/'([0-9]+)(p\|k)':\s*\['(https?...)'/g` before POST fallback | ~10 lines |
-| `xvideos` + `xnxx` | `video_related` JSON parsed separately from stream | Move related parse into `getStream` (same page fetch) to avoid double request | Medium |
+| Adapter | Gap | Fix | Effort | Status |
+|---------|-----|-----|--------|--------|
+| `xvideos` + `xnxx` | `video.preview` not populated | Use the real `data-pvv` card attribute | done | ✅ Implemented (`data-pvv`, not the guessed `_169.mp4`) |
+| `pornhub` | `video.preview` not populated in webmasters browse | `data-mediabook` extraction in `_parseHtmlCards()` (browseByModel path) | done | ✅ Implemented |
+| `pornhub` | Browse uses webmasters API (no preview/model in listing) | Switch to HTML scrape `rt.pornhub.com/video?page=N` | Medium | ⏸ Deferred (API browse kept; model surfaced from JSON `pornstars[]`) |
+| `spankbang` | Quality map regex may miss formats | Add a quality-map regex before POST fallback | ~10 lines | ⏸ Deferred |
+| `xvideos` + `xnxx` | `video_related` JSON parsed separately from stream | Move related parse into `getStream` | Medium | ⏸ Deferred (`getRelated` is a separate page fetch) |
 
 ---
 
@@ -372,11 +608,12 @@ SpankBang previously failed with Cloudflare JS challenge on `spankbang.com` and 
 ### Lampa.Storage
 | Call | Location | Purpose |
 |---|---|---|
-| `Lampa.Storage.get('cherry_proxy_key', '1206')` | line 11 | Load proxy key at module init |
-| `Lampa.Storage.get(this._key, [])` | line 130 | Load favorites array (key: `cherry_favs`) |
-| `Lampa.Storage.set(this._key, list)` | line 164 | Persist favorites after toggle |
-| `Lampa.Storage.get('cherry_proxy_key', null)` | line 1086 | First-run detection |
-| `Lampa.Storage.set('cherry_proxy_key', '1206')` | line 1087 | Write default key on first run |
+| `Lampa.Storage.get('cherry_proxy_key', '1206')` | `plugin.js:45` | `getProxyKey()` — read proxy key per request |
+| `Lampa.Storage.get(this._key, [])` | `plugin.js:245` | Load favorites array (key: `cherry_favs`) |
+| `Lampa.Storage.set(this._key, list)` | `plugin.js:279` | Persist favorites after toggle |
+| `Lampa.Storage.get('cherry_proxy_key', null)` | `plugin.js:1223` | First-run detection |
+| `Lampa.Storage.set('cherry_proxy_key', '1206')` | `plugin.js:1224` | Write default key on first run |
+| `Lampa.Storage.get('cherry_preview_enabled', true)` | `plugin.js:929` | Read preview-clip toggle on card focus |
 
 ### Lampa.Noty
 | Call | Purpose |
@@ -388,23 +625,24 @@ SpankBang previously failed with Cloudflare JS challenge on `spankbang.com` and 
 ### Lampa.Lang
 | Call | Purpose |
 |---|---|
-| `Lampa.Lang.add({key: {ru, en}})` | Registers 11 translation keys |
+| `Lampa.Lang.add({key: {ru, en}})` | Registers ~28 translation keys (`addLang`, `plugin.js:1119`) |
 | `Lampa.Lang.translate(key)` | Resolves translation key to current locale string |
 
-### Lampa.Template
+### Lampa.InteractionCategory (base class)
 | Call | Purpose |
 |---|---|
-| `Lampa.Template.add(name, html)` | Registers 4 templates (cherry_main, cherry_source_card, cherry_grid, cherry_card) |
-| `Lampa.Template.get(name, vars)` | Instantiates a template with variable substitution |
+| `new Lampa.InteractionCategory(object)` | Base for both `CherryGrid` and `CherryMain`. Owns nav (focus move, scroll-into-view, edge detection), pagination (`nextPageReuest`), and DOM (stock `.card` rendering via `build`/`cardRender`) |
 
-### Lampa.Controller
+> `Lampa.Template.*` is no longer used (templates removed). `Lampa.Controller.add` with a
+> custom `{up,down,left,right}` handler set is **gone** — that hand-rolled controller caused
+> the `Controller.move()` recursion bug. The plugin still calls `Lampa.Controller.toggle('content')`
+> to hand focus back after menus/pushes. `Lampa.Scroll` is no longer instantiated by the
+> plugin (the base class owns scrolling).
+
+### Lampa.Input
 | Call | Purpose |
 |---|---|
-| `Lampa.Controller.add(name, handlers)` | Registers TV remote handler set |
-| `Lampa.Controller.toggle(name)` | Activates a controller by name |
-| `Lampa.Controller.collectionSet(el)` | Sets the focusable element collection |
-| `Lampa.Controller.collectionFocus(false, el)` | Focuses first item in collection |
-| `Lampa.Controller.move(dir)` | Moves focus in a direction |
+| `Lampa.Input.edit({title, value, free, nosave}, cb)` | TV keyboard for search input (per-source and global). Replaces the non-existent `Lampa.Keyboard.show` |
 
 ### Lampa.Activity
 | Call | Purpose |
@@ -439,42 +677,34 @@ SpankBang previously failed with Cloudflare JS challenge on `spankbang.com` and 
 | `Lampa.Listener.follow('app', fn)` | Waits for `app:ready` event before initialising |
 | `Lampa.Listener.follow('player', fn)` | Single block: revokes HLS blob URLs + pushes related panel (REQ-4) on `e.type==='destroy'` |
 
-### Lampa.Storage (REQ-2/5)
-| Call | Purpose |
-|---|---|
-| `Lampa.Storage.get('cherry_preview_enabled', true)` | REQ-2: read preview toggle state |
-| `Lampa.Storage.set('cherry_preview_enabled', bool)` | REQ-2: write preview toggle via CherryMain settings |
-
 ### Lampa.SettingsApi
-Preview toggle (`cherry_preview_enabled`) registered via `Lampa.SettingsApi.addParam || Lampa.SettingsApi.add` (guarded — falls back gracefully on forks without this API).
-Long-press on `.cherry-main__title` kept as secondary fallback for Lampa forks without SettingsApi.
-**Decision change (cherry-ux-v2, 2026-06-03):** Previously avoided to not pollute global settings page. Changed because toggle was undiscoverable behind a hidden long-press gesture.
+Preview toggle (`cherry_preview_enabled`) registered via
+`SettingsApi.addComponent({component:'cherry', ...})` + `addParam({type:'trigger'})`
+(`plugin.js:1235`, guarded — both must exist). `trigger` params auto-persist to
+`Lampa.Storage` under `param.name`, so no `onChange` is needed. If `SettingsApi` is
+unavailable the code logs a warning and relies on the read default.
 
 ### Lampa.Reguest (class)
 | Call | Purpose |
 |---|---|
-| `new Lampa.Reguest()` | Android-native HTTP fetch (used in `_nativeFetch()`) |
-| `.native(url, ok, err, sync, opts)` | 5-arg signature: makes native OS-level HTTP request, bypasses WebView CORS |
+| `new Lampa.Reguest()` | Android-native HTTP fetch (used in `_nativeFetch()`, `plugin.js:81`) |
+| `.native(url, ok, err, sync, opts)` | 5-arg signature: native OS-level HTTP request, bypasses WebView CORS |
 | `.clear()` | Cancels in-flight request |
 
-### Lampa.Scroll (class)
+### Lampa.Empty (class)
 | Call | Purpose |
 |---|---|
-| `new Lampa.Scroll({mask, over})` | Creates TV-optimised scroll container |
-| `scroll.body()` | Returns scrollable content element |
-| `scroll.render()` | Returns scroll wrapper element |
+| `new Lampa.Empty({descr})` | Used by `comp.empty(msg)` to render a custom error / no-results / favorites-empty message (`plugin.js:797`) |
 
 ### Lampa.Listener
 | Call | Purpose |
 |---|---|
 | `Lampa.Listener.follow('app', fn)` | Waits for `app:ready` event before initialising |
+| `Lampa.Listener.follow('player', fn)` | On `destroy`: revokes HLS blob URLs + pushes the related grid if `getRelated` resolved (`plugin.js:1279`) |
+| `Lampa.Listener.follow('activity', fn)` | `addFilterButton`: show/hide the header filter button per top activity (`plugin.js:1201`) |
 
-### Lampa.Keyboard (optional)
-| Call | Purpose |
-|---|---|
-| `Lampa.Keyboard.show({title, value, onchange, onenter})` | TV keyboard for search input (presence-checked before use) |
-
----
+> **`Lampa.Keyboard.show` does not exist on this build** — search uses `Lampa.Input.edit`
+> (see the *Lampa.Input* row above). Earlier docs referencing `Lampa.Keyboard` are stale.
 
 ---
 
@@ -571,44 +801,55 @@ Live testing session. All originally-reported broken channels fixed.
 
 ## Categories & per-source filters (2026-06-04)
 
-All 24 active adapters now expose `cfg.categories` (and `cfg.sorts` where supported), surfaced in the right-edge action menu (Поиск → Сортировка → Категории).
+All 24 active adapters expose `cfg.categories` (and `cfg.sorts` where supported), surfaced in
+the right-edge action menu (Поиск → Сортировка → Категории) and the header filter button.
+See the dedicated **Categories** and **Sorts** sections above for the full per-site mechanism
+table; this is a summary.
 
-**Architecture:** one generic `_buildCatUrl(fmt, slug, page, pageBase, page1Omit)` builds every site's category URL from a `{slug}`/`{page}` template + flags — no per-site URL hacks. `_kvsEngine` exposes `cfg:{categories,sorts}` and uses `categoryFmt` in browse. Custom adapters add `cfg` + a `category` branch in their `browse` that calls `_buildCatUrl` (or, for API-based browse, the API path). Category lists were autonomously scraped + browse-verified per site → `tasks/cherry-categories.json`.
+**Architecture:** one generic `_buildCatUrl(fmt, slug, page, pageBase, page1Omit)` builds every
+site's category URL from a `{slug}`/`{page}` template + flags — no per-site URL hacks.
+`_kvsEngine` exposes `cfg:{categories,sorts}` and uses `categoryFmt` (+ optional `sortMode:'path'`)
+in browse. Custom adapters add `cfg` + a `category` branch in their `browse`.
 
 **Per-site notes:**
 - HTML-parser sites reuse their existing card parser on the category page.
 - eporner: API keyword search (`query=slug`); pornone: HTML `/{slug}/` + `_pornoneCards`.
-- pornhub: webmasters `&category={id}` (numeric ids).
-- porndig: composite `{id}/{name}` channel slug. xnxx/xvideos: 0-based page. youjizz: page-in-filename. hqporner: singular `/category/`. 3movs: `_fetchAny` (404-but-valid body on page>1). tizam: single static page (JS pagination → total_pages 1).
-- **Sort** is query-based on pornhub/xvideos + KVS-engine; path-sort sites (eporner/pornone/crocotube/ebun) ship categories with sort deferred.
+- **pornhub: webmasters `&category={slug}` (real slugs — `bbw`, `red-head`, `18-25` — NOT
+  numeric ids).** (Corrects the earlier "numeric ids" note.)
+- porndig: composite `{id}/{name}` channel slug. xnxx: native `/tags/{slug}`. xnxx/xvideos:
+  0-based page. youjizz: page-in-filename. hqporner: singular `/category/`. 3movs: `_fetchAny`
+  (404-but-valid body on page>1). tizam: single static page (JS pagination → total_pages 1).
+- **Sort is now implemented (no longer deferred)** via heterogeneous mechanisms (query
+  `?sort_by=`/`?sort=`, API `&ordering=`/`&order=`, PATH segment incl. `sortMode:'path'`,
+  global-feed root swap). DLE/AJAX-POST sites (24rolika, porndig, tizam) keep `sorts:[]`.
 
-## UX v2 (cherry-ux-v2, 2026-06-04)
+## UI/UX history (superseded by the InteractionCategory migration)
 
-Seven UI/UX features added in full-pipeline mode. No card-parsing / stream / proxy logic touched.
+> **The InteractionCategory rewrite (2026-06-04) superseded most of the cherry-ux-v2
+> presentation work below.** Kept for the engineering rationale; the *current* behaviour is
+> in the **UI / Search / Pagination / States** sections above.
 
-| Feature | What | Key mechanism |
-|---|---|---|
-| **UX-E** | Empty favorites screen shows "hold OK to add" hint | `cherry_fav_empty_hint`; child-before-parent show order |
-| **UX-G** | "Похожие" item in card long-press menu | guarded by `source.getRelated`; action `'related'` → `_related_items` grid |
-| **UX-C** | Preview toggle in Lampa Settings | `SettingsApi.addComponent('cherry')` + `addParam` type `trigger`; long-press fallback kept |
-| **P0** | Three header buttons: Search / Sort / Category | `.cherry-grid__actions`; visible per `canSearch`/`hasSorts`/`hasCats`; replaces old `.cherry-grid__filters` |
-| **P1** | D-pad infinite scroll | `IntersectionObserver` sentinel (root:null, 400px) + `maybeLoadMore()` in down/right handlers (survives stop→start) + 300px scroll listener |
-| **P2** | Grouped search results | `loadAllSources` groups by source (SOURCES order, max 10 each) under `.cherry-group-label`; was alphabetical merge |
-| **UX-A** | Home screen row mode | `cherry_home_mode` (tiles\|rows); rows = one `browse('',1)` strip per source; in-place toggle via long-press menu |
+| Feature | Status now |
+|---|---|
+| **UX-E** Empty-favorites hint (`cherry_fav_empty_hint`) | ✅ Still active, now via `empty(msg)` override |
+| **UX-G** «Похожие» card menu item (guarded by `source.getRelated`) | ✅ Active; joined by «Похожие названия» |
+| **UX-C** Preview toggle in Lampa Settings (`SettingsApi.addComponent` + `trigger` param) | ✅ Active |
+| **P0** header filter access | ✅ Replaced by `addFilterButton` (one header button) + right-edge `onRight` menu; the old `.cherry-grid__actions`/`.cherry-grid__filters` DOM is gone |
+| **P1** D-pad infinite scroll (custom IntersectionObserver/`maybeLoadMore`) | ⛔ Superseded — pagination is now owned by `InteractionCategory.nextPageReuest` |
+| **P2** Grouped search results (`.cherry-group-label` templates) | ⛔ Superseded — all_sources is now a FLAT concat with `.cherry-src-badge` per card; `cherry_group_label`/`cherry_source_row` templates removed |
+| **UX-A** Home row mode (`cherry_home_mode`) | ⛔ Removed — home is the tile picker only; `cherry_source_row` template + `cherry_home_mode` storage key gone |
 
-**New i18n keys:** `cherry_fav_empty_hint`, `cherry_view_rows`, `cherry_view_tiles` (+ reused `cherry_related`, `cherry_search`, `cherry_sort`, `cherry_category`).
-**New templates:** `cherry_group_label`, `cherry_source_row`.
-**New storage keys:** `cherry_home_mode` (default `'tiles'`).
+**Surviving i18n keys:** `cherry_fav_empty_hint`, `cherry_related`, `cherry_search`,
+`cherry_sort`, `cherry_category`, `cherry_load_error`, `cherry_similar_titles`,
+`cherry_model`, `cherry_proxy_key_init` (+ the full set in `addLang`, `plugin.js:1119`).
+`cherry_view_rows`/`cherry_view_tiles` remain registered but are no longer used.
 
-**Key invariants enforced this iteration (see lessons L13–L25):**
-- `Lampa.Keyboard` callbacks are lowercase (`onenter`/`onback`); `Lampa.Select` camelCase (`onSelect`/`onBack`).
-- `SettingsApi.addComponent` MUST precede `addParam`; boolean type is `trigger` (auto-persists by param name).
-- `video.source = src.id` set on every synthesized row card (Fav 7-field invariant).
-- Infinite-scroll's survivable trigger is the D-pad `maybeLoadMore()` in controller handlers (observer/scroll die on first `stop()`).
-- A `destroyed`-guard inside a re-push `setTimeout` is an anti-guard — it blocks the intended re-render; use a `_toggling` re-entrancy flag instead.
-- `Promise.resolve(src.browse(...))` wraps adapter calls in row mode (non-thenable safety across 24 adapters).
-
-**Row-mode v1 scope:** cards are play-only (no fav badge, no preview, no long-press) — see backlog BL-4.
+**Key invariants still enforced:**
+- `Lampa.Input.edit` callback is a plain `function(text)`; `Lampa.Select` is camelCase
+  (`onSelect`/`onBack`). `Lampa.Keyboard` does NOT exist on this build.
+- `SettingsApi.addComponent` MUST precede `addParam`; boolean type is `trigger` (auto-persists
+  by param name — no `onChange`).
+- `video.source = src.id` set on every card (`toCard`) to keep the Fav 7-field invariant.
 
 ---
 
@@ -654,17 +895,21 @@ Second live session. Iteration 3 fixes for porntrex/porndig/pornone/24rolika wer
 ```
 plugin.js evaluated
   → IIFE guard check (window.plugin_cherry_ready)
-  → PROXY_KEY read from Lampa.Storage
   → window.appready check
       YES → startPlugin() immediately
       NO  → Lampa.Listener.follow('app', e.type==='ready' → startPlugin())
 
-startPlugin():
-  → first-run proxy key notice (Lampa.Storage + Lampa.Noty via setTimeout 1500ms)
-  → addLang()      — Lampa.Lang.add()
-  → addTemplates() — Lampa.Template.add() x4
-  → addStyles()    — <style id="cherry-plugin-styles"> injected into document.head
-  → Lampa.Component.add('cherry_main', CherryMain)
-  → Lampa.Component.add('cherry_grid', CherryGrid)
+startPlugin():   (plugin.js:1221)
+  → first-run proxy key notice (Storage default '1206' + Noty cherry_proxy_key_init, setTimeout 1500ms)
+  → addLang()    — Lampa.Lang.add()  (no addTemplates — templates removed)
+  → addStyles()  — <style id="cherry-plugin-styles"> (~30 scoped lines) into document.head
+  → SettingsApi.addComponent('cherry') + addParam(cherry_preview_enabled, type:'trigger')  [guarded]
+  → Lampa.Component.add('cherry_main', CherryMain)   — InteractionCategory subclass
+  → Lampa.Component.add('cherry_grid', CherryGrid)   — InteractionCategory subclass
+  → addFilterButton()   — persistent header filter action (cherry_grid only)
   → Lampa.Menu.addButton(...)
+  → Lampa.Listener.follow('player', ...)  — blob revoke + related-grid push on player destroy
 ```
+
+> The proxy key is no longer read at module init — `getProxyKey()` reads `Lampa.Storage`
+> lazily on every `buildProxyUrl` call.
