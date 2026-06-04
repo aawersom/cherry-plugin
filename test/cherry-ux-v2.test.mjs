@@ -469,18 +469,19 @@ describe('P2: plugin.js source assertions (anti-drift)', () => {
     expect(SRC).toMatch(/cherry_group_label/);
   });
 
-  it('_reloadFromStart clears group labels alongside cards', () => {
-    // remove selector must include both .cherry-card and .cherry-group-label
-    expect(SRC).toMatch(/\.cherry-card\s*,\s*\.cherry-group-label/);
+  it('sort/category reload re-runs create() from page 1 (no DOM card surgery)', () => {
+    // The base class owns the rendered grid, so a filter change reloads via
+    // _reload() -> comp.create(); there is no manual .cherry-card removal.
+    expect(SRC).toMatch(/function _reload\(\)[\s\S]{0,120}comp\.create\(\)/);
   });
 
-  it('loadAllSources caps groups at 10 (slice(0, 10))', () => {
+  it('all_sources caps each source at 10 (slice(0, 10)) before flat concat', () => {
     expect(SRC).toMatch(/slice\(\s*0\s*,\s*10\s*\)/);
   });
 
   it('grouped render no longer alphabetises all_sources results', () => {
     // The old flat-merge path sorted with localeCompare or a title a/b comparator.
-    // After P2 the all-sources merge+sort block is gone. Guard against its return.
+    // After migration the all-sources merge+sort block is gone. Guard against its return.
     expect(SRC).not.toMatch(/all\.sort\(/);
   });
 });
@@ -661,11 +662,12 @@ describe('P0: plugin.js source assertions (anti-drift)', () => {
     );
   });
 
-  it('right handler uses geometric edge detection to open the menu', () => {
-    // Right opens the menu only at the geometric right edge (_atRightEdge),
-    // otherwise it moves; no reliance on move()'s focus-update timing.
-    expect(SRC).toMatch(/function _atRightEdge\(/);
-    expect(SRC).toMatch(/right:\s*function[\s\S]{0,200}_atRightEdge\(\)[\s\S]{0,80}openActionsMenu\(\)/);
+  it('right edge opens the menu via InteractionCategory onRight', () => {
+    // The base class drives focus/nav; the plugin only overrides onRight, which
+    // opens the action menu at the grid's right edge. No geometric edge probe,
+    // no hand-rolled directional handler.
+    expect(SRC).toMatch(/comp\.onRight\s*=\s*function[\s\S]{0,80}openActionsMenu\(\)/);
+    expect(SRC).not.toMatch(/function _atRightEdge\(/);
   });
 
   it('per-source search opens Keyboard and pushes source_id without all_sources', () => {
@@ -694,96 +696,53 @@ describe('P0: plugin.js source assertions (anti-drift)', () => {
 });
 
 // ============================================================
-// P1 — D-pad Infinite Scroll via IntersectionObserver sentinel
+// P1 — Pagination via InteractionCategory.nextPageReuest
 // (behaviour documentation)
 //
-// Mirrors the three pure decisions that drive the sentinel/maybeLoadMore
-// logic in CherryGrid after Phase 4. No DOM, no Lampa, no observer — only
-// the load-gate predicate and the D-pad proximity test.
+// The hand-rolled IntersectionObserver/sentinel infinite-scroll was removed
+// when cherry_grid migrated to Lampa.InteractionCategory. The base class owns
+// scroll-into-view and fires nextPageReuest as the user nears the list end.
+// The plugin only decides: (a) which modes paginate, (b) the next page number.
 // ============================================================
 
-describe('P1: shouldLoadMore — POST behaviour', function () {
+describe('P1: nextPageReuest paging — POST behaviour', function () {
   /**
-   * Pure mirror of the load-gate shared by all three triggers
-   * (IntersectionObserver callback, scroll listener, maybeLoadMore):
-   *   if (!loading && currentPage < totalPages) { load next }
-   * Returns true iff the next page should be requested.
+   * Mirror of the single-page guard in comp.nextPageReuest: favorites,
+   * related-items and all-sources search all resolve with an empty page
+   * (total_pages stays 1) so the base class stops paginating; every other
+   * mode advances to currentPage + 1.
    */
-  function shouldLoadMore(loading, currentPage, totalPages) {
-    return !loading && currentPage < totalPages;
+  function isSinglePageMode(object) {
+    return !!(object.is_favorites || object._related_items || (object.all_sources && object.query));
   }
 
-  it('loading true blocks load (no double-load while a request is in flight)', function () {
-    expect(shouldLoadMore(true, 1, 5)).toBe(false);
+  it('favorites is single-page (no further pages requested)', function () {
+    expect(isSinglePageMode({ is_favorites: true })).toBe(true);
   });
 
-  it('loading true blocks even on the last page boundary', function () {
-    expect(shouldLoadMore(true, 4, 5)).toBe(false);
+  it('related-items is single-page', function () {
+    expect(isSinglePageMode({ _related_items: [{ title: 'a' }] })).toBe(true);
   });
 
-  it('currentPage === totalPages: no more pages, no load', function () {
-    expect(shouldLoadMore(false, 5, 5)).toBe(false);
+  it('all-sources search is single-page', function () {
+    expect(isSinglePageMode({ all_sources: true, query: 'cat' })).toBe(true);
   });
 
-  it('currentPage > totalPages: defensive false', function () {
-    expect(shouldLoadMore(false, 6, 5)).toBe(false);
+  it('normal source browse paginates', function () {
+    expect(isSinglePageMode({ source_id: 'pornhub' })).toBe(false);
   });
 
-  it('not loading and currentPage < totalPages: load', function () {
-    expect(shouldLoadMore(false, 1, 5)).toBe(true);
+  it('per-source search paginates', function () {
+    expect(isSinglePageMode({ source_id: 'pornhub', query: 'milf' })).toBe(false);
   });
 
-  it('not loading, one page left (currentPage = totalPages - 1): load', function () {
-    expect(shouldLoadMore(false, 4, 5)).toBe(true);
+  it('model browse paginates', function () {
+    expect(isSinglePageMode({ source_id: 'pornhub', model_url: 'https://x/m/f' })).toBe(false);
   });
 
-  it('single-page result (totalPages = 1): never loads', function () {
-    // Favorites / _related_items / grouped search all set totalPages = 1.
-    expect(shouldLoadMore(false, 1, 1)).toBe(false);
-  });
-});
-
-describe('P1: isSentinelNear — POST behaviour', function () {
-  /**
-   * Pure mirror of the maybeLoadMore() proximity test:
-   *   var rect  = sentinel.getBoundingClientRect();
-   *   var viewH = window.innerHeight;
-   *   if (rect.top < viewH + threshold) { ... }
-   * D-pad uses a 400px lookahead. Returns true iff the sentinel's top edge
-   * is within viewportH + threshold of the top of the viewport.
-   */
-  function isSentinelNear(rectTop, viewportH, threshold) {
-    return rectTop < viewportH + threshold;
-  }
-
-  it('sentinel just inside the viewport: near', function () {
-    expect(isSentinelNear(500, 1000, 400)).toBe(true);
-  });
-
-  it('sentinel exactly at viewport bottom: near (below viewportH but within threshold)', function () {
-    expect(isSentinelNear(1000, 1000, 400)).toBe(true);
-  });
-
-  it('sentinel within the 400px lookahead band below the fold: near', function () {
-    expect(isSentinelNear(1399, 1000, 400)).toBe(true);
-  });
-
-  it('sentinel exactly at the threshold edge (viewportH + threshold): NOT near (strict <)', function () {
-    expect(isSentinelNear(1400, 1000, 400)).toBe(false);
-  });
-
-  it('sentinel far below the lookahead band: not near', function () {
-    expect(isSentinelNear(5000, 1000, 400)).toBe(false);
-  });
-
-  it('sentinel above the fold (negative top, already scrolled past): near', function () {
-    expect(isSentinelNear(-200, 1000, 400)).toBe(true);
-  });
-
-  it('threshold widens the trigger band (0 vs 400)', function () {
-    // top=1200, viewportH=1000: out of range at threshold 0, in range at 400.
-    expect(isSentinelNear(1200, 1000, 0)).toBe(false);
-    expect(isSentinelNear(1200, 1000, 400)).toBe(true);
+  it('next page is current + 1', function () {
+    var currentPage = 3;
+    expect(currentPage + 1).toBe(4);
   });
 });
 
@@ -792,50 +751,48 @@ describe('P1: isSentinelNear — POST behaviour', function () {
 // ============================================================
 
 describe('P1: plugin.js source assertions (anti-drift)', () => {
-  it('sentinel element class cherry-scroll-sentinel present', () => {
-    expect(SRC).toContain('cherry-scroll-sentinel');
+  it('cherry_grid is built on Lampa.InteractionCategory', () => {
+    expect(SRC).toMatch(/new\s+Lampa\.InteractionCategory\(/);
   });
 
-  it('IntersectionObserver is referenced (primary D-pad trigger)', () => {
-    expect(SRC).toMatch(/IntersectionObserver/);
+  it('comp.create toggles the activity loader and calls build()', () => {
+    expect(SRC).toMatch(/comp\.create\s*=\s*function[\s\S]{0,400}this\.activity\.loader\(\s*true\s*\)/);
+    expect(SRC).toMatch(/comp\.create\s*=\s*function[\s\S]{0,600}\.build\(\s*\{/);
   });
 
-  it('maybeLoadMore function is defined', () => {
-    expect(SRC).toMatch(/function\s+maybeLoadMore\s*\(/);
+  it('nextPageReuest is overridden for framework-driven paging', () => {
+    expect(SRC).toMatch(/comp\.nextPageReuest\s*=\s*function\s*\(\s*object\s*,\s*resolve\s*,\s*reject\s*\)/);
   });
 
-  it('down handler calls maybeLoadMore', () => {
-    // down: function () { Lampa.Controller.move('down'); maybeLoadMore(); }
-    expect(SRC).toMatch(/down\s*:\s*function[\s\S]{0,120}maybeLoadMore\s*\(/);
+  it('nextPageReuest resolves with {title, results, total_pages}', () => {
+    expect(SRC).toMatch(/resolve\(\{\s*title:[\s\S]{0,80}results:[\s\S]{0,40}total_pages:/);
   });
 
-  it('right handler calls maybeLoadMore (in the moved-focus branch)', () => {
-    // Right is now edge-detecting: it opens the action menu at the edge, else
-    // moves + maybeLoadMore. maybeLoadMore sits deeper in the handler now.
-    expect(SRC).toMatch(/right\s*:\s*function[\s\S]{0,600}maybeLoadMore\s*\(/);
+  it('single-page modes short-circuit nextPageReuest (favorites/related/all_sources)', () => {
+    expect(SRC).toMatch(/object\.is_favorites\s*\|\|\s*object\._related_items\s*\|\|\s*\(object\.all_sources\s*&&\s*object\.query\)/);
   });
 
-  it('observer disconnect appears in stop()', () => {
-    expect(SRC).toMatch(/this\.stop\s*=\s*function[\s\S]{0,300}disconnect\s*\(/);
+  it('next page advances currentPage + 1', () => {
+    expect(SRC).toMatch(/var\s+nextPage\s*=\s*currentPage\s*\+\s*1/);
   });
 
-  it('observer disconnect appears in destroy()', () => {
-    expect(SRC).toMatch(/this\.destroy\s*=\s*function[\s\S]{0,300}disconnect\s*\(/);
+  it('hand-rolled infinite-scroll internals are gone (no sentinel/observer/maybeLoadMore)', () => {
+    expect(SRC).not.toMatch(/function\s+maybeLoadMore\s*\(/);
+    expect(SRC).not.toMatch(/IntersectionObserver/);
+    expect(SRC).not.toMatch(/_sentinelObserver/);
+    expect(SRC).not.toMatch(/function\s+renderCards\s*\(/);
   });
 
-  it('sentinel is re-appended after renderCards (kept at list bottom)', () => {
-    // Each renderCards(...) call site re-appends the sentinel via append(sentinel).
-    expect(SRC).toMatch(/append\(\s*sentinel\s*\)/);
+  it('cardRender wires onEnter/onMenu/onFocus per card', () => {
+    expect(SRC).toMatch(/comp\.cardRender\s*=\s*function\s*\(\s*object\s*,\s*element\s*,\s*card\s*\)/);
+    expect(SRC).toMatch(/card\.onEnter\s*=\s*function/);
+    expect(SRC).toMatch(/card\.onMenu\s*=\s*function/);
+    expect(SRC).toMatch(/card\.onFocus\s*=\s*function/);
   });
 
-  it('sentinel re-append follows a renderCards call in loadPage path', () => {
-    // renderCards(result.items, scroll.body()); ... scroll.body().append(sentinel);
-    expect(SRC).toMatch(/renderCards\([\s\S]{0,200}append\(\s*sentinel\s*\)/);
-  });
-
-  it('existing 300px scroll listener kept as secondary trigger', () => {
-    // The pointer/mouse scroll fallback remains (300px threshold).
-    expect(SRC).toMatch(/clientHeight\s*<\s*300/);
+  it('cardRender.onFocus wraps the base hook (preserves base scroll-into-view)', () => {
+    expect(SRC).toMatch(/var\s+f\s*=\s*card\.onFocus/);
+    expect(SRC).toMatch(/if\s*\(f\)\s*f\(target,\s*card_data\)/);
   });
 });
 
@@ -1281,14 +1238,17 @@ describe('categories coverage — every wired adapter ships a list', () => {
 
 // ── Navigation recursion guard (all directions, both controllers) ─────────────
 describe('nav recursion guard — plugin.js source assertions (anti-drift)', () => {
-  it('both controllers declare _navMoving', () => {
+  it('cherry_grid no longer hand-rolls a controller (migrated to InteractionCategory)', () => {
+    // CherryGrid must NOT declare _navMoving anymore; only CherryMain (separate
+    // phase) still uses the hand-rolled controller with its recursion guard.
     var n = (SRC.match(/var _navMoving = false/g) || []).length;
-    expect(n).toBe(2); // CherryGrid + CherryMain
+    expect(n).toBe(1); // CherryMain only
   });
-  it('every directional handler is guarded by _navMoving (no bare move recursion)', () => {
-    // Count guarded directions: 4 in cherry_grid + 4 in cherry_main = 8
+  it('CherryMain directional handlers stay guarded by _navMoving', () => {
+    // The only remaining hand-rolled controller (cherry_main) keeps all 4
+    // directions guarded against move() re-dispatch stack overflow.
     var guarded = (SRC.match(/if \(_navMoving\) return; _navMoving = true; Lampa\.Controller\.move/g) || []).length;
-    expect(guarded).toBeGreaterThanOrEqual(7); // right in grid is multiline-guarded separately
+    expect(guarded).toBe(4); // up/down/left/right in cherry_main
   });
   it('no unguarded bare directional move remains in a controller handler', () => {
     // The old pattern "up:    function () { Lampa.Controller.move('up'); }" must be gone
