@@ -839,6 +839,14 @@
             action: 'related'
           });
         }
+        // Browse all videos of the card's performer (only sources that surface
+        // a listing-level model field — currently pornhub).
+        if (element.model && element.model.name) {
+          items.push({
+            title: Lampa.Lang.translate('cherry_model') + ': ' + element.model.name,
+            action: 'model'
+          });
+        }
         Lampa.Select.show({
           title: element.title,
           items: items,
@@ -881,6 +889,15 @@
               }).catch(function () {
                 Lampa.Noty.show(Lampa.Lang.translate('cherry_error'), { style: 'warn' });
                 Lampa.Controller.toggle('content');
+              });
+            } else if (item.action === 'model') {
+              Lampa.Controller.toggle('content');
+              Lampa.Activity.push({
+                component: 'cherry_grid',
+                title:     element.model.name,
+                source_id: element.source,
+                model_url: element.model.url,
+                page:      1
               });
             }
           },
@@ -1107,6 +1124,7 @@
       cherry_category:         { ru: 'Категория',           en: 'Category'           },
       cherry_category_default: { ru: 'Все категории',       en: 'All categories'     },
       cherry_model_videos:     { ru: 'Видео модели',        en: 'Model videos'       },
+      cherry_model:            { ru: 'Модель',              en: 'Model'              },
       cherry_preview_setting:  { ru: 'Предпросмотр',        en: 'Preview'            },
       cherry_related:          { ru: 'Похожее',             en: 'Related'            },
       cherry_view_rows:        { ru: 'Вид: Ряды',           en: 'View: Rows'         },
@@ -1505,7 +1523,7 @@ SOURCES.push({
     // Extract video ID from URL for stable id
     var idMatch = (v.url || '').match(/viewkey=([a-z0-9]+)/i);
     var id = idMatch ? idMatch[1] : (v.video_id ? String(v.video_id) : String(Math.random()));
-    return {
+    var card = {
       id: id,
       source: 'pornhub',
       title: v.title || '',
@@ -1514,6 +1532,18 @@ SOURCES.push({
       duration: parseDur(v.duration),
       views: parseViews(String(v.views || 0))
     };
+    // Surface the performer so the card onMenu can offer "browse by model".
+    // browseByModel() appends "/videos?page=P" itself, so model.url is the
+    // pornstar page BASE (/pornstar/{slug}) WITHOUT a trailing /videos.
+    if (v.pornstars && v.pornstars[0] && v.pornstars[0].pornstar_name) {
+      var pn = v.pornstars[0].pornstar_name;
+      card.model = {
+        name: pn,
+        url: 'https://www.pornhub.com/pornstar/' +
+             pn.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+      };
+    }
+    return card;
   },
 
   cfg: {
