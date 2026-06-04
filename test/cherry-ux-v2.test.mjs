@@ -661,12 +661,11 @@ describe('P0: plugin.js source assertions (anti-drift)', () => {
     );
   });
 
-  it('right handler edge-detects and opens the menu (not a plain move)', () => {
-    // The right controller handler must call openActionsMenu when focus did not
-    // change (right edge), instead of unconditionally moving.
-    expect(SRC).toMatch(
-      /right:\s*function[\s\S]{0,300}Lampa\.Controller\.move\(['"]right['"]\)[\s\S]{0,200}openActionsMenu\(\)/
-    );
+  it('right handler uses geometric edge detection to open the menu', () => {
+    // Right opens the menu only at the geometric right edge (_atRightEdge),
+    // otherwise it moves; no reliance on move()'s focus-update timing.
+    expect(SRC).toMatch(/function _atRightEdge\(/);
+    expect(SRC).toMatch(/right:\s*function[\s\S]{0,200}_atRightEdge\(\)[\s\S]{0,80}openActionsMenu\(\)/);
   });
 
   it('per-source search opens Keyboard and pushes source_id without all_sources', () => {
