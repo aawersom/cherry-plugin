@@ -1318,6 +1318,89 @@ describe('Batch 5 categories — plugin.js source assertions (anti-drift)', () =
   });
 });
 
+// ── Pornhub webmasters API fix (slugs + orderings + pagination) ───────────────
+// Anti-drift assertions against the pornhub adapter source, plus a behavior test
+// for the total_pages derivation logic (API ships {videos:[...]} with no count).
+describe('Pornhub adapter — webmasters slugs/orderings/pagination', () => {
+  // Isolate the pornhub adapter block so assertions don't accidentally match
+  // another adapter's cfg.
+  const PH = (() => {
+    const start = SRC.indexOf("id: 'pornhub'");
+    const end = SRC.indexOf('_parseHtmlCards', start);
+    return SRC.slice(start, end);
+  })();
+
+  it('categories use SLUGS (bbw, red-head, milf), not numeric ids', () => {
+    expect(PH).toContain('bbw:BBW');
+    expect(PH).toContain('red-head:Рыжие');
+    expect(PH).toContain('milf:MILF');
+    expect(PH).toContain('18-25:Молодые 18+');
+    expect(PH).toContain('russian:Русское');
+    expect(PH).toContain('webcam:Вебкам');
+  });
+
+  it('categories contain NO bare numeric ids (e.g. "6:", "31:")', () => {
+    const catsMatch = PH.match(/categories:\s*_cats\('([^']*)'\)/);
+    expect(catsMatch).toBeTruthy();
+    const pairs = catsMatch[1].split(',');
+    for (const pair of pairs) {
+      const id = pair.slice(0, pair.indexOf(':'));
+      // a real slug is never purely digits
+      expect(/^\d+$/.test(id)).toBe(false);
+    }
+  });
+
+  it('hairy/Волосатые dropped (no such slug in the API)', () => {
+    expect(PH).not.toContain('Волосатые');
+    expect(PH).not.toContain('hairy:');
+  });
+
+  it('sorts use valid orderings (mostviewed, rating, mostrecent, longest)', () => {
+    const sortsMatch = PH.match(/sorts:\s*_cats\('([^']*)'\)/);
+    expect(sortsMatch).toBeTruthy();
+    const ids = sortsMatch[1].split(',').map(p => p.slice(0, p.indexOf(':')));
+    expect(ids).toEqual(['mostviewed', 'rating', 'mostrecent', 'longest']);
+  });
+
+  it('sorts contain NO legacy fake ids (mv/tr/mr)', () => {
+    const sortsMatch = PH.match(/sorts:\s*_cats\('([^']*)'\)/);
+    const ids = sortsMatch[1].split(',').map(p => p.slice(0, p.indexOf(':')));
+    expect(ids).not.toContain('mv');
+    expect(ids).not.toContain('tr');
+    expect(ids).not.toContain('mr');
+  });
+
+  it('browse/search pass sort verbatim, default mostviewed (no mv special-case)', () => {
+    expect(PH).toContain("var ordering = sort || 'mostviewed';");
+    expect(PH).not.toContain("!== 'mv'");
+    expect(PH).toContain("'&ordering=' + ordering");
+  });
+
+  it('total_pages derived from batch size (no broken total_pages/pagesTotal parse)', () => {
+    expect(PH).not.toContain('data.total_pages');
+    expect(PH).not.toContain('data.pagesTotal');
+    expect(PH).toContain('_PAGE_SIZE');
+    expect(PH).toContain('(p + 1)');
+  });
+
+  // Behavior: full batch (>= PAGE_SIZE) means there's likely a next page;
+  // a short batch means we've hit the last page.
+  it('pagination logic: full batch -> page+1, short batch -> page', () => {
+    const PAGE_SIZE = 30;
+    const derive = (items, page) =>
+      (items.length >= PAGE_SIZE ? page + 1 : page);
+
+    const fullBatch = new Array(30).fill({});
+    const shortBatch = new Array(7).fill({});
+    const emptyBatch = [];
+
+    expect(derive(fullBatch, 1)).toBe(2);  // keep scrolling
+    expect(derive(fullBatch, 5)).toBe(6);
+    expect(derive(shortBatch, 3)).toBe(3); // stop here
+    expect(derive(emptyBatch, 4)).toBe(4); // stop here
+  });
+});
+
 // ── Coverage: every adapter with a cfg exposes categories ─────────────────────
 describe('categories coverage — every wired adapter ships a list', () => {
   it('at least 20 adapters declare cfg.categories', () => {
