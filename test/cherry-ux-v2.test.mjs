@@ -822,13 +822,13 @@ describe('P0: plugin.js source assertions (anti-drift)', () => {
 
 describe('P1: nextPageReuest paging — POST behaviour', function () {
   /**
-   * Mirror of the single-page guard in comp.nextPageReuest: favorites,
-   * related-items and all-sources search all resolve with an empty page
-   * (total_pages stays 1) so the base class stops paginating; every other
-   * mode advances to currentPage + 1.
+   * Mirror of the single-page guard in comp.nextPageReuest: ONLY favorites and
+   * related-items resolve with an empty page (total_pages stays 1) so the base
+   * class stops paginating. all-sources search now falls through to _gridLoad and
+   * paginates like every other mode (advances to currentPage + 1).
    */
   function isSinglePageMode(object) {
-    return !!(object.is_favorites || object._related_items || (object.all_sources && object.query));
+    return !!(object.is_favorites || object._related_items);
   }
 
   it('favorites is single-page (no further pages requested)', function () {
@@ -839,8 +839,8 @@ describe('P1: nextPageReuest paging — POST behaviour', function () {
     expect(isSinglePageMode({ _related_items: [{ title: 'a' }] })).toBe(true);
   });
 
-  it('all-sources search is single-page', function () {
-    expect(isSinglePageMode({ all_sources: true, query: 'cat' })).toBe(true);
+  it('all-sources search now paginates (was single-page)', function () {
+    expect(isSinglePageMode({ all_sources: true, query: 'cat' })).toBe(false);
   });
 
   it('normal source browse paginates', function () {
@@ -883,8 +883,11 @@ describe('P1: plugin.js source assertions (anti-drift)', () => {
     expect(SRC).toMatch(/resolve\(\{\s*title:[\s\S]{0,80}results:[\s\S]{0,40}total_pages:/);
   });
 
-  it('single-page modes short-circuit nextPageReuest (favorites/related/all_sources)', () => {
-    expect(SRC).toMatch(/object\.is_favorites\s*\|\|\s*object\._related_items\s*\|\|\s*\(object\.all_sources\s*&&\s*object\.query\)/);
+  it('single-page modes short-circuit nextPageReuest (favorites/related only; all_sources paginates)', () => {
+    // Only favorites + related short-circuit now. all_sources+query falls through
+    // to _gridLoad so global search / similar-titles paginate.
+    expect(SRC).toMatch(/object\.is_favorites\s*\|\|\s*object\._related_items\b/);
+    expect(SRC).not.toMatch(/object\.is_favorites\s*\|\|\s*object\._related_items\s*\|\|\s*\(object\.all_sources\s*&&\s*object\.query\)/);
   });
 
   it('next page advances currentPage + 1', () => {
@@ -1386,7 +1389,7 @@ describe('Phase 3 A3(b): all_sources per-source title-match filter before slice'
   it('filter uses indexOf(query) and runs before slice(0,10)', () => {
     var at = SRC.indexOf('All-sources search');
     expect(at).toBeGreaterThan(-1);
-    var body = SRC.slice(at, at + 1800);
+    var body = SRC.slice(at, at + 2200);
     // per-source title match
     expect(body).toMatch(/\.toLowerCase\(\)\.indexOf\(ql\)\s*!==\s*-1/);
     // filter executes before the slice
@@ -1398,15 +1401,54 @@ describe('Phase 3 A3(b): all_sources per-source title-match filter before slice'
 
   it('non-ASCII (Cyrillic) queries skip the filter', () => {
     var at = SRC.indexOf('All-sources search');
-    var body = SRC.slice(at, at + 1800);
+    var body = SRC.slice(at, at + 2200);
     expect(body).toMatch(/isLatin\s*=\s*\/\^\[\\x00-\\x7F\]\*\$\/\.test\(ql\)/);
     expect(body).toMatch(/if\s*\(ql\s*&&\s*isLatin\)/);
   });
 
   it('keeps a source unfiltered top-N when its filtered slice is empty', () => {
     var at = SRC.indexOf('All-sources search');
-    var body = SRC.slice(at, at + 1800);
+    var body = SRC.slice(at, at + 2200);
     expect(body).toMatch(/if\s*\(matched\.length\)\s*picked\s*=\s*matched/);
+  });
+});
+
+describe('all_sources pagination wiring', () => {
+  function allSourcesBody() {
+    var at = SRC.indexOf('All-sources search');
+    expect(at).toBeGreaterThan(-1);
+    return SRC.slice(at, at + 3200);
+  }
+
+  it('queries every source for the requested page (not hardcoded 1)', () => {
+    var body = allSourcesBody();
+    expect(body).toMatch(/src\.search\(object\.query,\s*page\)/);
+    expect(body).not.toMatch(/src\.search\(object\.query,\s*1\)/);
+  });
+
+  it('tracks a full batch (>=10) to know another page exists', () => {
+    var body = allSourcesBody();
+    expect(body).toMatch(/anyFull\s*=\s*false/);
+    expect(body).toMatch(/r\.items\.length\s*>=\s*10[\s\S]{0,40}anyFull\s*=\s*true/);
+  });
+
+  it('derives total_pages: page+1 when a full batch returned, else page (last)', () => {
+    var body = allSourcesBody();
+    expect(body).toMatch(/resolve\(flat\.map\(toCard\),\s*anyFull\s*\?\s*\(page\s*\+\s*1\)\s*:\s*page\)/);
+  });
+});
+
+describe('per-channel search pagination audit', () => {
+  it('paginating searches pass the page param into the URL', () => {
+    // representative paginating per-source searches: each must thread page/p into URL
+    expect(SRC).toMatch(/src\.search\(object\.query,\s*page,\s*currentSort\)/); // per-source grid load
+    expect(SRC).toMatch(/cfg\.searchUrl\(query,\s*page\)/);                     // KVS engine search
+  });
+
+  it('genuinely single-page searches stay total_pages:1 and are documented', () => {
+    var singlePageHits = SRC.match(/single-page search \(site\)/g) || [];
+    // tizam, pornobolt, lenporno, 24rolika, jopaonline
+    expect(singlePageHits.length).toBeGreaterThanOrEqual(5);
   });
 });
 

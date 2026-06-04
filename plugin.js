@@ -464,23 +464,29 @@
         return;
       }
 
-      // Related items passed inline — single page, no paging.
+      // «Похожие»: a one-shot recommendations snapshot fetched once via getRelated
+      // (related blocks carry no page param), so it's genuinely single-page.
       if (object._related_items) {
         resolve(object._related_items.map(toCard), 1);
         return;
       }
 
-      // All-sources search — parallel, FLAT concat (drop group labels), no paging.
+      // All-sources search — parallel, FLAT concat (drop group labels). Paginates:
+      // each source is queried for the SAME `page`; if ANY source returns a full
+      // batch this page there's likely more (→ page+1), else this is the last page.
       if (object.all_sources && object.query) {
         if (!SOURCES.length) { resolve([], 1); return; }
         var promises = SOURCES.map(function (src) {
-          return src.search(object.query, 1).catch(function (err) {
+          return src.search(object.query, page).catch(function (err) {
             console.warn('[Cherry] all_sources search error from ' + src.id + ':', err);
             return { items: [], total_pages: 1 };
           });
         });
         Promise.all(promises).then(function (results) {
           var flat = [];
+          // Track whether any source still has more pages to come: a source's raw
+          // batch reaching the slice cap (>=10) means it likely has another page.
+          var anyFull = false;
           // A3(b): per-source title-match filter BEFORE slice(0,10). Unranked top-N
           // from each source let irrelevant results dominate; keep only cards whose
           // title contains the query. Skip the filter for non-ASCII (Cyrillic)
@@ -491,6 +497,8 @@
           var isLatin = /^[\x00-\x7F]*$/.test(ql);
           results.forEach(function (r) {
             if (r && r.items && r.items.length) {
+              // A full raw batch (>=10) from any source implies a further page exists.
+              if (r.items.length >= 10) anyFull = true;
               var picked = r.items;
               if (ql && isLatin) {
                 var matched = r.items.filter(function (v) { return (v.title || '').toLowerCase().indexOf(ql) !== -1; });
@@ -502,10 +510,11 @@
           // A2: client-side sort for all_sources search (no single source to honor
           // a server sort). Only duration is uniformly available across adapters;
           // 'relevance' keeps the natural per-source-interleaved order (default).
+          // Sort is applied to the CURRENT page's flat only (per-page sort).
           if (object.client_sort === 'duration') {
             flat.sort(function (a, b) { return (b.duration || 0) - (a.duration || 0); });
           }
-          resolve(flat.map(toCard), 1);
+          resolve(flat.map(toCard), anyFull ? (page + 1) : page);
         }).catch(function (err) {
           console.warn('[Cherry] loadAllSources error:', err);
           reject();
@@ -761,8 +770,10 @@
     };
 
     comp.nextPageReuest = function (object, resolve, reject) {
-      // Single-page modes never paginate.
-      if (object.is_favorites || object._related_items || (object.all_sources && object.query)) {
+      // Genuinely single-page modes never paginate: favorites is a local list and
+      // _related_items is a one-shot recommendations snapshot (no page param).
+      // all_sources+query DOES paginate now — it falls through to _gridLoad.
+      if (object.is_favorites || object._related_items) {
         resolve({ title: screenTitle, results: [], total_pages: 1 });
         return;
       }
@@ -3545,7 +3556,8 @@ SOURCES.push({
   },
 
   search: function(query, page) {
-    // Tizam has no keyword search; attempt generic ?s= and return empty on failure
+    // single-page search (site): Tizam has no real keyword search — generic DLE ?s=
+    // takes no page param and returns one result set, so total_pages stays 1.
     return cherryFetch('https://tv4.tizam.org/?s=' + encodeURIComponent(query))
       .then(function(html) {
         var items = [];
@@ -3828,6 +3840,7 @@ SOURCES.push(_kvsEngine({
     catPageBase: 1, catPage1Omit: true, sortParam: 'sort',
     categories: _cats('russkoe-porno:Русские,incest:Инцест,zrelye:Зрелые,pickup:Пикап,kasting:Кастинг,vzroslye-s-molodymi:Взрослые с молодыми,molodenkie:Молоденькие,lyubitelskoe:Любительское,gruppovuha:Групповуха,anal:Анал,aziatki:Азиатки,latinki:Латинки,mezhrassovyj-seks:Межрассовый секс,tolstye:Толстые,sperma:Сперма,igrushki:Игрушки,krasotki:Красотки,lesbiyanki:Лесбиянки,minet:Минет,blondinki:Блондинки,bryunetki:Брюнетки,ryzhie:Рыжие,fetish-i-bdsm:Фетиш и БДСМ,bolshie-siski:Большие сиськи,bolshoj-chlen:Большой член,masturbaciya:Мастурбация,volosatye:Волосатые,dvojnoe-proniknovenie:Двойное проникновение,na-ulice:На улице,zhestkij-seks:Жесткий секс,china:Китайское,starushki:Старушки,milf:Милфа,korean:Корейское,granny:Бабушки,mama-druga:Мама друга,doiki:Дойки,huge-cock:Огромный член,shkola:Школа,big-ass:Большая жопа'),
     sorts: _cats('mv:По популярности,mc:По комментариям'),
+    // single-page search (site): /search/{q} takes no page param.
     searchUrl: function(query) {
         return 'https://sex.pornobolt.in/search/' + encodeURIComponent(query);
     },
@@ -4089,7 +4102,7 @@ SOURCES.push({
     cfg: { sorts: _cats('2:По популярности,3:По рейтингу'), categories: _cats('russkoye:Русское,molodyye:Молодые,zrelyye:Зрелые,mamki:Мамки,analnoye:Анальное,minet:Минет,domashneye:Домашнее,krasotki:Красотки,bryunetki:Брюнетки,blondinki:Блондинки,bolshiye-dojki:Большие дойки,bolshiye-popki:Большие попки,bolshiye-chleny:Большие члены,khudyye:Худые,v-chulkakh:В чулках,ot-pervogo-litsa:От первого лица,gruppovoye:Групповое,kasting:Кастинг,studenty:Студенты,izmena:Измена,gheny:Жены,mzhm:МЖМ,blacked:Негры,aziatskoye:Азиатское,yaponskoye:Японское,mulatki:Мулатки,rakom:Раком,sperma:Сперма,bdsm:БДСМ,masturbatsiya:Мастурбация,lesbiyanki:Лесбиянки,massazh:Массаж,volosatyye:Волосатые,dvoynoye-proniknoveniye:Двойное проникновение,dominirovaniye:Доминирование,orgazmy:Оргазмы,zhestkoye:Жесткое,na-prirode:На природе,na-publike:На публике,pikap:Пикап') },
 
     search: function (query, page) {
-        // single-page site: /search/?q= takes no page param → total_pages 1.
+        // single-page search (site): /search/?q= takes no page param → total_pages 1.
         var url = 'https://www.lenporno.net/search/?q=' + encodeURIComponent(query);
         return cherryFetch(url).then(function (html) {
             return { items: _lenpornoCards(html), total_pages: 1 };
@@ -4195,7 +4208,7 @@ SOURCES.push({
     cfg: { categories: _cats('russia:Русское порно,russian:С переводом,gopa:Анал,retro:Ретро,asian-girl:Азиатки,bdsm:БДСМ,big-cock:Большие члены,big-tits:Большие сиськи,group:Групповуха,lesbi:Лесбиянки,teen:Молодые девушки,solo:Женская мастурбация,beautiful:Красивый секс,black:Межрасовое,homemade:Домашнее,incest:Инцест,orgasms:Оргазмы,movie:Порно фильмы,ok:Одноклассники,youtube-porno:Ютуб'), sorts: [] /* sort not URL-addressable (DLE/AJAX POST) */ },
 
     search: function (query, page) {
-        // DLE search does not paginate natively — page param is advisory
+        // single-page search (site): DLE search does not paginate natively (no page param).
         var url = 'https://w2.huyalkino.com/index.php?do=search&subaction=search&story=' + encodeURIComponent(query);
         return cherryFetch(url).then(function (html) {
             return { items: _rolikaCards(html), total_pages: 1 };
@@ -4280,7 +4293,7 @@ SOURCES.push({
     cfg: { categories: _cats('mamki:Мамки,russkoe:Русское,zhestkoe:Жесткое,zrelye:Зрелые,izmena:Измена,krasotki:Красотки,domashnee:Домашнее,big-cock:Большие члены,gruppovoe:Групповое,anal:Анал,asian:Азиатки,studenty:Студенты,blonde:Блондинки,bolshie-siski:Большие сиськи,bryunetki:Брюнетки,dvoynoe-proniknovenie:Двойное проникновение,hudenkie:Худые,krasiviy-seks:Красивый секс,lesbiyanki:Лесбиянки,masturbation:Мастурбация,mejrassovyy:Межрасовое,minet:Минет,molodye:Молодые,mulatki:Мулатки,pickap:Пикап,rakom:Раком,redhead:Рыжие,s-negrami:Негры,stockings:Чулки,v-vannoi:В ванной,zhopy:Жопы'), sorts: _cats('popular:По популярности,toprated:По рейтингу') },
 
     search: function (query, page) {
-        // single-page site: DLE ?do=search returns one page (no page param) → total_pages 1.
+        // single-page search (site): DLE ?do=search returns one page (no page param) → total_pages 1.
         // DLE search responds HTTP 404 but the body DOES contain result cards, so use
         // the status-tolerant _fetchAny (cherryFetch would throw on !ok and drop them).
         var url = 'https://jopaonline.mobi/?do=search&subaction=search&story=' + encodeURIComponent(query);
