@@ -1252,3 +1252,30 @@ describe('Batch 4 categories — plugin.js source assertions (anti-drift)', () =
     expect(SRC).toContain('С переводом'); // tizam
   });
 });
+
+// ── Batch 5: DLE + misc categories (24rolika, jopaonline, ebun, lenporno, pornhub) ──
+describe('Batch 5 categories — plugin.js source assertions (anti-drift)', () => {
+  it('24rolika DLE /{slug}/page/{page}/ template', () => {
+    expect(SRC).toContain('https://w2.huyalkino.com/{slug}/page/{page}/');
+  });
+  it('jopaonline /categories/{slug}/{page} template', () => {
+    expect(SRC).toContain('https://jopaonline.mobi/categories/{slug}/{page}');
+  });
+  it('ebun /categories/{slug}/{page}/ template', () => {
+    expect(SRC).toContain('https://www1.ebun.tv/categories/{slug}/{page}/');
+  });
+  it('lenporno root /{slug}/{page}/ template', () => {
+    expect(SRC).toContain('https://www.lenporno.net/{slug}/{page}/');
+  });
+  it('pornhub category via webmasters &category= param', () => {
+    expect(SRC).toContain("'&category=' + encodeURIComponent(category)");
+  });
+});
+
+// ── Coverage: every adapter with a cfg exposes categories ─────────────────────
+describe('categories coverage — every wired adapter ships a list', () => {
+  it('at least 20 adapters declare cfg.categories', () => {
+    var n = (SRC.match(/categories:\s*_cats\(/g) || []).length;
+    expect(n).toBeGreaterThanOrEqual(20);
+  });
+});
