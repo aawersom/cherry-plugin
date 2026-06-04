@@ -2085,7 +2085,9 @@ SOURCES.push({
       { id: 'mv',   label: 'Популярное'  },
       { id: 'tr',   label: 'Трендовое'   },
       { id: 'mr',   label: 'Свежее'      }
-    ]
+    ],
+    // Pornhub categories are numeric ids passed to the webmasters API (&category=).
+    categories: _cats('1:Азиатки,3:Любительское,4:Большая жопа,5:Красотки,6:BBW,7:Анал,8:Большой член,9:Большие сиськи,11:Блондинки,13:Минет,14:Бондаж,15:Брюнетки,17:Кремпай,18:Камшот,19:Чёрные,20:Фетиш,21:Волосатые,22:Дрочка,23:Жёсткое,24:Латинки,25:Лесбиянки,26:Зрелые,27:MILF,28:Порнозвёзды,29:От первого лица,30:На публике,31:Рыжие,35:Маленькие сиськи,36:Сквирт,38:Молодые 18+,39:Втроём,40:Игрушки,41:Межрасовое,72:Групповуха,73:Японское,75:Русское,84:Вебкам')
   },
 
   search: function(query, page, sort) {
@@ -2107,7 +2109,8 @@ SOURCES.push({
     var p = page || 1;
     var ordering = (sort && sort !== 'mv') ? sort : 'mostviewed';
     var url = 'https://www.pornhub.com/webmasters/search?search=&page=' + p +
-      '&ordering=' + ordering + '&thumbsize=medium_hd';
+      '&ordering=' + ordering + '&thumbsize=medium_hd' +
+      (category ? '&category=' + encodeURIComponent(category) : '');
     return cherryFetch(url).then(function(text) {
       var data = JSON.parse(text);
       var videos = data.videos || (data.data && data.data.videos) || [];
@@ -4266,6 +4269,7 @@ SOURCES.push({
     id: 'ebun',
     name: 'Ebun',
     host: 'www1.ebun.tv',
+    cfg: { categories: _cats('molodye:Молодые,amerikanskoe:Американское,bryunetki:Брюнетки,russkoe:Русское,krasivye-devushki:Красивые девушки,domashnee:Домашнее,anal:Анал,hudye:Худые,blondinki:Блондинки,chulki-i-kolgotki:Чулки,ot-pervogo-lica:От первого лица,bolshie-siski:Большие сиськи,seks-vtroem:Втроём,bolshie-chleny:Большие члены,jopy:Жопы,studenty:Студенты,minet:Минет,kasting:Кастинг,gruppovoe:Групповое,zrelye:Зрелые,negry:Негры,mejrassovoe:Межрассовое,jmj:ЖМЖ,mjm:МЖМ,zheny:Жёны'), sorts: [] },
 
     search: function (query, page) {
         var url = 'https://www1.ebun.tv/search/?q=' + encodeURIComponent(query) + '&page=' + page;
@@ -4275,7 +4279,10 @@ SOURCES.push({
     },
 
     browse: function (category, page) {
-        var url = 'https://www1.ebun.tv/latest-updates/?page=' + page;
+        var p = page || 1;
+        var url = category
+            ? _buildCatUrl('https://www1.ebun.tv/categories/{slug}/{page}/', category, p, 1, true)
+            : 'https://www1.ebun.tv/latest-updates/?page=' + p;
         return cherryFetch(url).then(function (html) {
             return { items: _ebunCards(html), total_pages: _ebunPages(html) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
@@ -4343,6 +4350,7 @@ SOURCES.push({
     id: 'lenporno',
     name: 'LenPorno',
     host: 'www.lenporno.net',
+    cfg: { categories: _cats('aziatskoye:Азиатское,analnoye:Анальное,bdsm:БДСМ,blondinki:Блондинки,bolshiye-dojki:Большие дойки,bolshiye-popki:Большие попки,bolshiye-chleny:Большие члены,bryunetki:Брюнетки,v-chulkakh:В чулках,volosatyye:Волосатые,gruppovoye:Групповое,domashneye:Домашнее,zhestkoye:Жёсткое,zrelyye:Зрелые,izmena:Измена,kasting:Кастинг,krasotki:Красотки,lesbiyanki:Лесбиянки,mamki:Мамки,massazh:Массаж,minet:Минет,molodyye:Молодые,blacked:Негры,orgazmy:Оргазмы,ot-pervogo-litsa:От первого лица,russkoye:Русское,studenty:Студенты,yaponskoye:Японское'), sorts: [] },
 
     search: function (query, page) {
         var url = 'https://www.lenporno.net/search/?q=' + encodeURIComponent(query);
@@ -4352,6 +4360,13 @@ SOURCES.push({
     },
 
     browse: function (category, page) {
+        var p = page || 1;
+        if (category) {
+            var curl = _buildCatUrl('https://www.lenporno.net/{slug}/{page}/', category, p, 1, true);
+            return cherryFetch(curl).then(function (html) {
+                return { items: _lenpornoCards(html), total_pages: _lenpornoPages(html) };
+            }).catch(function () { return { items: [], total_pages: 0 }; });
+        }
         var url = page > 1
             ? 'https://www.lenporno.net/the-best/?page=' + page
             : 'https://www.lenporno.net/the-best/';
@@ -4430,6 +4445,7 @@ SOURCES.push({
     id: '24rolika',
     name: '24Rolika',
     host: 'w2.huyalkino.com',
+    cfg: { categories: _cats('russian:С русской озвучкой,russia:Русское порно,gopa:Анал,retro:Ретро,asian-girl:Азиатки,bdsm:БДСМ,big-cock:Большие члены,big-tits:Большие сиськи,group:Групповуха,lesbi:Лесбиянки,teen:Молодые,solo:Мастурбация,beautiful:Красивый секс,black:Межрасовое,homemade:Домашнее,incest:Инцест,orgasms:Оргазмы'), sorts: [] },
 
     search: function (query, page) {
         // DLE search does not paginate natively — page param is advisory
@@ -4440,9 +4456,10 @@ SOURCES.push({
     },
 
     browse: function (category, page) {
-        var url = page > 1
-            ? 'https://w2.huyalkino.com/page/' + page + '/'
-            : 'https://w2.huyalkino.com/';
+        var p = page || 1;
+        var url = category
+            ? _buildCatUrl('https://w2.huyalkino.com/{slug}/page/{page}/', category, p, 1, true)
+            : (p > 1 ? 'https://w2.huyalkino.com/page/' + p + '/' : 'https://w2.huyalkino.com/');
         return cherryFetch(url).then(function (html) {
             return { items: _rolikaCards(html), total_pages: _rolikaPages(html) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
@@ -4510,6 +4527,7 @@ SOURCES.push({
     id: 'jopaonline',
     name: 'JopaOnline',
     host: 'jopaonline.mobi',
+    cfg: { categories: _cats('mamki:Мамки,russkoe:Русское,zhestkoe:Жёсткое,zrelye:Зрелые,izmena:Измена,krasotki:Красотки,domashnee:Домашнее,big-cock:Большие члены,gruppovoe:Групповое,anal:Анал,asian:Азиатки,studenty:Студенты'), sorts: [] },
 
     search: function (query, page) {
         var url = 'https://jopaonline.mobi/?do=search&subaction=search&story=' + encodeURIComponent(query);
@@ -4519,10 +4537,11 @@ SOURCES.push({
     },
 
     browse: function (category, page) {
-        // page 1 → /, page 2 → /2, page 3 → /3 etc.
-        var url = page > 1
-            ? 'https://jopaonline.mobi/' + page
-            : 'https://jopaonline.mobi/';
+        var p = page || 1;
+        // category → /categories/{slug}/{n} (no trailing slash); else home pagination /{n}.
+        var url = category
+            ? _buildCatUrl('https://jopaonline.mobi/categories/{slug}/{page}', category, p, 1, true)
+            : (p > 1 ? 'https://jopaonline.mobi/' + p : 'https://jopaonline.mobi/');
         return cherryFetch(url).then(function (html) {
             return { items: _jopaCards(html), total_pages: _jopaPages(html) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
