@@ -72,25 +72,25 @@ describe('UX-G: context menu items — POST behaviour', function () {
    */
   function buildMenuItemsPost(cardSrc, Lampa) {
     var isFav = false;
-    var menuItems = [
-      {
-        title: isFav
-          ? Lampa.Lang.translate('cherry_rem_fav_action')
-          : Lampa.Lang.translate('cherry_add_fav_action'),
-        action: 'fav'
-      },
-      {
-        title: Lampa.Lang.translate('cherry_similar'),
-        action: 'similar'
-      }
-    ];
-
+    // Order mirrors plugin.js onMenu: «Похожие» (related, only when getRelated
+    // exists) → «Похожие названия» (similar, always) → «Избранное» (fav).
+    var menuItems = [];
     if (cardSrc && cardSrc.getRelated) {
       menuItems.push({
         title: Lampa.Lang.translate('cherry_related'),
         action: 'related'
       });
     }
+    menuItems.push({
+      title: Lampa.Lang.translate('cherry_similar_titles'),
+      action: 'similar'
+    });
+    menuItems.push({
+      title: isFav
+        ? Lampa.Lang.translate('cherry_rem_fav_action')
+        : Lampa.Lang.translate('cherry_add_fav_action'),
+      action: 'fav'
+    });
 
     return menuItems;
   }
@@ -146,6 +146,28 @@ describe('UX-G: context menu items — POST behaviour', function () {
     expect(actions).not.toContain('related');
     expect(items).toHaveLength(2);
   });
+
+  it('order: «Похожие» (related) comes before «Похожие названия» (similar) when present', function () {
+    var actions = buildMenuItemsPost(pornhubSrc, mockLampa).map(function (i) { return i.action; });
+    expect(actions).toEqual(['related', 'similar', 'fav']);
+  });
+
+  it('order: «Похожие названия» before «Избранное» when no getRelated', function () {
+    var actions = buildMenuItemsPost(xozillaSrc, mockLampa).map(function (i) { return i.action; });
+    expect(actions).toEqual(['similar', 'fav']);
+  });
+
+  it('relabel: the keyword-search item uses cherry_similar_titles (not cherry_similar)', function () {
+    var items = buildMenuItemsPost(xozillaSrc, mockLampa);
+    var sim = items.find(function (i) { return i.action === 'similar'; });
+    expect(sim.title).toBe('cherry_similar_titles');
+    expect(sim.title).not.toBe('cherry_similar');
+  });
+
+  it('«Похожие» present only when getRelated exists', function () {
+    expect(buildMenuItemsPost(pornhubSrc, mockLampa).some(function (i) { return i.action === 'related'; })).toBe(true);
+    expect(buildMenuItemsPost(xozillaSrc, mockLampa).some(function (i) { return i.action === 'related'; })).toBe(false);
+  });
 });
 
 // ============================================================
@@ -161,13 +183,13 @@ describe('S4: model menu item — POST behaviour', function () {
    * (by capability) + optional model (when element.model.name exists).
    */
   function buildMenuItems(cardSrc, element, Lampa) {
-    var items = [
-      { title: Lampa.Lang.translate('cherry_add_fav_action'), action: 'fav' },
-      { title: Lampa.Lang.translate('cherry_similar'),        action: 'similar' }
-    ];
+    // Order: related (conditional) → similar titles → fav → model.
+    var items = [];
     if (cardSrc && cardSrc.getRelated) {
       items.push({ title: Lampa.Lang.translate('cherry_related'), action: 'related' });
     }
+    items.push({ title: Lampa.Lang.translate('cherry_similar_titles'), action: 'similar' });
+    items.push({ title: Lampa.Lang.translate('cherry_add_fav_action'), action: 'fav' });
     if (element.model && element.model.name) {
       items.push({
         title: Lampa.Lang.translate('cherry_model') + ': ' + element.model.name,
@@ -369,6 +391,22 @@ describe('plugin.js source assertions (anti-drift)', () => {
   it('UX-G: empty related uses cherry_no_results not cherry_error', () => {
     // the related-empty branch should reference cherry_no_results
     expect(SRC).toMatch(/cherry_no_results/);
+  });
+  it('labels: cherry_related = "Похожие" / "Related"', () => {
+    expect(SRC).toMatch(/cherry_related\s*:\s*\{\s*ru:\s*'Похожие',\s*en:\s*'Related'/);
+  });
+  it('labels: cherry_similar_titles = "Похожие названия" / "Similar titles"', () => {
+    expect(SRC).toMatch(/cherry_similar_titles\s*:\s*\{\s*ru:\s*'Похожие названия',\s*en:\s*'Similar titles'/);
+  });
+  it('relabel: keyword-search menu item now uses cherry_similar_titles', () => {
+    expect(SRC).toMatch(/cherry_similar_titles[\s\S]{0,40}action:\s*'similar'/);
+  });
+  it('generalized getRelated: _kvsEngine reuses _kvsParseCards on the video page', () => {
+    expect(SRC).toMatch(/getRelated:\s*function[\s\S]{0,200}_kvsParseCards\(html,\s*cfg\)/);
+  });
+  it('generalized getRelated: a custom adapter wires its parser via _relatedFrom', () => {
+    expect(SRC).toMatch(/getRelated:\s*_relatedFrom\(_porntrexCards\)/);
+    expect(SRC).toMatch(/getRelated:\s*_relatedFrom\(_3movsCards\)/);
   });
   it('UX-C: SettingsApi.addComponent called for cherry', () => {
     expect(SRC).toMatch(/addComponent/);

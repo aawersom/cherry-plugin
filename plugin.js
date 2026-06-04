@@ -824,25 +824,27 @@
       card.onMenu = function (target, card_data) {
         var isFav   = Fav.has(element);
         var cardSrc = sourceById(element.source) || sourceById(object.source_id);
-        var items = [
-          {
-            title: isFav
-              ? Lampa.Lang.translate('cherry_rem_fav_action')
-              : Lampa.Lang.translate('cherry_add_fav_action'),
-            action: 'fav'
-          },
-          {
-            title: Lampa.Lang.translate('cherry_similar'),
-            action: 'similar'
-          }
-        ];
-        // 'similar' = keyword search across all sources; 'related' = adapter.getRelated() curated list.
+        // Order: «Похожие» (site's own related, only when adapter.getRelated exists)
+        //        → «Похожие названия» (keyword search, always) → «Избранное».
+        var items = [];
+        // 'related' = adapter.getRelated() curated list from the video page.
         if (cardSrc && cardSrc.getRelated) {
           items.push({
             title: Lampa.Lang.translate('cherry_related'),
             action: 'related'
           });
         }
+        // 'similar' = keyword search across all sources by title words.
+        items.push({
+          title: Lampa.Lang.translate('cherry_similar_titles'),
+          action: 'similar'
+        });
+        items.push({
+          title: isFav
+            ? Lampa.Lang.translate('cherry_rem_fav_action')
+            : Lampa.Lang.translate('cherry_add_fav_action'),
+          action: 'fav'
+        });
         // Browse all videos of the card's performer (only sources that surface
         // a listing-level model field — currently pornhub).
         if (element.model && element.model.name) {
@@ -868,7 +870,7 @@
               var query = words.join(' ');
               Lampa.Activity.push({
                 component:   'cherry_grid',
-                title:       Lampa.Lang.translate('cherry_similar') + ': ' + element.title,
+                title:       Lampa.Lang.translate('cherry_similar_titles') + ': ' + element.title,
                 source_id:   element.source,
                 query:       query,
                 all_sources: true,
@@ -1120,7 +1122,7 @@
       cherry_add_fav_action: { ru: 'Добавить в избранное',   en: 'Add to favorites'       },
       cherry_rem_fav_action: { ru: 'Убрать из избранного',   en: 'Remove from favorites'  },
       cherry_quality:     { ru: 'Выбор качества',      en: 'Select quality'     },
-      cherry_similar:          { ru: 'Похожие видео',       en: 'Similar videos'     },
+      cherry_similar_titles:   { ru: 'Похожие названия',     en: 'Similar titles'     },
       cherry_sort:             { ru: 'Сортировка',          en: 'Sort'               },
       cherry_sort_default:     { ru: 'По умолчанию',        en: 'Default'            },
       cherry_sort_relevance:   { ru: 'Релевантность',       en: 'Relevance'          },
@@ -1130,7 +1132,7 @@
       cherry_model_videos:     { ru: 'Видео модели',        en: 'Model videos'       },
       cherry_model:            { ru: 'Модель',              en: 'Model'              },
       cherry_preview_setting:  { ru: 'Предпросмотр',        en: 'Preview'            },
-      cherry_related:          { ru: 'Похожее',             en: 'Related'            },
+      cherry_related:          { ru: 'Похожие',             en: 'Related'            },
       cherry_view_rows:        { ru: 'Вид: Ряды',           en: 'View: Rows'         },
       cherry_view_tiles:       { ru: 'Вид: Тайлы',          en: 'View: Tiles'        },
       cherry_proxy_key_init:   { ru: 'Cherry: ключ прокси — 1206. Для смены — измените cherry_proxy_key в хранилище Lampa.', en: 'Cherry: proxy key — 1206. To change, update cherry_proxy_key in Lampa Storage.' }
@@ -2406,6 +2408,16 @@ SOURCES.push({
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
+  getRelated: function(video) {
+    var self = this;
+    if (!video || !video.url) return Promise.resolve([]);
+    return cherryFetch(video.url).then(function(html) {
+      return self._parseCards(html).filter(function(v) {
+        return v.url !== video.url;
+      }).slice(0, 20);
+    }).catch(function() { return []; });
+  },
+
   getStream: function(video) {
     return cherryFetch(video.url).then(function(html) {
       var encMatch = html.match(/Encodings\s*=\s*(\[[\s\S]+?\]);/);
@@ -2609,6 +2621,8 @@ SOURCES.push({
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
+    getRelated: _relatedFrom(_porntrexCards),
+
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
             // KVS get_file — collect all MP4 URLs from get_file paths
@@ -2699,6 +2713,23 @@ function _porntrexPages(html) {
     if (m) return parseInt(m[1] || m[2], 10) || 10;
     return 10;
 }
+
+  // «Похожие» helper: build a getRelated(video) from an adapter's EXISTING
+  // standalone card parser. Almost every site renders a "Related videos" block
+  // on the video page using the same card markup as its listing, so running the
+  // listing parser on the video-page HTML yields the site's own recommendations.
+  // Drops the current video (by url) and caps at 20. Reuses the SAME page fetch
+  // getStream uses but never touches stream extraction; degrades to [] on error.
+  function _relatedFrom(parser) {
+    return function (video) {
+      if (!video || !video.url) return Promise.resolve([]);
+      return cherryFetch(video.url).then(function (html) {
+        return parser(html).filter(function (v) {
+          return v.url !== video.url;
+        }).slice(0, 20);
+      }).catch(function () { return []; });
+    };
+  }
 
   // ============================================================
   // KVS ENGINE — generic browse/search/card-parse for KVS sites
@@ -2851,6 +2882,19 @@ function _porntrexPages(html) {
         }).catch(function() { return { items: [], total_pages: 0 }; });
       },
 
+      // «Похожие»: reuse this engine's own card parser on the video-page HTML.
+      // KVS video pages render a "Related videos" block in the SAME card markup
+      // as the listing, so the existing parser picks them up. Drop the current
+      // video (by url) and cap at 20. Never touches stream extraction.
+      getRelated: function (video) {
+        var url = video && video.url;
+        if (!url) return Promise.resolve([]);
+        return cherryFetch(url).then(function (html) {
+          var items = _kvsParseCards(html, cfg);
+          return items.filter(function (v) { return v.url !== video.url; }).slice(0, 20);
+        }).catch(function () { return []; });
+      },
+
       getStream: cfg.getStream
     };
   }
@@ -2939,6 +2983,8 @@ SOURCES.push({
             return { items: items, total_pages: _3movsPages(html, p, items.length) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
+
+    getRelated: _relatedFrom(_3movsCards),
 
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
@@ -3077,6 +3123,8 @@ SOURCES.push({
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
+    getRelated: _relatedFrom(_pornveCards),
+
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
             // kt_player flashvars: video_url: 'url', video_alt_url: '720p', video_alt_url2: '1080p'
@@ -3162,6 +3210,8 @@ SOURCES.push({
             return { items: _familypornCards(html), total_pages: _familypornPages(html) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
+
+    getRelated: _relatedFrom(_familypornCards),
 
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
@@ -3253,6 +3303,8 @@ SOURCES.push({
             return { items: items, total_pages: _porndigPages(html, p, items.length) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
+
+    getRelated: _relatedFrom(_porndigCards),
 
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
@@ -3422,6 +3474,16 @@ SOURCES.push({
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
+  getRelated: function(video) {
+    var self = this;
+    if (!video || !video.url) return Promise.resolve([]);
+    return cherryFetch(video.url).then(function(html) {
+      return self._parseCards(html).filter(function(v) {
+        return v.url !== video.url;
+      }).slice(0, 20);
+    }).catch(function() { return []; });
+  },
+
   getStream: function(video) {
     return cherryFetch(video.url).then(function(html) {
       var res = extractStreams(html);
@@ -3463,6 +3525,8 @@ SOURCES.push({
             return { items: _perfektCards(html), total_pages: 1 };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
+
+    getRelated: _relatedFrom(_perfektCards),
 
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
@@ -3924,6 +3988,8 @@ SOURCES.push({
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
+    getRelated: _relatedFrom(_lenpornoCards),
+
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
             // PlayerJS multi-quality format: [label1]url1.mp4,[label2]url2.mp4
@@ -4016,6 +4082,8 @@ SOURCES.push({
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
+    getRelated: _relatedFrom(_rolikaCards),
+
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
             var m;
@@ -4101,6 +4169,8 @@ SOURCES.push({
             return { items: items, total_pages: _jopaPages(html, p, items.length) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
+
+    getRelated: _relatedFrom(_jopaCards),
 
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {

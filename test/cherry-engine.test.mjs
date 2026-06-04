@@ -201,6 +201,17 @@ function _kvsEngine(cfg) {
       }).catch(function() { return { items: [], total_pages: 0 }; });
     },
 
+    // «Похожие»: reuse the engine's own parser on the video-page HTML, drop
+    // the current video (by url), cap at 20. Mirrors plugin.js _kvsEngine.getRelated.
+    getRelated: function(video) {
+      var url = video && video.url;
+      if (!url) return Promise.resolve([]);
+      return fetch(url).then(function(html) {
+        var items = _doCards(html);
+        return items.filter(function(v) { return v.url !== video.url; }).slice(0, 20);
+      }).catch(function() { return []; });
+    },
+
     getStream: cfg.getStream
   };
 }
@@ -513,9 +524,10 @@ describe('_kvsEngine', () => {
     expect(typeof adapter.search).toBe('function');
     expect(typeof adapter.browse).toBe('function');
     expect(typeof adapter.getStream).toBe('function');
-    // Must have exactly these six keys (SourceAdapter contract)
+    expect(typeof adapter.getRelated).toBe('function');
+    // Must have exactly these keys (SourceAdapter contract + generalized getRelated)
     var keys = Object.keys(adapter).sort();
-    expect(keys).toEqual(['browse', 'getStream', 'host', 'id', 'name', 'search']);
+    expect(keys).toEqual(['browse', 'getRelated', 'getStream', 'host', 'id', 'name', 'search']);
   });
 
   it('getStream is cfg.getStream verbatim', () => {
@@ -607,6 +619,59 @@ describe('_kvsEngine', () => {
     var result = await adapter.browse(null, 1);
     expect(result.items).toHaveLength(1);
     expect(result.items[0].source).toBe('testsite');
+  });
+
+  // «Похожие» — generalized getRelated parses the video-page HTML with the
+  // engine's own card parser and drops the current video.
+  it('getRelated parses related cards from the video page and excludes the current video', async () => {
+    // Video page with a "Related videos" block in the same KVS card markup —
+    // includes the CURRENT video (123) plus two genuinely related ones (124, 125).
+    var card = function(id) {
+      return [
+        '<div class="thumb-block">',
+        '<a href="https://example.com/videos/' + id + '/clip-' + id + '/">',
+        '<img data-src="https://cdn.example.com/thumb-' + id + '.jpg" alt="Clip ' + id + '">',
+        '<span class="duration">10:0' + (id % 10) + '</span>',
+        '</a>',
+        '<strong class="title-label">Clip ' + id + '</strong>',
+        '</div>'
+      ].join('\n');
+    };
+    var videoPageHtml = card(123) + '\n' + card(124) + '\n' + card(125);
+    var current = { id: 'example', url: 'https://example.com/videos/123/clip-123/' };
+
+    var urlSeen = null;
+    var fetch = function(url) { urlSeen = url; return Promise.resolve(videoPageHtml); };
+    var adapter = _kvsEngine(makeCfg(fetch));
+
+    var related = await adapter.getRelated(current);
+
+    // Fetched the same video-page URL getStream uses.
+    expect(urlSeen).toBe(current.url);
+    // Current video excluded; the two real related cards remain.
+    expect(related).toHaveLength(2);
+    var urls = related.map(function(v) { return v.url; });
+    expect(urls).not.toContain(current.url);
+    expect(urls).toContain('https://example.com/videos/124/clip-124/');
+    expect(urls).toContain('https://example.com/videos/125/clip-125/');
+  });
+
+  it('getRelated returns [] when video has no url', async () => {
+    var fetched = false;
+    var fetch = function() { fetched = true; return Promise.resolve(''); };
+    var adapter = _kvsEngine(makeCfg(fetch));
+
+    var related = await adapter.getRelated({ id: 'x' });
+    expect(related).toEqual([]);
+    expect(fetched).toBe(false); // short-circuits before fetching
+  });
+
+  it('getRelated swallows fetch errors and returns []', async () => {
+    var fetch = function() { return Promise.reject(new Error('boom')); };
+    var adapter = _kvsEngine(makeCfg(fetch));
+
+    var related = await adapter.getRelated({ url: 'https://example.com/videos/9/x/' });
+    expect(related).toEqual([]);
   });
 });
 
