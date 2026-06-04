@@ -1415,7 +1415,7 @@ describe('Batch 2 categories — plugin.js source assertions (anti-drift)', () =
     it(id + ' has cfg.categories + uses _buildCatUrl in browse', () => {
       var at = SRC.indexOf("id: '" + id + "'");
       expect(at).toBeGreaterThan(-1);
-      var w = SRC.slice(at, at + 1600);
+      var w = SRC.slice(at, at + 3500);
       expect(w).toContain('cfg:');
       expect(w).toContain('_buildCatUrl');
     });
@@ -1426,7 +1426,7 @@ describe('Batch 2 categories — plugin.js source assertions (anti-drift)', () =
 describe('Batch 3 categories — plugin.js source assertions (anti-drift)', () => {
   // Category-URL templates must be present (position-independent — cfg may sit far from id).
   var fmts = {
-    xnxx: 'https://www.xnxx.com/search/{slug}/{page}',
+    xnxx: 'https://www.xnxx.com/tags/{slug}/{page}',
     pornone: 'https://pornone.com/{slug}/{page}/',
     perfektdamen: 'https://www.perfektdamen.co/tags/{slug}/{page}/',
     hqporner: 'https://hqporner.com/category/{slug}/{page}'
@@ -1440,9 +1440,9 @@ describe('Batch 3 categories — plugin.js source assertions (anti-drift)', () =
     expect(SRC).toContain('category.replace(/-/g');
   });
   it('Deno adapters shipped category lists (representative labels present)', () => {
-    expect(SRC).toContain('Вебкам');   // eporner webcam
-    expect(SRC).toContain('Трансы');   // hqporner shemale
-    expect(SRC).toContain('Бабушки');  // pornone granny
+    expect(SRC).toContain('webcam:Webcam');   // eporner webcam (EN site)
+    expect(SRC).toContain('shemale:Shemale'); // hqporner shemale (EN site)
+    expect(SRC).toContain('granny:Granny');   // pornone granny (EN site)
   });
 });
 
@@ -1502,11 +1502,11 @@ describe('Pornhub adapter — webmasters slugs/orderings/pagination', () => {
 
   it('categories use SLUGS (bbw, red-head, milf), not numeric ids', () => {
     expect(PH).toContain('bbw:BBW');
-    expect(PH).toContain('red-head:Рыжие');
+    expect(PH).toContain('red-head:Red Head');
     expect(PH).toContain('milf:MILF');
-    expect(PH).toContain('18-25:Молодые 18+');
-    expect(PH).toContain('russian:Русское');
-    expect(PH).toContain('webcam:Вебкам');
+    expect(PH).toContain('18-25:Teen 18-25');
+    expect(PH).toContain('russian:Russian');
+    expect(PH).toContain('webcam:Webcam');
   });
 
   it('categories contain NO bare numeric ids (e.g. "6:", "31:")', () => {
