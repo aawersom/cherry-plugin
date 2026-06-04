@@ -430,11 +430,13 @@
     var _canSearch = false;
     var _hasSorts  = false;
     var _hasCats   = false;
-    // Re-entrancy guard: Lampa.Controller.move('right') re-dispatches into the
-    // 'right' handler at the grid's right edge. Without this flag that recurses
-    // infinitely. When the nested call sees the flag set, it returns immediately;
-    // the outer call then detects "focus didn't change" and opens the menu.
-    var _inRightMove = false;
+    // Re-entrancy guard shared by ALL directional handlers. On some Lampa builds
+    // Lampa.Controller.move(dir) re-dispatches into the same-direction handler at
+    // an edge — without this guard that recurses to a stack overflow and kills the
+    // controller (arrows stop responding). The nested call bails immediately; the
+    // outer call completes. For 'right' the "focus didn't change" check then opens
+    // the action menu at the right edge.
+    var _navMoving = false;
 
     function _stopCurrentPreview() {
       if (_currentPreviewEl) {
@@ -660,20 +662,19 @@
           Lampa.Controller.collectionSet(html);
           Lampa.Controller.collectionFocus(false, html);
         },
-        up:    function () { Lampa.Controller.move('up'); },
-        down:  function () { Lampa.Controller.move('down'); maybeLoadMore(); },
-        left:  function () { Lampa.Controller.move('left'); },
+        // All directions share _navMoving: move(dir) can re-dispatch into the
+        // same handler at an edge; the nested call bails to avoid stack overflow.
+        up:    function () { if (_navMoving) return; _navMoving = true; Lampa.Controller.move('up');   _navMoving = false; },
+        down:  function () { if (_navMoving) return; _navMoving = true; Lampa.Controller.move('down'); _navMoving = false; maybeLoadMore(); },
+        left:  function () { if (_navMoving) return; _navMoving = true; Lampa.Controller.move('left'); _navMoving = false; },
         // Right moves between cards; at the right edge (focus can't advance) it
-        // opens the Поиск → Сортировка → Категории action menu. Lampa's move()
-        // re-dispatches into this handler at the edge, so a re-entrancy guard
-        // both prevents infinite recursion AND signals the edge: if the nested
-        // call fired, focus didn't change → open the menu.
+        // opens the Поиск → Сортировка → Категории action menu.
         right: function () {
-          if (_inRightMove) return;          // nested edge re-dispatch — bail out
+          if (_navMoving) return;            // nested edge re-dispatch — bail out
           var before = html.find('.focus')[0];
-          _inRightMove = true;
+          _navMoving = true;
           Lampa.Controller.move('right');
-          _inRightMove = false;
+          _navMoving = false;
           var after = html.find('.focus')[0];
           if (before && before === after) {
             openActionsMenu();
@@ -997,6 +998,7 @@
     var html;
     var destroyed = false;
     var _toggling = false; // re-entrancy guard for view_toggle re-render
+    var _navMoving = false; // re-entrancy guard: move(dir) can re-dispatch at an edge → stack overflow
     var mode; // 'tiles' | 'rows'
 
     // ---- lifecycle --------------------------------------------------
@@ -1064,10 +1066,11 @@
           Lampa.Controller.collectionSet(html);
           Lampa.Controller.collectionFocus(false, html);
         },
-        up:    function () { Lampa.Controller.move('up'); },
-        down:  function () { Lampa.Controller.move('down'); },
-        left:  function () { Lampa.Controller.move('left'); },
-        right: function () { Lampa.Controller.move('right'); },
+        // Guard against move(dir) re-dispatching into the same handler at an edge.
+        up:    function () { if (_navMoving) return; _navMoving = true; Lampa.Controller.move('up');    _navMoving = false; },
+        down:  function () { if (_navMoving) return; _navMoving = true; Lampa.Controller.move('down');  _navMoving = false; },
+        left:  function () { if (_navMoving) return; _navMoving = true; Lampa.Controller.move('left');  _navMoving = false; },
+        right: function () { if (_navMoving) return; _navMoving = true; Lampa.Controller.move('right'); _navMoving = false; },
         back:  function () { Lampa.Activity.backward(); }
       });
       Lampa.Controller.toggle('cherry_main');
