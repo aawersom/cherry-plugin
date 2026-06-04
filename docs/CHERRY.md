@@ -375,10 +375,12 @@ tunnels the outbound request through **rotating Dutch residential SOCKS5 proxies
 
 **RESIDENTIAL set (current):**
 - `www.pornhub.com`, `rt.pornhub.com` — phncdn IP-bound tokens require consistent egress IP
-- `pornone.com`, `www.pornone.com` — Deno IP banned by PornOne
-- `gallery.vcmdiawe.com`, `galleryn2.vcmdiawe.com` — pornone CDN
-- Wildcard `/\.pornone\.com$/` — covers all pornone CDN subdomains
 - Wildcard `/\.phncdn\.com$/` — covers all phncdn CDN subdomains (segments, thumbnails)
+
+> **Note (2026-06-04):** pornone is NOT on the residential/worker path. The plugin's
+> `buildProxyUrl` routes `pornone.com` + `*.pornone.com` to **Deno** (see Secondary proxy
+> below), and pornone is confirmed WORKING via Deno. Any leftover `pornone` entry in the
+> worker's `index.js` residential set is legacy/unused (pornone never reaches the worker).
 
 **DJB2 domain-hash affinity:** SOCKS5 port is selected by DJB2 hash of the request's
 `referer` domain (or target hostname if no referer). Since all 5 ports exit from
@@ -415,7 +417,7 @@ Used for hostnames in `PROXY_URL_2_HOSTS` or matching `/\.bigcdn\.cc$/`:
 SAME proxy tier as the page that generates those tokens.
 - `mydaddy.cc` (embed page) and `*.bigcdn.cc` (CDN) — both via Deno ✓
 - `www.pornhub.com` (page) and `*.phncdn.com` (CDN) — both via CF SOCKS5 ✓
-- `pornone.com` (page) and `*.pornone.com` (CDN) — both via CF SOCKS5 ✓
+- `pornone.com` (page) and `*.pornone.com` (CDN) — both via Deno ✓ (confirmed working 2026-06-04)
 
 ### Tertiary proxy — VPS (optional)
 `PROXY_URL_3 = ''` (empty by default; fill with Beget VPS IP:PORT after deploying
@@ -433,13 +435,10 @@ constant anymore. Routing priority:
    **or** matches `/(?:^|\.)pornone\.com$/`.
 3. `PROXY_URL` (default, CF Worker).
 
-> **Contradiction flagged.** The *Primary proxy / RESIDENTIAL set* section above (which
-> describes the worker's `index.js`) lists `pornone.com` + `*.pornone.com` as CF SOCKS5.
-> The **plugin's** `buildProxyUrl` routes all `*.pornone.com` (and `pornone.com`,
-> `www.pornone.com` via `PROXY_URL_2_HOSTS`) to **Deno**, matching *Iteration 4* which moved
-> pornone to Deno for fixed-IP token affinity. The plugin-side routing (Deno) is current;
-> the worker-side RESIDENTIAL list may carry a stale pornone entry — verify against
-> `workers/cherry-proxy/src/index.js` before trusting the SOCKS5 claim.
+> **Resolved (2026-06-04).** pornone is served via **Deno** by the plugin's `buildProxyUrl`
+> (`pornone.com`, `www.pornone.com` in `PROXY_URL_2_HOSTS`, plus the `/(?:^|\.)pornone\.com$/`
+> rule) and is confirmed WORKING. Any pornone entry in the worker's `index.js` residential set
+> is legacy — pornone never reaches the worker, so the SOCKS5 path is moot for it.
 
 ### cherryFetch(url, referer?) — `plugin.js:93`
 Wrapper around `fetch(buildProxyUrl(...))`. Returns `Promise<string>`; throws on non-2xx.

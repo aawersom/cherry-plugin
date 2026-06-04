@@ -1143,8 +1143,6 @@
       cherry_model:            { ru: 'Модель',              en: 'Model'              },
       cherry_preview_setting:  { ru: 'Предпросмотр',        en: 'Preview'            },
       cherry_related:          { ru: 'Похожие',             en: 'Related'            },
-      cherry_view_rows:        { ru: 'Вид: Ряды',           en: 'View: Rows'         },
-      cherry_view_tiles:       { ru: 'Вид: Тайлы',          en: 'View: Tiles'        },
       cherry_proxy_key_init:   { ru: 'Cherry: ключ прокси — 1206. Для смены — измените cherry_proxy_key в хранилище Lampa.', en: 'Cherry: proxy key — 1206. To change, update cherry_proxy_key in Lampa Storage.' }
     });
   }
