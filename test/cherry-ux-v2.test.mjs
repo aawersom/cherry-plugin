@@ -598,9 +598,11 @@ describe('P0: plugin.js source assertions (anti-drift)', () => {
   });
 
   it('action menu items are ordered Поиск → Сортировка → Категории', () => {
-    // The three pushes must appear in this order inside openActionsMenu.
+    // The pushes must appear in this order inside openActionsMenu. Phase 3 A2
+    // inserts an all_sources-only 'clientsort' entry between sort and cat (also a
+    // sort-type entry, so the Search → Sort → Category ordering is preserved).
     expect(SRC).toMatch(
-      /openActionsMenu[\s\S]{0,400}action:\s*'search'[\s\S]{0,200}action:\s*'sort'[\s\S]{0,200}action:\s*'cat'/
+      /openActionsMenu[\s\S]{0,400}action:\s*'search'[\s\S]{0,200}action:\s*'sort'[\s\S]{0,300}action:\s*'cat'/
     );
   });
 
@@ -621,7 +623,7 @@ describe('P0: plugin.js source assertions (anti-drift)', () => {
   it('per-source search opens Lampa.Input.edit and pushes source_id without all_sources', () => {
     // Lampa.Keyboard.show does not exist on this build; Input.edit is the real API.
     expect(SRC).toMatch(/_openSearch[\s\S]{0,400}Lampa\.Input\.edit/);
-    expect(SRC).toMatch(/_openSearch[\s\S]{0,600}Lampa\.Activity\.push\([\s\S]{0,300}source_id/);
+    expect(SRC).toMatch(/_openSearch[\s\S]{0,800}Lampa\.Activity\.push\([\s\S]{0,300}source_id/);
     expect(SRC).not.toMatch(/Lampa\.Keyboard\.show/);
   });
 
@@ -962,6 +964,194 @@ describe('UX-A: plugin.js source assertions (anti-drift)', () => {
     expect(MAIN).not.toContain('cherry_home_mode');
     expect(MAIN).not.toMatch(/view_toggle/);
     expect(MAIN).not.toMatch(/_navMoving/);
+  });
+});
+
+// ============================================================
+// Phase 3 — Search correctness (A1 nav, A3 relevance, A2 sort)
+// ============================================================
+
+describe('Phase 3 A1: search callbacks do NOT toggle on the push path', () => {
+  // The premature Lampa.Controller.toggle('content') bound the controller to the
+  // OLD activity before the pushed cherry_grid mounted → dead arrow nav. The fix
+  // toggles ONLY inside the empty-query guard (no push). Both Input.edit callbacks
+  // (home all_sources search + per-source _openSearch) must match this shape.
+
+  it('_openSearch: toggle only inside the empty-query guard (if (!q))', () => {
+    var at = SRC.indexOf('function _openSearch()');
+    expect(at).toBeGreaterThan(-1);
+    var body = SRC.slice(at, at + 700);
+    // The empty guard toggles then returns.
+    expect(body).toMatch(/if\s*\(!q\)\s*\{\s*Lampa\.Controller\.toggle\('content'\);\s*return;\s*\}/);
+    // Exactly one toggle in the whole _openSearch body (the guard one).
+    expect((body.match(/Lampa\.Controller\.toggle\('content'\)/g) || []).length).toBe(1);
+    // The push must NOT be preceded by an unguarded toggle.
+    expect(body).not.toMatch(/toggle\('content'\);\s*var q[\s\S]{0,40}Activity\.push/);
+  });
+
+  it('home all_sources search callback: toggle only in the empty-query guard', () => {
+    // Isolate the all_sources Input.edit callback (it carries all_sources: true).
+    var at = SRC.indexOf("element._kind === 'search'");
+    expect(at).toBeGreaterThan(-1);
+    var body = SRC.slice(at, at + 1400);
+    expect(body).toMatch(/if\s*\(!q\)\s*\{\s*Lampa\.Controller\.toggle\('content'\);\s*return;\s*\}/);
+    expect(body).toMatch(/all_sources:\s*true/);
+    // No toggle on the line before var q / before the push.
+    expect(body).not.toMatch(/edit\([\s\S]{0,200}toggle\('content'\);\s*var q = \(value/);
+  });
+});
+
+describe('Phase 3 A3(a): eporner SEARCH uses relevance order (no forced most-popular)', () => {
+  it('eporner search() drops order=most-popular', () => {
+    var at = SRC.indexOf("id: 'eporner'");
+    expect(at).toBeGreaterThan(-1);
+    var searchAt = SRC.indexOf('search: function(query, page)', at);
+    expect(searchAt).toBeGreaterThan(-1);
+    var searchBody = SRC.slice(searchAt, searchAt + 900);
+    // Assert the SEARCH URL line itself has no order param (a comment may mention
+    // browse's most-popular, so check the actual var url = '...' assignment).
+    var urlLine = (searchBody.match(/var url = 'https:\/\/www\.eporner\.com\/api\/v2\/video\/search\/[^;]+/) || [''])[0];
+    expect(urlLine).toContain('/api/v2/video/search/');
+    expect(urlLine).not.toContain('order=most-popular');
+    expect(urlLine).not.toContain('order=');
+  });
+
+  it('eporner browse() still keeps order=most-popular (category = popularity)', () => {
+    var at = SRC.indexOf("id: 'eporner'");
+    var browseAt = SRC.indexOf('browse: function(category, page)', at);
+    expect(browseAt).toBeGreaterThan(-1);
+    var browseBody = SRC.slice(browseAt, browseAt + 600);
+    expect(browseBody).toContain('order=most-popular');
+  });
+});
+
+describe('Phase 3 A3(b): all_sources per-source title-match filter before slice', () => {
+  it('filter uses indexOf(query) and runs before slice(0,10)', () => {
+    var at = SRC.indexOf('All-sources search');
+    expect(at).toBeGreaterThan(-1);
+    var body = SRC.slice(at, at + 1800);
+    // per-source title match
+    expect(body).toMatch(/\.toLowerCase\(\)\.indexOf\(ql\)\s*!==\s*-1/);
+    // filter executes before the slice
+    var filterIdx = body.indexOf('indexOf(ql)');
+    var sliceIdx  = body.indexOf('picked.slice(0, 10)');
+    expect(filterIdx).toBeGreaterThan(-1);
+    expect(sliceIdx).toBeGreaterThan(filterIdx);
+  });
+
+  it('non-ASCII (Cyrillic) queries skip the filter', () => {
+    var at = SRC.indexOf('All-sources search');
+    var body = SRC.slice(at, at + 1800);
+    expect(body).toMatch(/isLatin\s*=\s*\/\^\[\\x00-\\x7F\]\*\$\/\.test\(ql\)/);
+    expect(body).toMatch(/if\s*\(ql\s*&&\s*isLatin\)/);
+  });
+
+  it('keeps a source unfiltered top-N when its filtered slice is empty', () => {
+    var at = SRC.indexOf('All-sources search');
+    var body = SRC.slice(at, at + 1800);
+    expect(body).toMatch(/if\s*\(matched\.length\)\s*picked\s*=\s*matched/);
+  });
+});
+
+describe('Phase 3 A2: all_sources client-side sort exposed in the action menu', () => {
+  it('_hasClientSort flag set for all_sources + query', () => {
+    expect(SRC).toMatch(/_hasClientSort\s*=\s*!!\(object\.all_sources\s*&&\s*object\.query\)/);
+  });
+
+  it('action menu pushes a clientsort entry', () => {
+    expect(SRC).toMatch(/_hasClientSort[\s\S]{0,80}action:\s*'clientsort'/);
+    expect(SRC).toMatch(/item\.action\s*===\s*'clientsort'/);
+  });
+
+  it('_openClientSort re-pushes with client_sort and applies duration in _gridLoad', () => {
+    expect(SRC).toMatch(/function _openClientSort\(\)/);
+    expect(SRC).toMatch(/client_sort:\s*item\.id/);
+    expect(SRC).toMatch(/object\.client_sort\s*===\s*'duration'/);
+  });
+
+  it('client sort offers relevance (default) and duration only', () => {
+    var at = SRC.indexOf('function _openClientSort()');
+    var body = SRC.slice(at, at + 500);
+    expect(body).toContain('cherry_sort_relevance');
+    expect(body).toContain('cherry_sort_duration');
+    // no popular/views claim for all_sources (data not uniform)
+    expect(body).not.toMatch(/cherry_sort_(popular|views)/);
+  });
+
+  it('client-sort lang keys registered (ru/en)', () => {
+    expect(SRC).toMatch(/cherry_sort_relevance:\s*\{\s*ru:/);
+    expect(SRC).toMatch(/cherry_sort_duration:\s*\{\s*ru:/);
+  });
+});
+
+describe('Phase 3 A2: client-side duration sort — POST behaviour', () => {
+  // Mirror of the _gridLoad all_sources sort branch.
+  function clientSort(flat, mode) {
+    if (mode === 'duration') {
+      flat = flat.slice().sort(function (a, b) { return (b.duration || 0) - (a.duration || 0); });
+    }
+    return flat;
+  }
+  var items = [
+    { title: 'a', duration: 120 },
+    { title: 'b', duration: 600 },
+    { title: 'c', duration: 0 },
+    { title: 'd' } // missing duration
+  ];
+
+  it('duration sort orders descending, missing duration treated as 0', () => {
+    var out = clientSort(items, 'duration').map(function (v) { return v.title; });
+    expect(out).toEqual(['b', 'a', 'c', 'd']);
+  });
+
+  it('relevance (default) preserves the original interleaved order', () => {
+    var out = clientSort(items, '').map(function (v) { return v.title; });
+    expect(out).toEqual(['a', 'b', 'c', 'd']);
+  });
+});
+
+describe('Phase 3 A3(b): per-source title filter — POST behaviour', () => {
+  // Mirror of the _gridLoad all_sources merge filter.
+  function mergeFiltered(results, query) {
+    var flat = [];
+    var ql = (query || '').toLowerCase();
+    var isLatin = /^[\x00-\x7F]*$/.test(ql);
+    results.forEach(function (r) {
+      if (r && r.items && r.items.length) {
+        var picked = r.items;
+        if (ql && isLatin) {
+          var matched = r.items.filter(function (v) { return (v.title || '').toLowerCase().indexOf(ql) !== -1; });
+          if (matched.length) picked = matched;
+        }
+        flat = flat.concat(picked.slice(0, 10));
+      }
+    });
+    return flat;
+  }
+
+  it('keeps only title-matching cards for a Latin query', () => {
+    var res = [{ items: [{ title: 'Woodman casting' }, { title: 'random clip' }] }];
+    var out = mergeFiltered(res, 'woodman').map(function (v) { return v.title; });
+    expect(out).toEqual(['Woodman casting']);
+  });
+
+  it('falls back to unfiltered top-N when nothing matches (source not dropped)', () => {
+    var res = [{ items: [{ title: 'aaa' }, { title: 'bbb' }] }];
+    var out = mergeFiltered(res, 'woodman');
+    expect(out).toHaveLength(2);
+  });
+
+  it('skips the filter for Cyrillic queries (titles often English)', () => {
+    var res = [{ items: [{ title: 'Anal scene' }, { title: 'Teen clip' }] }];
+    var out = mergeFiltered(res, 'анал');
+    expect(out).toHaveLength(2); // not filtered out
+  });
+
+  it('caps each source at 10 after filtering', () => {
+    var many = [];
+    for (var i = 0; i < 25; i++) many.push({ title: 'woodman ' + i });
+    var out = mergeFiltered([{ items: many }], 'woodman');
+    expect(out).toHaveLength(10);
   });
 });
 
