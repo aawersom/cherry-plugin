@@ -1181,3 +1181,27 @@ describe('KVS categories — plugin.js source assertions (anti-drift)', () => {
     });
   });
 });
+
+// ── Batch 2: custom KVS-like categories (3movs, pornve, familyporn, porntrex) ──
+describe('Batch 2 categories — plugin.js source assertions (anti-drift)', () => {
+  it('_fetchAny status-tolerant helper is defined', () => {
+    expect(SRC).toMatch(/function _fetchAny\(/);
+  });
+  it('3movs uses _fetchAny for category browse (404-tolerant)', () => {
+    var at = SRC.indexOf("id: '3movs'");
+    expect(at).toBeGreaterThan(-1);
+    var w = SRC.slice(at, at + 1600);
+    expect(w).toContain('cfg:');
+    expect(w).toContain('_fetchAny');
+    expect(w).toContain('_buildCatUrl');
+  });
+  ['porntrex','pornve','familyporn'].forEach(function (id) {
+    it(id + ' has cfg.categories + uses _buildCatUrl in browse', () => {
+      var at = SRC.indexOf("id: '" + id + "'");
+      expect(at).toBeGreaterThan(-1);
+      var w = SRC.slice(at, at + 1600);
+      expect(w).toContain('cfg:');
+      expect(w).toContain('_buildCatUrl');
+    });
+  });
+});
