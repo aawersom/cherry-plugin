@@ -210,9 +210,15 @@ describe('Fav: _merge last-write-wins', () => {
 // Sync
 // ==================================================================
 describe('Sync: PIN + run', () => {
-  it('getPin default is "1206"', () => {
+  it('getPin default is EMPTY (sync off until user sets a PIN)', () => {
     var sb = makeSandbox({});
-    expect(sb.Sync.getPin()).toBe('1206');
+    expect(sb.Sync.getPin()).toBe('');
+  });
+
+  it('run() no-ops when no PIN is set (no POST, favorites stay local)', async () => {
+    var sb = makeSandbox({});
+    await sb.Sync.run();
+    expect(sb.lastPost && sb.lastPost.url).toBeFalsy();
   });
 
   it('setPin validates 4–12 digits', () => {
@@ -228,8 +234,9 @@ describe('Sync: PIN + run', () => {
     var sb = makeSandbox({
       response: { records: [{ id: 'r', source: 's', title: 'R', added: 999, deleted: 0 }] }
     });
+    sb.store.cherry_sync_pin = '4321';  // set PIN directly (avoid setPin's in-flight run)
     await sb.Sync.run();
-    expect(sb.lastPost.url).toBe(sb.PROXY_URL + '/favs?pin=1206&key=1206');
+    expect(sb.lastPost.url).toBe(sb.PROXY_URL + '/favs?pin=4321&key=1206');
     expect(sb.lastPost.body).toHaveProperty('records');
     expect(Array.isArray(sb.lastPost.body.records)).toBe(true);
     // returned records merged locally
@@ -278,8 +285,9 @@ describe('favsync: plugin.js source assertions (anti-drift)', () => {
     expect(SRC).toMatch(/'Content-Type':\s*'application\/json'/);
   });
 
-  it('Sync.getPin defaults to "1206"', () => {
-    expect(SRC).toMatch(/Lampa\.Storage\.get\(\s*'cherry_sync_pin',\s*'1206'\s*\)/);
+  it('Sync.getPin defaults to EMPTY (no default PIN; user enters it in Lampa)', () => {
+    expect(SRC).toMatch(/Lampa\.Storage\.get\(\s*'cherry_sync_pin',\s*''\s*\)/);
+    expect(SRC).not.toMatch(/Lampa\.Storage\.get\(\s*'cherry_sync_pin',\s*'1206'\s*\)/);
   });
 
   it('Fav storage key stays cherry_favs and records carry added/deleted', () => {

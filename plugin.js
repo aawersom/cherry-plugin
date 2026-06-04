@@ -422,9 +422,13 @@
     _running: false,
     _timer:   null,
 
-    /** @returns {string} the sync PIN (default '1206' → shared bucket, zero setup). */
+    /**
+     * @returns {string} the sync PIN. EMPTY by default → sync is OFF until the user
+     * enters a PIN via the «Синхронизация» tile. No auto-sync, so favorites stay
+     * purely local (untouched) unless the user opts in.
+     */
     getPin: function () {
-      return Lampa.Storage.get('cherry_sync_pin', '1206');
+      return Lampa.Storage.get('cherry_sync_pin', '');
     },
 
     /** @param {string} p 4–12 digits. Persists + triggers a run. */
@@ -1480,8 +1484,9 @@
     // P3.4: persistent header filter button for cherry_grid screens.
     try { addFilterButton(); } catch (e) { console.warn('[Cherry] addFilterButton failed', e); }
 
-    // Startup sync — pull the shared bucket once (default PIN 1206). Non-blocking,
-    // local-first: a slow/failed sync never delays the UI.
+    // Startup sync — only if the user has set a PIN (no default). Sync.run()
+    // no-ops on an empty/invalid PIN, so favorites stay purely local until opt-in.
+    // Non-blocking, local-first: a slow/failed sync never delays the UI.
     setTimeout(function () { try { Sync.run(); } catch (e) {} }, 2000);
 
     var cherryIcon = [
