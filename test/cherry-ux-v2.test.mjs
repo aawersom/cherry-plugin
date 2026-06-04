@@ -1115,12 +1115,19 @@ describe('Phase 3 A3(a): eporner SEARCH uses relevance order (no forced most-pop
     expect(urlLine).not.toContain('order=');
   });
 
-  it('eporner browse() still keeps order=most-popular (category = popularity)', () => {
+  it('eporner browse() defaults to most-popular but honors a chosen sort (S3)', () => {
     var at = SRC.indexOf("id: 'eporner'");
-    var browseAt = SRC.indexOf('browse: function(category, page)', at);
+    var browseAt = SRC.indexOf('browse: function(category, page', at);
     expect(browseAt).toBeGreaterThan(-1);
-    var browseBody = SRC.slice(browseAt, browseAt + 600);
-    expect(browseBody).toContain('order=most-popular');
+    var browseBody = SRC.slice(browseAt, browseAt + 700);
+    expect(browseBody).toMatch(/var order = sort \|\| 'most-popular'/);
+    expect(browseBody).toMatch(/&order=' \+ order/);
+  });
+  it('eporner cfg exposes API order sorts (no longer sorts:[])', () => {
+    var at = SRC.indexOf("id: 'eporner'");
+    var cfgBody = SRC.slice(at, at + 1400);
+    expect(cfgBody).toMatch(/sorts: _cats\('most-popular:/);
+    expect(cfgBody).toContain('top-rated:');
   });
 });
 

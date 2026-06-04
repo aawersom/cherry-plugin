@@ -1954,7 +1954,7 @@ SOURCES.push({
   id: 'eporner',
   name: 'Eporner',
   host: 'eporner.com',
-  cfg: { categories: _cats('4k-porn:4K,amateur:Любительское,anal:Анал,asian:Азиатки,bbw:BBW,bdsm:БДСМ,big-ass:Большая жопа,big-dick:Большой член,big-tits:Большие сиськи,blonde:Блондинки,blowjob:Минет,brunette:Брюнетки,creampie:Кремпай,cumshot:Камшот,double-penetration:Двойное,ebony:Чёрные,fetish:Фетиш,group-sex:Групповое,handjob:Дрочка,hardcore:Жёсткое,hentai:Хентай,interracial:Межрасовое,japanese:Японское,latina:Латинки,lesbians:Лесбиянки,massage:Массаж,mature:Зрелые,milf:MILF,public:На публике,redhead:Рыжие,squirt:Сквирт,teens:Молодые,threesome:Втроём,toys:Игрушки,webcam:Вебкам'), sorts: [] },
+  cfg: { categories: _cats('4k-porn:4K,amateur:Любительское,anal:Анал,asian:Азиатки,bbw:BBW,bdsm:БДСМ,big-ass:Большая жопа,big-dick:Большой член,big-tits:Большие сиськи,blonde:Блондинки,blowjob:Минет,brunette:Брюнетки,creampie:Кремпай,cumshot:Камшот,double-penetration:Двойное,ebony:Чёрные,fetish:Фетиш,group-sex:Групповое,handjob:Дрочка,hardcore:Жёсткое,hentai:Хентай,interracial:Межрасовое,japanese:Японское,latina:Латинки,lesbians:Лесбиянки,massage:Массаж,mature:Зрелые,milf:MILF,public:На публике,redhead:Рыжие,squirt:Сквирт,teens:Молодые,threesome:Втроём,toys:Игрушки,webcam:Вебкам'), sorts: _cats('most-popular:Популярное,latest:Свежее,top-rated:Топ рейтинга,longest:Длинные,top-weekly:За неделю,top-monthly:За месяц') },
 
   _apiFetch: function(url) {
     // eporner JSON search/browse API has Access-Control-Allow-Origin: * — direct fetch is safe here.
@@ -1991,13 +1991,15 @@ SOURCES.push({
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
-  browse: function(category, page) {
+  browse: function(category, page, sort) {
     var self = this;
     var p = page || 1;
     // Category via the JSON API search (slug → keyword); reuses _mapVideo. Hyphen → space.
     var q = category ? encodeURIComponent(category.replace(/-/g, ' ')) : '';
+    // Native API order param (default popular). All values curl-verified.
+    var order = sort || 'most-popular';
     var url = 'https://www.eporner.com/api/v2/video/search/?query=' + q + '&per_page=30&page=' + p +
-      '&thumbsize=medium&order=most-popular&gay=0&format=json';
+      '&thumbsize=medium&order=' + order + '&gay=0&format=json';
     return self._apiFetch(url).then(function(text) {
       var data = JSON.parse(text);
       return { items: (data.videos || []).map(self._mapVideo), total_pages: parseInt(data.total_pages, 10) || 1 };
