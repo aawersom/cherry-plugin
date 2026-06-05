@@ -3459,6 +3459,31 @@ SOURCES.push({
 
     getRelated: _relatedFrom(_porntrexCards),
 
+    // Models: /models/ index — cards <a href="/models/{slug}/" title="…"> with an
+    // <img class="thumb" data-src="//ptx.cdntrex.com/contents/models/…"> avatar.
+    // Grid paginates via AJAX (not URL-addressable) but a single fetch exposes the
+    // full roster, so `page` is ignored. Exclude letter-nav /models/{letter}/.
+    // Per-model /models/{slug}/{N}/ renders listing cards (reuse _porntrexCards).
+    getModels: function () {
+        return cherryFetch('https://www.porntrex.com/models/').then(function (html) {
+            return _parseModelIndex(html, {
+                hrefRx: /href="(https?:\/\/(?:www\.)?porntrex\.com\/models\/[a-z0-9][a-z0-9-]+\/)"/g,
+                exclude: function (u) { return /\/models\/[a-z0-9]\/$/i.test(u); },
+                nameRx: [/title="([^"]+)"/, /alt="([^"]+)"/, /class="info"[^>]*>([^<]+)</],
+                thumbRx: [/(?:data-original|data-src|src)="((?:https?:)?\/\/[^"]+\/contents\/models\/[^"?#]+\.jpe?g)/i, /(?:data-original|data-src|src)="((?:https?:)?\/\/[^"?#]+\.jpe?g)/i]
+            });
+        }).catch(function () { return []; });
+    },
+
+    browseByModel: function (modelUrl, page) {
+        var p = page || 1;
+        var u = modelUrl.replace(/\/+$/, '');
+        var url = p > 1 ? u + '/' + p + '/' : u + '/';
+        return cherryFetch(url).then(function (html) {
+            return { items: _porntrexCards(html), total_pages: _porntrexPages(html) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
             // KVS get_file — collect all MP4 URLs from get_file paths
@@ -3897,6 +3922,36 @@ SOURCES.push({
 
     getRelated: _relatedFrom(_3movsCards),
 
+    // Models: /pornstars/ index (25/page, paginated /pornstars/{N}/). Cards are
+    // <a class="thumb album item model" title="…"> with a data-src avatar. Exclude
+    // the sort-control links (title/top-rated/most-viewed/videos*). Per-model
+    // /pornstars/{slug}/{N}/ renders listing cards (reuse _3movsCards).
+    getModels: function (page) {
+        var p = page || 1;
+        var url = p > 1 ? 'https://www.3movs.com/pornstars/' + p + '/'
+                        : 'https://www.3movs.com/pornstars/';
+        return cherryFetch(url).then(function (html) {
+            return _parseModelIndex(html, {
+                hrefRx: /href="(https?:\/\/(?:www\.)?3movs\.com\/pornstars\/[a-z][a-z0-9-]+\/)"/g,
+                exclude: function (u) {
+                    return /\/pornstars\/(?:title|top-rated|most-viewed|videos|videos-rating|videos-views)\/$/.test(u);
+                },
+                nameRx: [/title="([^"]+)"/, /alt="([^"]+)"/],
+                thumbRx: [/(?:data-src|data-webp|src)="(https?:\/\/[^"]+\.jpe?g)"/i]
+            });
+        }).catch(function () { return []; });
+    },
+
+    browseByModel: function (modelUrl, page) {
+        var p = page || 1;
+        var u = modelUrl.replace(/\/+$/, '');
+        var url = p > 1 ? u + '/' + p + '/' : u + '/';
+        return cherryFetch(url).then(function (html) {
+            var items = _3movsCards(html);
+            return { items: items, total_pages: _3movsPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
             // kt_player flashvars: video_url: 'url', video_alt_url: '720p', video_alt_url2: '1080p'
@@ -4053,6 +4108,32 @@ SOURCES.push({
 
     getRelated: _relatedFrom(_pornveCards),
 
+    // Models: /models/ index (20/page, paginated /models/{N}/). Cards are
+    // <a class="item" href="/models/{slug}/" title="…"> with an <img> avatar at
+    // cdn.pornve.com/contents/models/…. Per-model /models/{slug}/{N}/ renders
+    // listing cards (reuse _pornveCards).
+    getModels: function (page) {
+        var p = page || 1;
+        var url = p > 1 ? 'https://pornve.com/models/' + p + '/'
+                        : 'https://pornve.com/models/';
+        return cherryFetch(url).then(function (html) {
+            return _parseModelIndex(html, {
+                hrefRx: /href="(https?:\/\/pornve\.com\/models\/[a-z][a-z0-9-]+\/)"/g,
+                nameRx: [/title="([^"]+)"/, /alt="([^"]+)"/],
+                thumbRx: [/(?:data-src|src)="(https?:\/\/[^"]+\/contents\/models\/[^"]+\.jpe?g)"/i, /(?:data-src|src)="(https?:\/\/[^"]+\.jpe?g)"/i]
+            });
+        }).catch(function () { return []; });
+    },
+
+    browseByModel: function (modelUrl, page) {
+        var p = page || 1;
+        var u = modelUrl.replace(/\/+$/, '');
+        var url = p > 1 ? u + '/' + p + '/' : u + '/';
+        return cherryFetch(url).then(function (html) {
+            return { items: _pornveCards(html), total_pages: _pornvePages(html) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
             // kt_player flashvars: video_url: 'url', video_alt_url: '720p', video_alt_url2: '1080p'
@@ -4150,6 +4231,30 @@ SOURCES.push({
     },
 
     getRelated: _relatedFrom(_familypornCards),
+
+    // Models: single-page /models/ index lists the FULL A-Z roster (~1600) as
+    // <a class="link models-link" href="/models/{slug}/" title="…"> with NO avatar
+    // (name + "N video" only) → letter-tile fallback. One page, so ignore `page`.
+    // Per-model /models/{slug}/{N}/ renders listing cards (reuse _familypornCards).
+    getModels: function () {
+        return cherryFetch('https://familyporn.tv/models/').then(function (html) {
+            return _parseModelIndex(html, {
+                hrefRx: /href="(https?:\/\/familyporn\.tv\/models\/[a-z][a-z0-9-]+\/)"/g,
+                nameRx: [/title="([^"]+)"/, /class="name"[^>]*>([^<]+)</],
+                thumbRx: [/(?:data-original|data-src|src)="(https?:\/\/[^"]+\.(?:jpe?g|webp|png))"/i]
+            });
+        }).catch(function () { return []; });
+    },
+
+    browseByModel: function (modelUrl, page) {
+        var p = page || 1;
+        var u = modelUrl.replace(/\/+$/, '');
+        var url = p > 1 ? u + '/' + p + '/' : u + '/';
+        return cherryFetch(url).then(function (html) {
+            var items = _familypornCards(html);
+            return { items: items, total_pages: _familypornPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
 
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
@@ -4517,6 +4622,39 @@ SOURCES.push({
         var p = page || 1;
         var u = studioUrl.replace(/\/+$/, '');
         var url = p > 1 ? u + '/' + p + '/' : studioUrl;
+        return cherryFetch(url).then(function (html) {
+            var items = _perfektCards(html);
+            return { items: items, total_pages: _perfektPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    // Models: /pornstars/ index (paginated /pornstars/{N}/). Relative links
+    // /pornstars/{slug}/ with an <img data-original avatar. Exclude sort-nav
+    // (abc/favorites/videos/updated) + numeric pagination links. Per-model
+    // /pornstars/{slug}/{N}/ renders listing cards (reuse _perfektCards).
+    getModels: function (page) {
+        var p = page || 1;
+        var url = p > 1 ? 'https://www.perfektdamen.co/pornstars/' + p + '/'
+                        : 'https://www.perfektdamen.co/pornstars/';
+        return cherryFetch(url).then(function (html) {
+            return _parseModelIndex(html, {
+                hrefRx: /href="((?:https?:\/\/(?:www\.)?perfektdamen\.co)?\/pornstars\/([a-z0-9][a-z0-9-]*)\/)"/g,
+                exclude: function (u) {
+                    return /\/pornstars\/(?:abc|favorites|videos|updated|page|\d+)\/?$/.test(u);
+                },
+                normalizeUrl: function (raw) {
+                    return raw.charAt(0) === '/' ? 'https://www.perfektdamen.co' + raw : raw;
+                },
+                nameRx: [/title="([^"]+)"/, /alt="([^"]+)"/, /<p>\s*([^<]+)/],
+                thumbRx: [/<img[^>]+(?:data-original|data-src|src)="([^"?#]+\.(?:jpe?g|webp|png))/i]
+            });
+        }).catch(function () { return []; });
+    },
+
+    browseByModel: function (modelUrl, page) {
+        var p = page || 1;
+        var u = modelUrl.replace(/\/+$/, '');
+        var url = p > 1 ? u + '/' + p + '/' : modelUrl;
         return cherryFetch(url).then(function (html) {
             var items = _perfektCards(html);
             return { items: items, total_pages: _perfektPages(html, p, items.length) };
