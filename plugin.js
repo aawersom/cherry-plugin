@@ -1071,12 +1071,18 @@
         } catch (e) {}
       }
 
-      // Duration overlay (bottom-right) on every card — duration rides on
-      // element.duration from toCard; HD stays in the quality slot.
+      // Metadata overlays on every card: duration (bottom-right) + views (bottom-left).
+      // Both ride along on element from toCard; HD stays in the quality slot.
       try {
         var $v2 = card.render().find('.card__view');
-        if ($v2.length && element.duration) {
-          $v2.append('<div class="cherry-dur">' + secToTime(element.duration) + '</div>');
+        if ($v2.length) {
+          if (element.duration) {
+            $v2.append('<div class="cherry-dur">' + secToTime(element.duration) + '</div>');
+          }
+          var vstr = formatViews(element.views);
+          if (vstr) {
+            $v2.append('<div class="cherry-views">' + vstr + '</div>');
+          }
         }
       } catch (e) {}
 
@@ -1374,6 +1380,7 @@
       /* ---- P3.3 Source attribution badge (all-sources search) -- */
       '.cherry-cat .cherry-src-badge{position:absolute;top:.4em;left:.5em;z-index:2;background:rgba(0,0,0,.78);color:#fff;font-size:.72em;font-weight:600;padding:.12em .5em;border-radius:.25em;max-width:80%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
       '.cherry-cat .cherry-dur{position:absolute;bottom:.4em;right:.5em;z-index:2;background:rgba(0,0,0,.8);color:#fff;font-size:.78em;font-weight:600;padding:.12em .45em;border-radius:.25em;}',
+      '.cherry-cat .cherry-views{position:absolute;bottom:.4em;left:.5em;z-index:2;background:rgba(0,0,0,.8);color:#fff;font-size:.78em;font-weight:600;padding:.12em .45em;border-radius:.25em;}',
 
       /* ---- P3.4 Cherry header filter button -------------------- */
       '.cherry-filter-btn{color:#fff;}',
