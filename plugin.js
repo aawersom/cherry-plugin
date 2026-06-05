@@ -3343,8 +3343,8 @@ SOURCES.push(_kvsEngine({
             var fm;
             while ((fm = varM.exec(html)) !== null) {
                 quality[labels[fm[1]] || fm[1]] = fm[2];
-                if (!best || fm[1] === 'video_alt_url2') best = fm[2];
             }
+            best = quality['1080p'] || quality['720p'] || quality['480p'] || best;
             if (best) return { url: best, quality: quality };
             return extractStreams(html);
         }).catch(function() { return { url: '', quality: {} }; });
@@ -3494,8 +3494,8 @@ SOURCES.push(_kvsEngine({
             var fm;
             while ((fm = varM.exec(html)) !== null) {
                 quality[labels[fm[1]] || fm[1]] = fm[2];
-                if (!best || fm[1] === 'video_alt_url2') best = fm[2];
             }
+            best = quality['1080p'] || quality['720p'] || quality['480p'] || best;
             if (best) return { url: best, quality: quality };
             return extractStreams(html);
         }).catch(function() { return { url: '', quality: {} }; });
@@ -3546,8 +3546,8 @@ SOURCES.push({
             var fm;
             while ((fm = varM.exec(html)) !== null) {
                 quality[labels[fm[1]] || fm[1]] = fm[2];
-                if (!best || fm[1] === 'video_alt_url2') best = fm[2];
             }
+            best = quality['1080p'] || quality['720p'] || quality['480p'] || best;
             if (best) return { url: best, quality: quality };
             return extractStreams(html);
         }).catch(function () { return { url: '', quality: {} }; });
@@ -3638,8 +3638,8 @@ SOURCES.push({
             var fm;
             while ((fm = varM.exec(html)) !== null) {
                 quality[labels[fm[1]] || fm[1]] = fm[2];
-                if (!best || fm[1] === 'video_alt_url2') best = fm[2];
             }
+            best = quality['1080p'] || quality['720p'] || quality['480p'] || best;
             if (best) return { url: best, quality: quality };
             return extractStreams(html);
         }).catch(function () { return { url: '', quality: {} }; });
