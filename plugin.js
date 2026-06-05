@@ -723,8 +723,13 @@
       // batch this page there's likely more (→ page+1), else this is the last page.
       if (object.all_sources && object.query) {
         if (!SOURCES.length) { resolve([], 1); return; }
+        // First-screen-fast: one slow/hung source (or a stalled proxy) must NOT
+        // block the whole page. Each source races its search against a hard cap,
+        // resolving to an empty batch on timeout so Promise.all settles in ≤cap.
+        // A timed-out source contributes [] → not counted toward anyFull/pages.
+        var ALL_SRC_TIMEOUT_MS = 7000;
         var promises = SOURCES.map(function (src) {
-          return src.search(object.query, page).then(function (r) {
+          var search = src.search(object.query, page).then(function (r) {
             r = r || { items: [] };
             r._srcId = src.id;
             return r;
@@ -732,6 +737,12 @@
             console.warn('[Cherry] all_sources search error from ' + src.id + ':', err);
             return { items: [], total_pages: 1, _srcId: src.id };
           });
+          var timeout = new Promise(function (r) {
+            setTimeout(function () {
+              r({ items: [], total_pages: 1, _srcId: src.id });
+            }, ALL_SRC_TIMEOUT_MS);
+          });
+          return Promise.race([search, timeout]);
         });
         Promise.all(promises).then(function (results) {
           var flat = [];
