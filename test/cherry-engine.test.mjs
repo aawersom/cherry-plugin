@@ -1762,28 +1762,38 @@ function xnxxParseCards(html) {
 // ============================================================
 // adapter-preview-quality: pornhub data-mediabook (REQ-3)
 // ============================================================
+// li-block model parser — kept IN SYNC with plugin.js _parseHtmlCards.
 function phParseHtmlCards(html) {
   // _attr, _decodeHtml, parseDur, parseViews already at module scope (lines 13/20/32/44)
   var items = [];
   var seen = {};
-  var hrefRx = /href="(\/view_video\.php\?viewkey=([a-z0-9]+)[^"]*)"/g;
-  var m;
-  while ((m = hrefRx.exec(html)) !== null) {
-    var href = m[1];
-    var vkey = m[2];
-    if (!vkey || seen[vkey]) continue;
+  var liRx = /<li[^>]*class="[^"]*videoblock[^"]*"/g;
+  var starts = [];
+  var lm;
+  while ((lm = liRx.exec(html)) !== null) starts.push(lm.index);
+  if (!starts.length) starts.push(0);
+  starts.push(html.length);
+  for (var i = 0; i < starts.length - 1; i++) {
+    var block = html.slice(starts[i], starts[i + 1]);
+    var vk = block.match(/viewkey=([a-z0-9]+)/);
+    if (!vk) continue;
+    var vkey = vk[1];
+    if (seen[vkey]) continue;
     seen[vkey] = true;
-    var videoUrl = 'https://www.pornhub.com' + href;
-    var chunk = html.slice(Math.max(0, m.index - 200), m.index + 800);
-    var thumb = _attr(chunk, /data-mediumthumb="([^"]+)"/) ||
-                _attr(chunk, /data-thumb_url="([^"]+)"/) || '';
-    var preview = _attr(chunk, /data-mediabook="([^"]+)"/);
+    var href = _attr(block, /href="(\/view_video\.php\?viewkey=[a-z0-9]+[^"]*)"/);
+    var videoUrl = href ? 'https://www.pornhub.com' + href
+                        : 'https://www.pornhub.com/view_video.php?viewkey=' + vkey;
+    var thumb = _attr(block, /data-mediumthumb="([^"]+)"/) ||
+                _attr(block, /data-thumb_url="([^"]+)"/) ||
+                _attr(block, /data-image="([^"]+)"/) ||
+                _attr(block, /<img[^>]+(?:data-src|src)="(https?:\/\/[^"]*phncdn[^"]+\.jpg[^"]*)"/) || '';
+    var preview = _attr(block, /data-mediabook="([^"]+)"/);
     var title = _decodeHtml(
-      _attr(chunk, /class="[^"]*videoTitle[^"]*"[^>]*>([^<]+)/) ||
-      _attr(chunk, /title="([^"]+)"/)
+      _attr(block, /class="[^"]*videoTitle[^"]*"[^>]*>([^<]+)/) ||
+      _attr(block, /title="([^"]+)"/)
     );
-    var duration = parseDur(_attr(chunk, /<var class="duration">([^<]+)</));
-    var views    = parseViews(_attr(chunk, /class="[^"]*videoViewCount[^"]*"[^>]*>([^<]+)</));
+    var duration = parseDur(_attr(block, /<var class="[^"]*\bduration\b[^"]*"[^>]*>([^<]+)</));
+    var views    = parseViews(_attr(block, /class="[^"]*videoViewCount[^"]*"[^>]*>([^<]+)</));
     if (title || thumb) {
       items.push({ id: vkey, source: 'pornhub', title: title, thumb: thumb,
                    preview: preview, url: videoUrl, duration: duration, views: views });
@@ -2633,5 +2643,190 @@ describe('FamilyPorn card parser (curl-confirmed /videos/{slug}/ format)', funct
     expect(body).toMatch(/data-preview="\(\[\^"\]\+\\\.mp4/);
     expect(body).toContain('preview: preview || undefined');
     expect(PLUGIN.slice(pAt, pAt + 200)).toContain('_derivePages(itemsLen');
+  });
+});
+
+// ============================================================
+// browseByModel card parity — model-grid cards must carry the SAME fields
+// (source/thumb/title/url/duration/preview where the site exposes them) as
+// the listing cards, so they render IDENTICALLY inside a model.
+// ============================================================
+
+describe('pornhub _parseHtmlCards (model videos li-block parser)', function () {
+  // A videoblock <li> mirroring the real model page: title-href near top, then
+  // mediabook preview, then a duration <var> with a multi-class variant.
+  var card = function (vkey, durClass) {
+    return '<li class="pcVideoListItem js-pop videoblock videoBox" data-video-vkey="' + vkey + '">' +
+      '<a href="/view_video.php?viewkey=' + vkey + '" title="Title ' + vkey + '" class="img"></a>' +
+      '<img data-mediumthumb="https://pix.phncdn.com/' + vkey + '/thumb.jpg" />' +
+      '<span data-mediabook="https://kw.phncdn.com/' + vkey + '/180P.webm"></span>' +
+      '<var class="' + (durClass || 'duration') + '">12:34</var>' +
+      '<var class="videoViewCount">5.9K</var>' +
+      '</li>';
+  };
+
+  it('stamps source, thumb, title, url, duration AND preview (mediabook)', function () {
+    var items = phParseHtmlCards(card('abc123'));
+    expect(items).toHaveLength(1);
+    var c = items[0];
+    expect(c.source).toBe('pornhub');
+    expect(c.thumb).toContain('phncdn.com');
+    expect(c.title).toBe('Title abc123');
+    expect(c.url).toBe('https://www.pornhub.com/view_video.php?viewkey=abc123');
+    expect(c.duration).toBe(754);            // 12:34
+    expect(c.preview).toContain('180P.webm'); // model cards GAIN previews
+  });
+
+  it('captures duration on the multi-class <var> variant', function () {
+    var items = phParseHtmlCards(card('def456', 'bgShadeEffect duration tooltipTrig'));
+    expect(items[0].duration).toBe(754);
+  });
+
+  it('binds each card to its own block (no cross-card field bleed)', function () {
+    var items = phParseHtmlCards(card('aaa111') + card('bbb222'));
+    expect(items).toHaveLength(2);
+    expect(items[0].preview).toContain('aaa111');
+    expect(items[1].preview).toContain('bbb222');
+    expect(items[0].thumb).toContain('aaa111');
+    expect(items[1].thumb).toContain('bbb222');
+  });
+
+  it('dedupes a viewkey that appears twice in one block (title + related link)', function () {
+    var dup = '<li class="videoblock"><a href="/view_video.php?viewkey=x9"></a>' +
+              '<a href="/view_video.php?viewkey=x9" data-related></a>' +
+              '<img data-mediumthumb="t.jpg"/><var class="duration">1:00</var></li>';
+    expect(phParseHtmlCards(dup)).toHaveLength(1);
+  });
+
+  it('anti-drift: shipped _parseHtmlCards is li-block based with mediabook + multi-class duration', function () {
+    var PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+    var at = PLUGIN.indexOf('_parseHtmlCards: function(html)');
+    var body = PLUGIN.slice(at, at + 3000);
+    expect(body).toContain('videoblock');                 // li-block iteration
+    expect(body).toContain('data-mediabook');             // preview captured
+    expect(body).toMatch(/\\bduration\\b/);               // multi-class duration regex
+    expect(body).toContain("source: 'pornhub'");
+  });
+});
+
+// Inline reimplementation of xvideos _mapModelVideo (profile JSON → card).
+// Kept IN SYNC with plugin.js.
+function xvMapModelVideo(o) {
+  if (!o || !o.eid) return null;
+  var dur = 0;
+  var dm = o.d && String(o.d).match(/(\d+)\s*min/);
+  if (dm) dur = parseInt(dm[1], 10) * 60;
+  return {
+    id:       'xv' + o.eid,
+    source:   'xvideos',
+    title:    _decodeHtml(o.tf || o.t || ''),
+    thumb:    o.il || o.i || o.ip || '',
+    preview:  o.ipu || '',
+    hd:       o.hm ? (/2160|4k/i.test(String(o.h || '')) ? '4K' : 'HD') : '',
+    url:      'https://www.xvideos.com/video.' + o.eid + '/' +
+              ((String(o.u || '').match(/\/[a-z0-9]+\/([^\/?#]+)\/?$/) || [, o.eid])[1]),
+    duration: dur,
+    views:    parseViews(String(o.n || 0))
+  };
+}
+
+describe('xvideos _mapModelVideo (profile-videos JSON → card)', function () {
+  var sample = {
+    eid: 'ibviiih555c', tf: 'Full Title', t: 'short', i: 'i.jpg', il: 'il.jpg',
+    ipu: 'https://cdn/preview.mp4', hm: 1, d: '14 min', n: '69000',
+    u: '/prof-video-click/upload/mia-khalifa/ibviiih555c/full_slug'
+  };
+
+  it('maps id/source/title/thumb/preview/hd/duration like a listing card', function () {
+    var c = xvMapModelVideo(sample);
+    expect(c.id).toBe('xvibviiih555c');
+    expect(c.source).toBe('xvideos');
+    expect(c.title).toBe('Full Title');
+    expect(c.thumb).toBe('il.jpg');
+    expect(c.preview).toBe('https://cdn/preview.mp4');   // model cards carry preview
+    expect(c.hd).toBe('HD');
+    expect(c.duration).toBe(840);                        // 14 min
+    expect(c.views).toBe(69000);
+  });
+
+  it('builds a /video.{eid}/{slug} watch URL from the eid + slug in u (getStream-compatible)', function () {
+    var c = xvMapModelVideo(sample);
+    expect(c.url).toBe('https://www.xvideos.com/video.ibviiih555c/full_slug');
+  });
+
+  it('falls back to eid as slug when u has no parseable slug', function () {
+    var c = xvMapModelVideo({ eid: 'tok99', tf: 'T', d: '5 min' });
+    expect(c.url).toBe('https://www.xvideos.com/video.tok99/tok99');
+  });
+
+  it('returns null for a JSON object missing eid', function () {
+    expect(xvMapModelVideo({ tf: 'no eid' })).toBeNull();
+  });
+
+  it('anti-drift: shipped browseByModel hits /profiles/{slug}/videos/best JSON', function () {
+    var PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+    var at = PLUGIN.indexOf("id: 'xvideos'");
+    var body = PLUGIN.slice(at, at + 12000);
+    expect(body).toContain('_mapModelVideo');
+    expect(body).toContain('/profiles/');
+    expect(body).toContain('/videos/best/');
+    expect(body).toContain('JSON.parse');
+  });
+});
+
+// Inline reimplementation of ebun _ebunCards duration/views extraction.
+// Kept IN SYNC with plugin.js. The meta block has an inner <span> icon before
+// the value, so leading tags are skipped before the captured text.
+function ebunCards(html) {
+  var items = [];
+  var hrefRx = /href="(https?:\/\/www1\.ebun\.tv\/videos\/(\d+)\/)"/g;
+  var seen = {};
+  var m;
+  while ((m = hrefRx.exec(html)) !== null) {
+    var videoUrl = m[1];
+    var id = m[2];
+    if (seen[id]) continue;
+    seen[id] = true;
+    var chunk = html.slice(m.index, m.index + 1100);
+    var thumb = _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i) ||
+                _attr(chunk, /(?:data-src|src)="([^"]+\.(?:webp|png))"/i);
+    var title = _decodeHtml(
+      _attr(chunk, /<div[^>]*class="[^"]*item-title[^"]*"[^>]*>([^<]+)<\/div>/) ||
+      _attr(chunk, /alt="([^"]+)"/) ||
+      _attr(chunk, /title="([^"]+)"/)
+    );
+    if (!title) title = _titleFromUrl(videoUrl);
+    var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>(?:\s*<[^>]+>)*\s*([^<]+)</));
+    var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>(?:\s*<[^>]+>)*\s*([^<]+)</));
+    if (title || thumb) {
+      items.push({ id: id, source: 'ebun', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
+    }
+  }
+  return items;
+}
+
+describe('ebun _ebunCards (model + listing share parser; duration via meta-time)', function () {
+  // Real ebun card markup: meta block uses <div class="meta-time"><span/>28:50</div>.
+  var card =
+    '<a href="https://www1.ebun.tv/videos/123/"><img data-src="https://cdn/t.jpg" alt="Vid"/></a>' +
+    '<div class="meta-rating">79%</div>' +
+    '<div class="meta-time"><span class="fa fa-clock-o"></span>28:50</div>' +
+    '<div class="meta-views"><span class="fa fa-eye"></span>69K</div>';
+
+  it('extracts duration past the inner span icon', function () {
+    var items = ebunCards(card);
+    expect(items).toHaveLength(1);
+    expect(items[0].duration).toBe(1730);   // 28:50
+    expect(items[0].views).toBe(69000);
+    expect(items[0].thumb).toContain('t.jpg');
+    expect(items[0].source).toBe('ebun');
+  });
+
+  it('anti-drift: shipped _ebunCards skips inner tags before duration + window 1100', function () {
+    var PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+    var at = PLUGIN.indexOf('function _ebunCards');
+    var body = PLUGIN.slice(at, at + 1500);
+    expect(body).toContain('m.index + 1100');
+    expect(body).toMatch(/\(\?:\\s\*<\[\^>\]\+>\)\*/);   // (?:\s*<[^>]+>)* tag-skip
   });
 });
