@@ -2738,6 +2738,10 @@ SOURCES.push({
       // Confirmed via curl on youjizz.com. No resolution exposed → 'HD' only.
       var hd = /class="i-hd"/.test(block) ? 'HD' : '';
 
+      // Views: real per-card marker <span class="format-views">236827</span>.
+      var viewsMatch = block.match(/class="[^"]*format-views[^"]*"[^>]*>\s*([\d.,]+)/);
+      var views = viewsMatch ? parseViews(viewsMatch[1]) : 0;
+
       items.push({
         id: 'yj-' + id,
         source: 'youjizz',
@@ -2746,7 +2750,7 @@ SOURCES.push({
         hd: hd,
         url: videoUrl,
         duration: duration,
-        views: 0
+        views: views
       });
     }
     return items;
