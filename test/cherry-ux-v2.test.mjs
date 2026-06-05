@@ -811,6 +811,66 @@ describe('P0: plugin.js source assertions (anti-drift)', () => {
 });
 
 // ============================================================
+// «Модели» — model discovery axis (source assertions)
+// ============================================================
+
+describe('Models discovery axis (anti-drift)', () => {
+  it('cherry_models lang key registered with ru + en', () => {
+    expect(SRC).toMatch(/cherry_models\s*:\s*\{\s*ru:\s*'Модели',\s*en:\s*'Models'/);
+  });
+
+  it('openActionsMenu adds a «Модели» item gated by _hasModels', () => {
+    expect(SRC).toMatch(/_hasModels[\s\S]{0,120}action:\s*'models'/);
+    expect(SRC).toMatch(/item\.action\s*===\s*'models'[\s\S]{0,40}_openModels\(\)/);
+  });
+
+  it('_hasModels requires getModels and excludes models_index/model_url/etc', () => {
+    expect(SRC).toMatch(/_hasModels\s*=\s*!!\(source\s*&&\s*source\.getModels/);
+    expect(SRC).toMatch(/_hasModels[\s\S]{0,200}!object\.models_index/);
+  });
+
+  it('_openModels pushes cherry_grid with models_index:true', () => {
+    expect(SRC).toMatch(/_openModels[\s\S]{0,300}models_index:\s*true/);
+  });
+
+  it('_gridLoad has a models_index branch calling src.getModels(page)', () => {
+    expect(SRC).toMatch(/object\.models_index[\s\S]{0,160}src\.getModels\(page\)/);
+  });
+
+  it('models_index branch maps each model to a _model card with model_url', () => {
+    expect(SRC).toMatch(/_model:\s*true/);
+    expect(SRC).toMatch(/model_url:\s*m\.url/);
+  });
+
+  it('models_index branch derives pages via _derivePages', () => {
+    expect(SRC).toMatch(/models_index[\s\S]{0,600}_derivePages\(/);
+  });
+
+  it('cardRender routes _model cards to a model_url push (not playVideo)', () => {
+    expect(SRC).toMatch(/element\._model[\s\S]{0,200}model_url:\s*element\.model_url/);
+  });
+
+  it('_canSearch also excludes models_index (model grid has no per-source search)', () => {
+    expect(SRC).toMatch(/_canSearch\s*=[\s\S]{0,200}!object\.models_index/);
+  });
+
+  it('a shared model-index parser _parseModelIndex exists', () => {
+    expect(SRC).toMatch(/function _parseModelIndex\(html, opts\)/);
+    expect(SRC).toMatch(/function _humanizeName\(slug\)/);
+  });
+
+  it('several adapters declare getModels + browseByModel', () => {
+    // KVS engine exposes both conditionally on cfg.modelIndex.
+    expect(SRC).toMatch(/getModels:\s*cfg\.modelIndex\s*\?/);
+    expect(SRC).toMatch(/browseByModel:\s*cfg\.modelIndex\s*\?/);
+    // crocotube + pornobolt declare modelIndex configs.
+    expect((SRC.match(/modelIndex:\s*\{/g) || []).length).toBeGreaterThanOrEqual(2);
+    // pornhub + xvideos + porndig + ebun + jopaonline expose getModels directly.
+    expect((SRC.match(/getModels:\s*function/g) || []).length).toBeGreaterThanOrEqual(5);
+  });
+});
+
+// ============================================================
 // P1 — Pagination via InteractionCategory.nextPageReuest
 // (behaviour documentation)
 //

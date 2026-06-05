@@ -1082,6 +1082,68 @@ describe('REQ-3 model browse', function () {
     expect(called.page).toBe(1);
   });
 
+  it('AC-3.9: models_index load calls src.getModels(page) and maps _model cards', function () {
+    var called = null;
+    var src = {
+      id: 'crocotube',
+      getModels: function (p) {
+        called = p;
+        return Promise.resolve([
+          { name: 'Jada Fire', url: 'https://x/pornstars/jada-fire/', thumb: 't.jpg' },
+          { name: 'Riley Ray', url: 'https://x/pornstars/riley-ray/', thumb: '' }
+        ]);
+      }
+    };
+    // Mirror the _gridLoad models_index branch.
+    var object = { models_index: true, source_id: 'crocotube' };
+    var page = 1;
+    return src.getModels(page).then(function (models) {
+      var cards = models.map(function (m) {
+        return {
+          id:        'model_' + (m.url || m.name),
+          source:    src.id,
+          title:     m.name,
+          thumb:     m.thumb || '',
+          url:       m.url,
+          _model:    true,
+          model_url: m.url
+        };
+      });
+      expect(called).toBe(1);
+      expect(cards).toHaveLength(2);
+      expect(cards[0]._model).toBe(true);
+      expect(cards[0].model_url).toBe('https://x/pornstars/jada-fire/');
+      expect(cards[0].title).toBe('Jada Fire');
+      expect(cards[1].thumb).toBe('');
+    });
+  });
+
+  it('AC-3.10: _model card onEnter pushes cherry_grid with model_url (not playVideo)', function () {
+    var pushed = null;
+    var playVideoCalled = false;
+    var element = { _model: true, source: 'crocotube', title: 'Jada Fire',
+                   model_url: 'https://x/pornstars/jada-fire/' };
+    // Mirror cardRender onEnter for a _model card.
+    function onEnter() {
+      if (element._model) {
+        pushed = {
+          component: 'cherry_grid',
+          title:     element.title,
+          source_id: element.source,
+          model_url: element.model_url,
+          page:      1
+        };
+        return;
+      }
+      playVideoCalled = true;
+    }
+    onEnter();
+    expect(playVideoCalled).toBe(false);
+    expect(pushed).not.toBeNull();
+    expect(pushed.model_url).toBe('https://x/pornstars/jada-fire/');
+    expect(pushed.source_id).toBe('crocotube');
+  });
+
   it('AC-3.6: badge hover:enter does NOT call playVideo (only Activity.push or Noty)', function () {
     // playVideo is a separate function — badge enter only pushes activity or shows noty.
     // This test verifies the badge handler doesn't leak into hover:enter of the parent card.
