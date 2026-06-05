@@ -1013,6 +1013,62 @@ describe('Models discovery axis (anti-drift)', () => {
   });
 });
 
+describe('Studios discovery axis (anti-drift)', () => {
+  it('cherry_studios lang key registered with ru + en', () => {
+    expect(SRC).toMatch(/cherry_studios\s*:\s*\{\s*ru:\s*'Студии',\s*en:\s*'Studios'/);
+  });
+
+  it('openActionsMenu adds a «Студии» item gated by _hasStudios', () => {
+    expect(SRC).toMatch(/_hasStudios[\s\S]{0,120}action:\s*'studios'/);
+    expect(SRC).toMatch(/item\.action\s*===\s*'studios'[\s\S]{0,40}_openStudios\(\)/);
+  });
+
+  it('_hasStudios requires getStudios and excludes studios_index/studio_url/etc', () => {
+    expect(SRC).toMatch(/_hasStudios\s*=\s*!!\(source\s*&&\s*source\.getStudios/);
+    expect(SRC).toMatch(/_hasStudios[\s\S]{0,260}!object\.studios_index/);
+    expect(SRC).toMatch(/_hasStudios[\s\S]{0,260}!object\.studio_url/);
+  });
+
+  it('_openStudios pushes cherry_grid with studios_index:true', () => {
+    expect(SRC).toMatch(/_openStudios[\s\S]{0,300}studios_index:\s*true/);
+  });
+
+  it('_gridLoad has a studios_index branch calling src.getStudios(page)', () => {
+    expect(SRC).toMatch(/object\.studios_index[\s\S]{0,200}src\.getStudios\(page\)/);
+  });
+
+  it('studios_index branch maps each studio to a _studio card with studio_url', () => {
+    expect(SRC).toMatch(/_studio:\s*true/);
+    expect(SRC).toMatch(/studio_url:\s*s\.url/);
+  });
+
+  it('studios_index branch derives pages via _derivePages', () => {
+    expect(SRC).toMatch(/studios_index[\s\S]{0,700}_derivePages\(/);
+  });
+
+  it('_gridLoad has a studio_url branch calling browseByStudio', () => {
+    expect(SRC).toMatch(/object\.studio_url[\s\S]{0,120}browseByStudio\(object\.studio_url,\s*page\)/);
+  });
+
+  it('cardRender routes _studio cards to a studio_url push (not playVideo)', () => {
+    expect(SRC).toMatch(/element\._studio[\s\S]{0,200}studio_url:\s*element\.studio_url/);
+  });
+
+  it('_canSearch also excludes studios_index + studio_url', () => {
+    expect(SRC).toMatch(/_canSearch\s*=[\s\S]{0,260}!object\.studios_index/);
+    expect(SRC).toMatch(/_canSearch\s*=[\s\S]{0,260}!object\.studio_url/);
+  });
+
+  it('24rolika + perfektdamen declare getStudios + browseByStudio', () => {
+    var rolika = SRC.slice(SRC.indexOf("id: '24rolika'"), SRC.indexOf("id: '24rolika'") + 6000);
+    expect(rolika).toMatch(/getStudios:\s*function/);
+    expect(rolika).toMatch(/browseByStudio:\s*function/);
+    var perfekt = SRC.slice(SRC.indexOf("id: 'perfektdamen'"), SRC.indexOf("id: 'perfektdamen'") + 6000);
+    expect(perfekt).toMatch(/getStudios:\s*function/);
+    expect(perfekt).toMatch(/browseByStudio:\s*function/);
+  });
+});
+
 // ============================================================
 // P1 — Pagination via InteractionCategory.nextPageReuest
 // (behaviour documentation)

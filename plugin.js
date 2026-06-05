@@ -666,20 +666,27 @@
     // Right-edge action-menu applicability (Поиск → Сортировка → Категории).
     // model_url excluded: model browse is already filtered to a performer.
     var _source    = source;
-    var _canSearch = !object.is_favorites && !object.all_sources && !object.related_video && !object.model_url && !object.models_index;
+    var _canSearch = !object.is_favorites && !object.all_sources && !object.related_video && !object.model_url && !object.models_index && !object.studio_url && !object.studios_index;
     // Server sort applies only to a single-source grid. In all-sources search the
     // resolved `source` is SOURCES[0] (which HAS cfg.sorts), so without this guard the
     // menu showed BOTH «Сортировка» (server) AND «Сортировка» (client) — a duplicate.
     // Keep ALL sorting in one entry: server-sort for single source, client-sort for all-sources.
     var _hasSorts  = !!(source && source.cfg && source.cfg.sorts && source.cfg.sorts.length
-                        && !object.all_sources && !object.models_index);
+                        && !object.all_sources && !object.models_index && !object.studios_index);
     var _hasCats   = !!(source && source.cfg && source.cfg.categories && source.cfg.categories.length
-                        && !object.all_sources && !object.models_index);
+                        && !object.all_sources && !object.models_index && !object.studios_index);
     // «Модели»: offered only when the adapter can list a model index, and only on a
     // normal browse grid (not inside model browse / search / favorites / all-sources).
     var _hasModels = !!(source && source.getModels &&
                         !object.is_favorites && !object.all_sources &&
-                        !object.related_video && !object.model_url && !object.models_index);
+                        !object.related_video && !object.model_url && !object.models_index &&
+                        !object.studio_url && !object.studios_index);
+    // «Студии»: offered when the adapter can list a studio/channel index, on a
+    // normal browse grid only (mirrors _hasModels exclusions).
+    var _hasStudios = !!(source && source.getStudios &&
+                        !object.is_favorites && !object.all_sources &&
+                        !object.related_video && !object.model_url && !object.models_index &&
+                        !object.studio_url && !object.studios_index);
     // A2: all_sources search has no single source to honor a server sort, so offer
     // a lightweight CLIENT-side sort (relevance/duration) applied in _gridLoad.
     var _hasClientSort = !!(object.all_sources && object.query);
@@ -840,8 +847,37 @@
         return;
       }
 
+      // Studios INDEX mode — a grid of studio/channel cards (not videos). Each
+      // becomes a _studio card whose onEnter opens that studio's videos via
+      // studio_url. Mirrors the models_index branch above.
+      if (object.studios_index) {
+        if (!src.getStudios) { resolve([], 1); return; }
+        src.getStudios(page).then(function (studios) {
+          studios = studios || [];
+          var cards = studios.map(function (s) {
+            return {
+              id:         'studio_' + (s.url || s.name),
+              source:     src.id,
+              title:      s.name || _titleFromUrl(s.url),
+              thumb:      s.thumb || '',
+              url:        s.url,
+              _studio:    true,
+              studio_url: s.url
+            };
+          });
+          resolve(cards.map(toCard), _derivePages(cards.length, page, 20));
+        }).catch(function (err) {
+          console.warn('[Cherry] studios_index load error (page ' + page + '):', err);
+          reject();
+        });
+        return;
+      }
+
       var promise;
-      if (object.model_url) {
+      if (object.studio_url) {
+        if (!src.browseByStudio) { resolve([], 1); return; }
+        promise = src.browseByStudio(object.studio_url, page);
+      } else if (object.model_url) {
         if (!src.browseByModel) { resolve([], 1); return; }
         promise = src.browseByModel(object.model_url, page);
       } else if (object.query) {
@@ -1009,6 +1045,19 @@
       Lampa.Controller.toggle('content');
     }
 
+    // «Студии» — open this source's studio/channel INDEX grid (studios_index mode).
+    function _openStudios() {
+      if (!_source || !_source.getStudios) return;
+      Lampa.Activity.push({
+        component:     'cherry_grid',
+        title:         Lampa.Lang.translate('cherry_studios') + ' · ' + _source.name,
+        source_id:     object.source_id,
+        studios_index: true,
+        page:          1
+      });
+      Lampa.Controller.toggle('content');
+    }
+
     // A2: client-side sort for all_sources search. Re-pushes the same all_sources
     // activity with a client_sort param that _gridLoad applies after building flat.
     // Only metadata that exists on every adapter card is offered (duration);
@@ -1051,6 +1100,7 @@
       if (_hasClientSort) items.push({ title: Lampa.Lang.translate('cherry_sort'),     action: 'clientsort' });
       if (_hasCats)       items.push({ title: Lampa.Lang.translate('cherry_category'), action: 'cat'        });
       if (_hasModels)     items.push({ title: Lampa.Lang.translate('cherry_models'),   action: 'models'     });
+      if (_hasStudios)    items.push({ title: Lampa.Lang.translate('cherry_studios'),  action: 'studios'    });
       if (!items.length) return false;
       Lampa.Select.show({
         title: _source ? _source.name : 'Cherry',
@@ -1061,6 +1111,7 @@
           else if (item.action === 'clientsort') _openClientSort();
           else if (item.action === 'cat')        _openCat();
           else if (item.action === 'models')     _openModels();
+          else if (item.action === 'studios')    _openStudios();
         },
         onBack: function () { Lampa.Controller.toggle('content'); }
       });
@@ -1160,6 +1211,17 @@
             source_id: element.source,
             model_url: element.model_url,
             page:      1
+          });
+          return;
+        }
+        // Studio card → open that studio's videos via the studio_url grid path.
+        if (element._studio) {
+          Lampa.Activity.push({
+            component:  'cherry_grid',
+            title:      element.title,
+            source_id:  element.source,
+            studio_url: element.studio_url,
+            page:       1
           });
           return;
         }
@@ -1532,6 +1594,7 @@
       cherry_model_videos:     { ru: 'Видео модели',        en: 'Model videos'       },
       cherry_model:            { ru: 'Модель',              en: 'Model'              },
       cherry_models:           { ru: 'Модели',              en: 'Models'             },
+      cherry_studios:          { ru: 'Студии',              en: 'Studios'            },
       cherry_preview_setting:  { ru: 'Предпросмотр',        en: 'Preview'            },
       cherry_related:          { ru: 'Похожие',             en: 'Related'            },
       cherry_proxy_key_init:   { ru: 'Cherry: ключ прокси — 1206. Для смены — измените cherry_proxy_key в хранилище Lampa.', en: 'Cherry: proxy key — 1206. To change, update cherry_proxy_key in Lampa Storage.' }
@@ -4397,6 +4460,38 @@ SOURCES.push({
 
     getRelated: _relatedFrom(_perfektCards),
 
+    // Studios/channels: /channels/ index (60/page, real paysite brands w/ logos).
+    // Per-channel /channels/{slug}/{page}/ renders 60 listing cards (_perfektCards).
+    getStudios: function (page) {
+        var p = page || 1;
+        var url = p > 1 ? 'https://www.perfektdamen.co/channels/' + p + '/'
+                        : 'https://www.perfektdamen.co/channels/';
+        return cherryFetch(url).then(function (html) {
+            return _parseModelIndex(html, {
+                hrefRx: /href="((?:https?:\/\/(?:www\.)?perfektdamen\.co)?\/channels\/([a-z0-9][a-z0-9-]*)\/)"/g,
+                exclude: function (u) {
+                    // Drop nav (abc/favorites/videos/updated) + numeric pagination links.
+                    return /\/channels\/(?:abc|favorites|videos|updated|page|\d+)\/?$/.test(u);
+                },
+                normalizeUrl: function (raw) {
+                    return raw.charAt(0) === '/' ? 'https://www.perfektdamen.co' + raw : raw;
+                },
+                nameRx: [/alt="([^"]+)"/, /<p>\s*([^<]+)/],
+                thumbRx: [/<img[^>]+(?:data-original|data-src|src)="([^"?#]+\.(?:jpe?g|webp|png))/i]
+            });
+        }).catch(function () { return []; });
+    },
+
+    browseByStudio: function (studioUrl, page) {
+        var p = page || 1;
+        var u = studioUrl.replace(/\/+$/, '');
+        var url = p > 1 ? u + '/' + p + '/' : studioUrl;
+        return cherryFetch(url).then(function (html) {
+            var items = _perfektCards(html);
+            return { items: items, total_pages: _perfektPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
             return extractStreams(html);
@@ -5039,6 +5134,35 @@ SOURCES.push({
 
     getRelated: _relatedFrom(_rolikaCards),
 
+    // Studios: the /movie/ taxonomy is a side-menu of /movie/{slug}/ sections
+    // (paysite brands like Brazzers/Blacked + country/type feeds). Text links, no
+    // logos → letter-tile fallback. Single index page (no pagination needed).
+    getStudios: function (page) {
+        if ((page || 1) > 1) return Promise.resolve([]);
+        return cherryFetch('https://w2.huyalkino.com/movie/').then(function (html) {
+            return _parseModelIndex(html, {
+                hrefRx: /href="((?:https?:\/\/w2\.huyalkino\.com)?\/movie\/([a-z0-9][a-z0-9-]*)\/)"/g,
+                exclude: function (u) { return /\/movie\/page\//.test(u); },
+                normalizeUrl: function (raw) {
+                    return raw.charAt(0) === '/' ? 'https://w2.huyalkino.com' + raw : raw;
+                },
+                nameRx: [/>([^<]+)<\/a>/],
+                thumbRx: []
+            });
+        }).catch(function () { return []; });
+    },
+
+    // A studio's videos — /movie/{slug}/page/{N}/ (two-segment cards, widened rx).
+    browseByStudio: function (studioUrl, page) {
+        var p = page || 1;
+        var u = studioUrl.replace(/\/+$/, '');
+        var url = p > 1 ? u + '/page/' + p + '/' : studioUrl;
+        return cherryFetch(url).then(function (html) {
+            var items = _rolikaCards(html);
+            return { items: items, total_pages: _rolikaPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
             var m;
@@ -5055,7 +5179,10 @@ SOURCES.push({
 
 function _rolikaCards(html) {
     var items = [];
-    var hrefRx = /href="((?:https?:\/\/w2\.huyalkino\.com)?\/[a-z0-9][a-z0-9\-]*\/\d+[^"]+\.html)"/g;
+    // One- OR two-segment card URLs: normal categories use /{cat}/{id}-slug.html,
+    // /movie/{studio}/ studio pages use /movie/{studio}/{id}-slug.html. The {1,2}
+    // segment repetition matches both (verified card-count parity on 1-seg pages).
+    var hrefRx = /href="((?:https?:\/\/w2\.huyalkino\.com)?(?:\/[a-z0-9][a-z0-9\-]*){1,2}\/\d+[^"]+\.html)"/g;
     var seen = {};
     var m;
     while ((m = hrefRx.exec(html)) !== null) {

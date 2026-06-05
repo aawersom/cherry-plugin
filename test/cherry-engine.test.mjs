@@ -1227,6 +1227,107 @@ describe('REQ-3 model browse', function () {
 });
 
 // ============================================================
+// REQ-3b: Studio/channel browse — mirrors REQ-3 model browse. studios_index
+// lists studio cards; each _studio card onEnter opens that studio's videos via
+// the studio_url grid path. 24rolika (/movie/) + perfektdamen (/channels/).
+// ============================================================
+describe('REQ-3b studio browse', function () {
+  it('studios_index load calls src.getStudios(page) and maps _studio cards', function () {
+    var called = null;
+    var src = {
+      id: 'perfektdamen',
+      getStudios: function (p) {
+        called = p;
+        return Promise.resolve([
+          { name: 'Brazzers', url: 'https://www.perfektdamen.co/channels/brazzers/', thumb: 'b.jpg' },
+          { name: 'Blacked',  url: 'https://www.perfektdamen.co/channels/blacked/',  thumb: '' }
+        ]);
+      }
+    };
+    // Mirror the _gridLoad studios_index branch.
+    var object = { studios_index: true, source_id: 'perfektdamen' };
+    var page = 1;
+    return src.getStudios(page).then(function (studios) {
+      var cards = studios.map(function (s) {
+        return {
+          id:         'studio_' + (s.url || s.name),
+          source:     src.id,
+          title:      s.name,
+          thumb:      s.thumb || '',
+          url:        s.url,
+          _studio:    true,
+          studio_url: s.url
+        };
+      });
+      expect(called).toBe(1);
+      expect(cards).toHaveLength(2);
+      expect(cards[0]._studio).toBe(true);
+      expect(cards[0].studio_url).toBe('https://www.perfektdamen.co/channels/brazzers/');
+      expect(cards[0].title).toBe('Brazzers');
+      expect(cards[1].thumb).toBe('');
+    });
+  });
+
+  it('studio_url load calls browseByStudio(studioUrl, page)', function () {
+    var called = null;
+    var src = {
+      browseByStudio: function (url, p) {
+        called = { url: url, page: p };
+        return Promise.resolve({ items: [], total_pages: 1 });
+      }
+    };
+    var object = { studio_url: 'https://w2.huyalkino.com/movie/brazzers/', source_id: '24rolika' };
+    var page   = 2;
+    var promise;
+    if (object.studio_url) {
+      if (!src || !src.browseByStudio) { /* early return */ }
+      else promise = src.browseByStudio(object.studio_url, page);
+    }
+    expect(promise).toBeDefined();
+    expect(called).not.toBeNull();
+    expect(called.url).toBe('https://w2.huyalkino.com/movie/brazzers/');
+    expect(called.page).toBe(2);
+  });
+
+  it('_studio card onEnter pushes cherry_grid with studio_url (not playVideo)', function () {
+    var pushed = null;
+    var playVideoCalled = false;
+    var element = { _studio: true, source: 'perfektdamen', title: 'Brazzers',
+                   studio_url: 'https://www.perfektdamen.co/channels/brazzers/' };
+    // Mirror cardRender onEnter for a _studio card.
+    function onEnter() {
+      if (element._studio) {
+        pushed = {
+          component:  'cherry_grid',
+          title:      element.title,
+          source_id:  element.source,
+          studio_url: element.studio_url,
+          page:       1
+        };
+        return;
+      }
+      playVideoCalled = true;
+    }
+    onEnter();
+    expect(playVideoCalled).toBe(false);
+    expect(pushed).not.toBeNull();
+    expect(pushed.studio_url).toBe('https://www.perfektdamen.co/channels/brazzers/');
+    expect(pushed.source_id).toBe('perfektdamen');
+  });
+
+  it('24rolika + perfektdamen adapters expose getStudios + browseByStudio', function () {
+    var PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+    // Both adapter blocks declare the studio axis pair.
+    var rolika = PLUGIN.slice(PLUGIN.indexOf("id: '24rolika'"), PLUGIN.indexOf("id: '24rolika'") + 6000);
+    expect(rolika).toMatch(/getStudios:\s*function/);
+    expect(rolika).toMatch(/browseByStudio:\s*function/);
+    var perfekt = PLUGIN.slice(PLUGIN.indexOf("id: 'perfektdamen'"), PLUGIN.indexOf("id: 'perfektdamen'") + 6000);
+    expect(perfekt).toMatch(/getStudios:\s*function/);
+    expect(perfekt).toMatch(/browseByStudio:\s*function/);
+  });
+});
+
+// ============================================================
 // REQ-4: Related videos — generation counter + push logic tests
 // ============================================================
 
