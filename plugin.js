@@ -2619,24 +2619,15 @@ SOURCES.push({
   },
 
   search: function(query, page) {
+    // Canonical GET search: form is <form method="get" action="/"> → /?q={query}&p={N}
+    // with a real paginator (?q=...&p=2, &p=3). The old /search/{slug}/ route soft-404s
+    // (falls back to the "anal" category → wrong cards). 50 cards/page → _derivePages(50).
     var self = this;
     var p = page || 1;
-    var slug = query.toLowerCase().replace(/\s+/g, '-');
-    var url = p > 1
-      ? 'https://hqporner.com/search/' + slug + '/' + p + '/'
-      : 'https://hqporner.com/search/' + slug + '/';
+    var url = 'https://hqporner.com/?q=' + encodeURIComponent(query) + '&p=' + p;
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html);
-      // Try to find total pages from pagination
-      var pgRe2 = new RegExp('\\/search\\/' + slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\/(\\d+)\\/', 'g');
-      var total = 1;
-      var pgm;
-      while ((pgm = pgRe2.exec(html)) !== null) {
-        var n2 = parseInt(pgm[1], 10);
-        if (n2 > total) total = n2;
-      }
-      if (total < p) total = p + 5;
-      return { items: items, total_pages: total };
+      return { items: items, total_pages: _derivePages(items.length, p, 50) };
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
@@ -3875,33 +3866,16 @@ SOURCES.push({
   },
 
   search: function(query, page) {
-    // single-page search (site): Tizam has no real keyword search — generic DLE ?s=
-    // takes no page param and returns one result set, so total_pages stays 1.
-    return cherryFetch('https://tv4.tizam.org/?s=' + encodeURIComponent(query))
-      .then(function(html) {
-        var items = [];
-        // Simple link scan
-        var re = /href="(https?:\/\/tv4\.tizam\.org\/[^"]+)"/g;
-        var m;
-        var seen = {};
-        while ((m = re.exec(html)) !== null) {
-          var u = m[1];
-          if (seen[u] || !/tv4\.tizam\.org\/[^/]+\/[^/]+\/[^/]+/.test(u)) continue;
-          seen[u] = true;
-          var slugM = u.match(/\/([^/]+)\/?$/);
-          items.push({
-            id: 'tizam-' + (slugM ? slugM[1] : items.length),
-            source: 'tizam',
-            title: slugM ? slugM[1].replace(/-/g, ' ') : '',
-            thumb: '',
-            url: u,
-            duration: 0,
-            views: 0
-          });
-        }
-        return { items: items, total_pages: items.length ? 1 : 0 };
-      })
-      .catch(function() { return { items: [], total_pages: 0 }; });
+    // Real GET search form: action="/search-results/" method="GET", input name="search_string".
+    // (Old /?s= generic-DLE scan returned junk slug-as-title links with no thumbs.)
+    // Search results render the same 3-segment video cards as browse → reuse _parseCards.
+    // No page param exists in the search form (single result set) → total_pages 1.
+    var self = this;
+    var url = 'https://tv4.tizam.org/search-results/?search_string=' + encodeURIComponent(query);
+    return cherryFetch(url).then(function(html) {
+      var items = self._parseCards(html);
+      return { items: items, total_pages: items.length ? 1 : 0 };
+    }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
   browse: function(category, page) {
@@ -4421,10 +4395,14 @@ SOURCES.push({
     cfg: { sorts: _cats('2:По популярности,3:По рейтингу'), categories: _cats('russkoye:Русское,molodyye:Молодые,zrelyye:Зрелые,mamki:Мамки,analnoye:Анальное,minet:Минет,domashneye:Домашнее,krasotki:Красотки,bryunetki:Брюнетки,blondinki:Блондинки,bolshiye-dojki:Большие дойки,bolshiye-popki:Большие попки,bolshiye-chleny:Большие члены,khudyye:Худые,v-chulkakh:В чулках,ot-pervogo-litsa:От первого лица,gruppovoye:Групповое,kasting:Кастинг,studenty:Студенты,izmena:Измена,gheny:Жены,mzhm:МЖМ,blacked:Негры,aziatskoye:Азиатское,yaponskoye:Японское,mulatki:Мулатки,rakom:Раком,sperma:Сперма,bdsm:БДСМ,masturbatsiya:Мастурбация,lesbiyanki:Лесбиянки,massazh:Массаж,volosatyye:Волосатые,dvoynoye-proniknoveniye:Двойное проникновение,dominirovaniye:Доминирование,orgazmy:Оргазмы,zhestkoye:Жесткое,na-prirode:На природе,na-publike:На публике,pikap:Пикап') },
 
     search: function (query, page) {
-        // single-page search (site): /search/?q= takes no page param → total_pages 1.
-        var url = 'https://www.lenporno.net/search/?q=' + encodeURIComponent(query);
+        // Path-style search: /search/{query}/?page={p} (24 cards/page, real pagination).
+        // The old /search/?q= returned 0 cards (and /search/{q}/{n}/ + /page/{n}/ both
+        // yield 0 — must use ?page=). 24 cards/page → _derivePages(24).
+        var p = page || 1;
+        var url = 'https://www.lenporno.net/search/' + encodeURIComponent(query) + '/?page=' + p;
         return cherryFetch(url).then(function (html) {
-            return { items: _lenpornoCards(html), total_pages: 1 };
+            var items = _lenpornoCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 24) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 

@@ -1448,8 +1448,38 @@ describe('per-channel search pagination audit', () => {
 
   it('genuinely single-page searches stay total_pages:1 and are documented', () => {
     var singlePageHits = SRC.match(/single-page search \(site\)/g) || [];
-    // tizam, pornobolt, lenporno, 24rolika, jopaonline
-    expect(singlePageHits.length).toBeGreaterThanOrEqual(5);
+    // pornobolt, 24rolika, jopaonline (tizam now uses the real /search-results/ form;
+    // lenporno now paginates via /search/{q}/?page= → both no longer single-page-broken).
+    expect(singlePageHits.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('tizam search uses the real /search-results/?search_string= form (not /?s=)', () => {
+    var at = SRC.indexOf("id: 'tizam'");
+    var body = SRC.slice(SRC.indexOf('search: function', at), SRC.indexOf('browse: function', at));
+    expect(body).toContain("'https://tv4.tizam.org/search-results/?search_string=' + encodeURIComponent(query)");
+    expect(body).not.toContain("'https://tv4.tizam.org/?s='");
+  });
+
+  it('hqporner search uses /?q={query}&p={page} (not the soft-404 /search/{slug}/)', () => {
+    var at = SRC.indexOf("id: 'hqporner'");
+    var body = SRC.slice(SRC.indexOf('search: function', at), SRC.indexOf('cfg:', at));
+    expect(body).toContain("'https://hqporner.com/?q=' + encodeURIComponent(query) + '&p=' + p");
+    expect(body).not.toContain("'https://hqporner.com/search/'");
+    expect(body).toContain('_derivePages');
+  });
+
+  it('lenporno search uses /search/{query}/?page={p} with _derivePages (not /search/?q=)', () => {
+    var at = SRC.indexOf("id: 'lenporno'");
+    var body = SRC.slice(SRC.indexOf('search: function', at), SRC.indexOf('browse: function', at));
+    expect(body).toContain("'https://www.lenporno.net/search/' + encodeURIComponent(query) + '/?page=' + p");
+    expect(body).not.toContain("'https://www.lenporno.net/search/?q='");
+    expect(body).toContain('_derivePages');
+  });
+
+  it('spankbang search still builds /s/{query}/{page}/', () => {
+    var at = SRC.indexOf("id: 'spankbang'");
+    var body = SRC.slice(SRC.indexOf('search: function', at), SRC.indexOf('browse: function', at));
+    expect(body).toContain("'https://ru.spankbang.com/s/' + q + '/' + p + '/'");
   });
 });
 
