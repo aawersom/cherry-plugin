@@ -39,3 +39,12 @@ Out-of-scope bugs spotted during tasks. Critical/high → fix in flight. Medium/
 **Where:** `plugin.js` pornhub getRelated — JSON path returns full array; HTML fallback caps at `.slice(0,20)`.
 **Risk:** malicious page with huge relatedVideosJSON → unbounded card render (mild client resource exhaustion).
 **Fix:** apply consistent `.slice(0, N)` cap before rendering related results. Caught by: security reviewer (Phase 1).
+
+## BL-SPANKBANG — «нет выдачи» на устройстве (2026-06-05)
+**Статус:** требует device-лога. **Вывод проверки:** листинг spankbang НЕ сломан —
+парсер выдаёт 72 карточки с живого сайта через Deno-прокси (`/s/{slug}/`, `/most_popular/`,
+`/new_videos/`), thumb/title извлекаются (проверено `test/channel-health.mjs` + ручной парс).
+Значит «нет выдачи» у пользователя — НЕ парсер. Кандидаты: (1) кэш старого плагина на устройстве
+(hard-reload); (2) device-specific прокси/CORS; (3) превью с tbi.sb-cd.com (hotlink/referer) →
+карточки пустые на вид; (4) это СТРИМ spankbang (давно сломан, нужен Playwright), а не листинг.
+**Действие:** получить console-лог spankbang с устройства (как для синка) → точечно добить.
