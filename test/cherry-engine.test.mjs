@@ -1951,8 +1951,111 @@ describe('S5/S2 plugin.js source assertions (anti-drift)', function () {
     expect(/\/class="i-hd"\/\.test\(block\)/.test(PLUGIN)).toBe(true);
   });
 
-  it('toCard combines hd before the quality slot', function () {
-    expect(/if \(v\.hd\) _q = _q \? \(v\.hd \+ ' · ' \+ _q\) : v\.hd;/.test(PLUGIN)).toBe(true);
+  it('toCard puts ONLY the hd badge in the quality slot (duration is a separate overlay)', function () {
+    // HD-only quality slot.
+    expect(/if \(v\.hd\) v\.quality = v\.hd;/.test(PLUGIN)).toBe(true);
+    // The old "HD · duration" combine is gone.
+    expect(/v\.hd \+ ' · ' \+ _q/.test(PLUGIN)).toBe(false);
+  });
+});
+
+// ============================================================
+// FIX 1 — title fallback added to _pornoneCards / _rolikaCards
+// (the shared _kvsParseCards engine already carried it).
+// ============================================================
+describe('FIX 1 — _titleFromUrl fallback in HTML parsers', function () {
+  var PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+
+  function parserBody(name) {
+    var at = PLUGIN.indexOf('function ' + name + '(');
+    expect(at).toBeGreaterThan(-1);
+    return PLUGIN.slice(at, at + 2400);
+  }
+
+  it('_pornoneCards fills empty title from the video URL before pushing', function () {
+    var body = parserBody('_pornoneCards');
+    var fbIdx   = body.indexOf('if (!title) title = _titleFromUrl(videoUrl);');
+    var pushIdx = body.indexOf('items.push(');
+    expect(fbIdx).toBeGreaterThan(-1);
+    expect(pushIdx).toBeGreaterThan(fbIdx); // fallback runs BEFORE push
+  });
+
+  it('_rolikaCards fills empty title from the video URL before pushing', function () {
+    var body = parserBody('_rolikaCards');
+    var fbIdx   = body.indexOf('if (!title) title = _titleFromUrl(videoUrl);');
+    var pushIdx = body.indexOf('items.push(');
+    expect(fbIdx).toBeGreaterThan(-1);
+    expect(pushIdx).toBeGreaterThan(fbIdx);
+  });
+
+  it('_kvsParseCards (shared engine) still carries the fallback', function () {
+    var body = parserBody('_kvsParseCards');
+    expect(body).toMatch(/if \(!title\) title = _titleFromUrl\(videoUrl\);/);
+  });
+});
+
+// ============================================================
+// FIX 2 — duration overlay (.cherry-dur) + HD-only quality slot
+// ============================================================
+describe('FIX 2 — duration overlay anti-drift', function () {
+  var PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+
+  it('cardRender injects a .cherry-dur overlay with secToTime(element.duration)', function () {
+    expect(PLUGIN).toMatch(/element\.duration\)\s*\{[\s\S]*?cherry-dur[\s\S]*?secToTime\(element\.duration\)/);
+  });
+
+  it('.cherry-dur CSS is present (bottom-right, z-index)', function () {
+    var m = /\.cherry-dur\{([^}]*)\}/.exec(PLUGIN);
+    expect(m).not.toBe(null);
+    expect(m[1]).toMatch(/bottom/);
+    expect(m[1]).toMatch(/right/);
+    expect(m[1]).toMatch(/z-index/);
+  });
+});
+
+// ============================================================
+// FIX 3 — all_sources cards stamped with their originating source id
+// ============================================================
+describe('FIX 3 — all_sources source-id stamp wiring', function () {
+  var PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+
+  it('each search result is tagged with src.id via _srcId', function () {
+    expect(PLUGIN).toMatch(/r\._srcId = src\.id;/);
+  });
+
+  it('cards inherit r._srcId when they carry no source (no clobber of a real source)', function () {
+    expect(PLUGIN).toMatch(/r\.items\.forEach\(function \(v\) \{ if \(v && !v\.source\) v\.source = r\._srcId; \}\);/);
+  });
+});
+
+// ============================================================
+// FIX 4 — 3movs getStream prefers the highest available quality
+// ============================================================
+describe('FIX 4 — 3movs best-quality selection', function () {
+  // Mirror of the selection line added after the flashvars while-loop.
+  function pickBest(quality, best) {
+    return quality['1080p'] || quality['720p'] || quality['480p'] || best;
+  }
+
+  it('prefers 1080p when present', function () {
+    expect(pickBest({ '480p': 'a', '720p': 'b', '1080p': 'c' }, 'a')).toBe('c');
+  });
+
+  it('falls back to 720p when 1080p absent (no longer keeps 480p)', function () {
+    expect(pickBest({ '480p': 'a', '720p': 'b' }, 'a')).toBe('b');
+  });
+
+  it('falls back to 480p when only 480p present', function () {
+    expect(pickBest({ '480p': 'a' }, 'a')).toBe('a');
+  });
+
+  it('keeps the prior best when the map is empty', function () {
+    expect(pickBest({}, 'fallback')).toBe('fallback');
+  });
+
+  it('source carries the highest-quality selection line', function () {
+    var PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+    expect(PLUGIN).toMatch(/best = quality\['1080p'\] \|\| quality\['720p'\] \|\| quality\['480p'\] \|\| best;/);
   });
 });
 

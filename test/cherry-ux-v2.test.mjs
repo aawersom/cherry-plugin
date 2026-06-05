@@ -1389,7 +1389,7 @@ describe('Phase 3 A3(b): all_sources per-source title-match filter before slice'
   it('filter uses indexOf(query) and runs before slice(0,10)', () => {
     var at = SRC.indexOf('All-sources search');
     expect(at).toBeGreaterThan(-1);
-    var body = SRC.slice(at, at + 2200);
+    var body = SRC.slice(at, at + 2700);
     // per-source title match
     expect(body).toMatch(/\.toLowerCase\(\)\.indexOf\(ql\)\s*!==\s*-1/);
     // filter executes before the slice
@@ -1401,14 +1401,14 @@ describe('Phase 3 A3(b): all_sources per-source title-match filter before slice'
 
   it('non-ASCII (Cyrillic) queries skip the filter', () => {
     var at = SRC.indexOf('All-sources search');
-    var body = SRC.slice(at, at + 2200);
+    var body = SRC.slice(at, at + 2700);
     expect(body).toMatch(/isLatin\s*=\s*\/\^\[\\x00-\\x7F\]\*\$\/\.test\(ql\)/);
     expect(body).toMatch(/if\s*\(ql\s*&&\s*isLatin\)/);
   });
 
   it('keeps a source unfiltered top-N when its filtered slice is empty', () => {
     var at = SRC.indexOf('All-sources search');
-    var body = SRC.slice(at, at + 2200);
+    var body = SRC.slice(at, at + 2700);
     expect(body).toMatch(/if\s*\(matched\.length\)\s*picked\s*=\s*matched/);
   });
 });
