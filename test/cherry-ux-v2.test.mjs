@@ -1236,11 +1236,37 @@ describe('Step 2: query-param / API sorts (popular first, Russian labels)', () =
     });
   });
 
-  it('hellporno drops invalid most_recent/latest values', () => {
+  // cherry-ux-v2: curl-confirmed TIME-WINDOW popularity sorts on KVS query-mode
+  // channels (engine appends ?sort_by= verbatim). «По популярности» stays first.
+  var windowExpect = {
+    xozilla:  ['video_viewed_today', 'video_viewed_week', 'video_viewed_month', 'rating_week'],
+    analdin:  ['video_viewed_today', 'video_viewed_week', 'video_viewed_month', 'rating_week'],
+    pornve:   ['video_viewed_today', 'video_viewed_week', 'video_viewed_month', 'rating_week', 'rating_month'],
+    hellporno:['video_viewed_today', 'video_viewed_week', 'video_viewed_month', 'rating_week']
+  };
+  Object.keys(windowExpect).forEach(function (id) {
+    it(id + ': includes curl-confirmed windowed sorts after «По популярности»', () => {
+      var s = sortsFor(id);
+      expect(s[0].id).toBe('video_viewed');           // all-time stays first/default
+      var ids = s.map(function (x) { return x.id; });
+      windowExpect[id].forEach(function (w) {
+        expect(ids).toContain(w);                      // windowed value present
+        var item = s.filter(function (x) { return x.id === w; })[0];
+        expect(item.label).toMatch(/[А-Яа-я]/);        // Russian label
+      });
+      // windows come AFTER all-time popular
+      expect(ids.indexOf('video_viewed_week')).toBeGreaterThan(0);
+    });
+  });
+
+  it('hellporno drops invalid most_recent/latest values, includes curl-confirmed time windows', () => {
     var ids = sortsFor('hellporno').map(function (x) { return x.id; });
     expect(ids).not.toContain('most_recent');
     expect(ids).not.toContain('latest');
-    expect(ids).toEqual(['video_viewed', 'post_date', 'rating', 'duration', 'most_commented']);
+    expect(ids).toEqual([
+      'video_viewed', 'video_viewed_today', 'video_viewed_week', 'video_viewed_month',
+      'rating_week', 'post_date', 'rating', 'duration', 'most_commented'
+    ]);
   });
 
   it('pornobolt: mv (popular) first, mc по комментариям; only valid values', () => {
