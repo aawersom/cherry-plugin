@@ -660,11 +660,9 @@
     function toCard(v) {
       v.img    = v.thumb;
       v.poster = v.thumb;
-      // Combine an HD/4K badge with duration in the quality slot. v.hd is an
-      // optional adapter field (like duration) — rides along, no shape change.
-      var _q = v.duration ? secToTime(v.duration) : '';
-      if (v.hd) _q = _q ? (v.hd + ' · ' + _q) : v.hd;
-      if (_q) v.quality = _q;
+      // Quality slot carries ONLY the HD/4K badge. Duration rides along on
+      // v.duration and renders as a dedicated bottom-right overlay in cardRender.
+      if (v.hd) v.quality = v.hd;
       v.source = v.source || object.source_id;
       return v;
     }
@@ -703,9 +701,13 @@
       if (object.all_sources && object.query) {
         if (!SOURCES.length) { resolve([], 1); return; }
         var promises = SOURCES.map(function (src) {
-          return src.search(object.query, page).catch(function (err) {
+          return src.search(object.query, page).then(function (r) {
+            r = r || { items: [] };
+            r._srcId = src.id;
+            return r;
+          }).catch(function (err) {
             console.warn('[Cherry] all_sources search error from ' + src.id + ':', err);
-            return { items: [], total_pages: 1 };
+            return { items: [], total_pages: 1, _srcId: src.id };
           });
         });
         Promise.all(promises).then(function (results) {
@@ -723,6 +725,9 @@
           var isLatin = /^[\x00-\x7F]*$/.test(ql);
           results.forEach(function (r) {
             if (r && r.items && r.items.length) {
+              // Stamp each card with ITS originating source so «Похожие» opens the
+              // exact channel the card came from (don't clobber an existing source).
+              r.items.forEach(function (v) { if (v && !v.source) v.source = r._srcId; });
               // A full raw batch (>=10) from any source implies a further page exists.
               if (r.items.length >= 10) anyFull = true;
               var picked = r.items;
@@ -1066,6 +1071,15 @@
         } catch (e) {}
       }
 
+      // Duration overlay (bottom-right) on every card — duration rides on
+      // element.duration from toCard; HD stays in the quality slot.
+      try {
+        var $v2 = card.render().find('.card__view');
+        if ($v2.length && element.duration) {
+          $v2.append('<div class="cherry-dur">' + secToTime(element.duration) + '</div>');
+        }
+      } catch (e) {}
+
       card.onMenu = function (target, card_data) {
         var isFav   = Fav.has(element);
         var cardSrc = sourceById(element.source) || sourceById(object.source_id);
@@ -1359,6 +1373,7 @@
 
       /* ---- P3.3 Source attribution badge (all-sources search) -- */
       '.cherry-cat .cherry-src-badge{position:absolute;top:.4em;left:.5em;z-index:2;background:rgba(0,0,0,.78);color:#fff;font-size:.72em;font-weight:600;padding:.12em .5em;border-radius:.25em;max-width:80%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+      '.cherry-cat .cherry-dur{position:absolute;bottom:.4em;right:.5em;z-index:2;background:rgba(0,0,0,.8);color:#fff;font-size:.78em;font-weight:600;padding:.12em .45em;border-radius:.25em;}',
 
       /* ---- P3.4 Cherry header filter button -------------------- */
       '.cherry-filter-btn{color:#fff;}',
@@ -2953,6 +2968,7 @@ function _pornoneCards(html) {
             _attr(chunk, /th-eu4\.pornone\.com\/t\/[^"]+"\s+alt="([^"]{10,})"/) ||
             derivedTitle
         );
+        if (!title) title = _titleFromUrl(videoUrl);
 
         var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
         var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
@@ -3387,6 +3403,8 @@ SOURCES.push({
                 quality[labels[fm[1]] || fm[1]] = fm[2];
                 if (!best || fm[1] === 'video_alt_url2') best = fm[2];
             }
+            // Always prefer the highest quality actually present.
+            best = quality['1080p'] || quality['720p'] || quality['480p'] || best;
             if (best) return { url: best, quality: quality };
             return extractStreams(html);
         }).catch(function () { return { url: '', quality: {} }; });
@@ -4538,6 +4556,7 @@ function _rolikaCards(html) {
             _attr(chunk, /title="([^"]+)"/) ||
             _attr(chunk, /alt="([^"]+)"/)
         );
+        if (!title) title = _titleFromUrl(videoUrl);
 
         var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time|th-time)[^"]*"[^>]*>([^<]+)</));
         var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
