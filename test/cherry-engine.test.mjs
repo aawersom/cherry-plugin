@@ -143,6 +143,7 @@ function _kvsParseCards(html, cfg) {
       if (titleRaw) break;
     }
     var title = _decodeHtml(titleRaw);
+    if (!title) title = _titleFromUrl(videoUrl);
 
     // duration
     var durStr   = _attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</);
@@ -152,9 +153,14 @@ function _kvsParseCards(html, cfg) {
     var viewsStr = _attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</);
     var views    = parseViews(viewsStr);
 
+    // HD/4K badge (mirror plugin.js)
+    var hd = '';
+    if (/2160|\b4k\b/i.test(chunk)) hd = '4K';
+    else if (/class="[^"]*\bhd\b[^"]*"|>\s*HD\s*<|is_hd|hd-(?:button|mark)/i.test(chunk)) hd = 'HD';
+
     if (title || thumb) {
       items.push({ id: id, source: cfg.id, title: title, thumb: thumb,
-                   url: videoUrl, duration: duration, views: views });
+                   url: videoUrl, duration: duration, views: views, hd: hd || undefined });
     }
   }
 
@@ -484,15 +490,17 @@ describe('_kvsParseCards', () => {
     expect(result[0].views).toBe(5000);
   });
 
-  it('skips card when neither title nor thumb can be extracted', () => {
-    // A match with no img and no title markup → should not be pushed.
+  it('keeps card via _titleFromUrl fallback when title markup is absent (URL has a slug)', () => {
+    // No img / no title markup, but the URL slug yields a title → card is kept
+    // (the fallback prevents captionless cards, e.g. after sorting).
     var html = '<a href="https://example.com/videos/11/bare-link/"></a>';
     var cfg = Object.assign({}, BASE_CFG, {
       thumbRx: [/THIS_WONT_MATCH/i],
       titleRx: [/THIS_WONT_MATCH_EITHER/]
     });
     var result = _kvsParseCards(html, cfg);
-    expect(result).toHaveLength(0);
+    expect(result).toHaveLength(1);
+    expect(result[0].title).toBe('Bare link');
   });
 });
 
@@ -1852,23 +1860,21 @@ function secToTime(s) {
 // The quality-slot composition from toCard (CherryGrid). Pure extract — the
 // rest of toCard (img/poster/source) is irrelevant to the quality logic.
 function toCardQuality(v) {
-  var _q = v.duration ? secToTime(v.duration) : '';
-  if (v.hd) _q = _q ? (v.hd + ' · ' + _q) : v.hd;
-  if (_q) v.quality = _q;
+  if (v.hd) v.quality = v.hd;   // HD-only; duration is a separate bottom-right overlay
   return v.quality;
 }
 
-describe('S2 toCard — hd + duration → quality slot', function () {
-  it('hd present + duration → "HD · 12:34"', function () {
-    expect(toCardQuality({ duration: 754, hd: 'HD' })).toBe('HD · 12:34');
+describe('S2 toCard — quality slot = HD/4K only (duration is a separate overlay)', function () {
+  it('hd present + duration → "HD" (duration NOT in quality slot)', function () {
+    expect(toCardQuality({ duration: 754, hd: 'HD' })).toBe('HD');
   });
 
-  it('4K present + duration → "4K · 1:05"', function () {
-    expect(toCardQuality({ duration: 65, hd: '4K' })).toBe('4K · 1:05');
+  it('4K present + duration → "4K"', function () {
+    expect(toCardQuality({ duration: 65, hd: '4K' })).toBe('4K');
   });
 
-  it('no hd, duration only → "12:34" (unchanged)', function () {
-    expect(toCardQuality({ duration: 754 })).toBe('12:34');
+  it('no hd, duration only → quality undefined (duration shown bottom-right)', function () {
+    expect(toCardQuality({ duration: 754 })).toBe(undefined);
   });
 
   it('hd present, no duration → "HD"', function () {
