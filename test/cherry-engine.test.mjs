@@ -2932,6 +2932,120 @@ describe('ebun _ebunCards (model + listing share parser; duration via meta-time)
   });
 });
 
+// Inline mirror of jopaonline _jopaCards (kept IN SYNC with plugin.js).
+// Each card carries <img data-preview="…/prev_{id}.mp4"> (CDN absolute URL).
+function jopaCards(html) {
+  var items = [];
+  var hrefRx = /href="(https?:\/\/jopaonline\.mobi\/porno-video\/(\d+))"/g;
+  var seen = {};
+  var m;
+  while ((m = hrefRx.exec(html)) !== null) {
+    var videoUrl = m[1];
+    var id = m[2];
+    if (seen[id]) continue;
+    seen[id] = true;
+    var chunk = html.slice(m.index, m.index + 900);
+    var thumb = _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\/uploads\/posts\/\d{4}-\d{2}\/[^"?#]+)/i) ||
+                _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.jpe?g)/i);
+    var title = _decodeHtml(_attr(chunk, /title="([^"]+)"/) || _attr(chunk, /alt="([^"]+)"/));
+    if (!title) title = _titleFromUrl(videoUrl);
+    var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
+    var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
+    var preview  = _attr(chunk, /data-preview="([^"]+\.mp4[^"]*)"/i);
+    if (title || thumb) {
+      items.push({ id: id, source: 'jopaonline', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views, preview: preview || undefined });
+    }
+  }
+  return items;
+}
+
+describe('jopaonline _jopaCards (hover-preview mp4 via data-preview)', function () {
+  // Real jopa card markup (curled jopaonline.mobi/categories/mamki/).
+  var card =
+    '<a href="https://jopaonline.mobi/porno-video/18975" title="Блондинка в масле">' +
+    '<div class="th-image"><img data-preview="https://v5230.yourstream.pro/jopa/ff_m/18975/prev_18975.mp4" ' +
+    'src="https://jopaonline.mobi/uploads/posts/2026-05/blondinka.jpg" alt="Блондинка в масле" />' +
+    '<div class="th-duration">46:29</div></div>' +
+    '<span class="th-views">1,860</span></a>';
+
+  it('captures the data-preview mp4 (absolute CDN URL)', function () {
+    var items = jopaCards(card);
+    expect(items).toHaveLength(1);
+    expect(items[0].preview).toBe('https://v5230.yourstream.pro/jopa/ff_m/18975/prev_18975.mp4');
+    expect(items[0].duration).toBe(2789);   // 46:29
+    expect(items[0].views).toBe(1860);
+  });
+
+  it('preview is undefined when no mp4 attr present', function () {
+    var noPrev = '<a href="https://jopaonline.mobi/porno-video/1" title="X">' +
+                 '<img src="https://jopaonline.mobi/uploads/posts/2026-05/x.jpg"/></a>';
+    var items = jopaCards(noPrev);
+    expect(items[0].preview).toBeUndefined();
+  });
+
+  it('anti-drift: shipped _jopaCards extracts data-preview .mp4', function () {
+    var PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+    var at = PLUGIN.indexOf('function _jopaCards');
+    var body = PLUGIN.slice(at, at + 1700);
+    expect(body).toContain('data-preview="([^"]+\\.mp4');
+    expect(body).toContain('preview: preview || undefined');
+  });
+});
+
+// Inline mirror of porntrex _porntrexCards duration/views (kept IN SYNC).
+// KVS markup: <div class="durations"><i .../> MM:SS</div> + <div class="viewsthumb">N views</div>,
+// both sitting AFTER a long screenshots-list rotator → window 2600.
+function porntrexCards(html) {
+  var items = [];
+  var hrefRx = /href="(https?:\/\/www\.porntrex\.com\/video\/[^"]+)"/g;
+  var seen = {};
+  var m;
+  while ((m = hrefRx.exec(html)) !== null) {
+    var videoUrl = m[1];
+    var idMatch = /\/video\/(\d+)\//.exec(videoUrl);
+    var id = idMatch ? idMatch[1] : videoUrl;
+    if (seen[id]) continue;
+    seen[id] = true;
+    var chunk = html.slice(m.index, m.index + 2600);
+    var duration = parseDur(
+      _attr(chunk, /class="durations"[^>]*>(?:\s*<[^>]+>)*\s*([^<]+)</) ||
+      _attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>(?:\s*<[^>]+>)*\s*([^<]+)</)
+    );
+    var views = parseViews(
+      _attr(chunk, /class="viewsthumb"[^>]*>\s*([^<]+)</) ||
+      _attr(chunk, /class="[^"]*views?[^"]*"[^>]*>\s*([^<]+)</)
+    );
+    items.push({ id: id, source: 'porntrex', url: videoUrl, duration: duration, views: views });
+  }
+  return items;
+}
+
+describe('porntrex _porntrexCards (duration via .durations, views via .viewsthumb)', function () {
+  // Real porntrex card markup (curled porntrex.com/latest-updates/), screenshots-list
+  // padded to push the meta past the old 800-char window.
+  var card =
+    '<a href="https://www.porntrex.com/video/3218416/aqua-ri" class="thumb rotator-screen">' +
+    '<ul class="screenshots-list">' + '<li>x</li>'.repeat(80) + '</ul></a>' +
+    '<div class="viewsthumb">1,234 views</div>' +
+    '<div class="durations"><i class="fa fa-clock-o"></i> 10:11</div>';
+
+  it('extracts duration past the screenshots rotator', function () {
+    var items = porntrexCards(card);
+    expect(items).toHaveLength(1);
+    expect(items[0].duration).toBe(611);    // 10:11
+    expect(items[0].views).toBe(1234);
+  });
+
+  it('anti-drift: shipped _porntrexCards uses window 2600 + .durations/.viewsthumb', function () {
+    var PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+    var at = PLUGIN.indexOf('function _porntrexCards');
+    var body = PLUGIN.slice(at, at + 2000);
+    expect(body).toContain('m.index + 2600');
+    expect(body).toContain('class="durations"');
+    expect(body).toContain('class="viewsthumb"');
+  });
+});
+
 // ---- TAXONOMY EXPANSION + SEARCH FILTERS ------------------------------------
 // All assertions read the shipped plugin.js so cfg/URL drift is caught.
 const PLUGIN_SRC = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');

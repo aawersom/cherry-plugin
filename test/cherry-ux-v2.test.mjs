@@ -302,14 +302,35 @@ describe('C10: nested actions on all_sources result cards', function () {
     };
   }
 
+  // Mirror of plugin.js STOP_WORDS + _searchKeywords (the «Похожие по названию»
+  // keyword builder). Keep in sync with the shipped helper.
+  var STOP_WORDS = (function () {
+    var list = ('the a an and or of to in on at for with from by as is are be ' +
+      'his her she he it its they them you your my our this that these those ' +
+      'hot sex porn porno video videos girl girls guy guys teen milf babe babes ' +
+      'amateur scene clip full hd new free' + ' ' +
+      'и в во на с со по для она его ее их они ты вы мой моя наш это эта эти тот ' +
+      'как что так все всё за из от до о об у не да нет porno секс порно видео ' +
+      'девушка девушки парень молодая молодые любительское сцена новое').split(/\s+/);
+    var set = {};
+    for (var i = 0; i < list.length; i++) if (list[i]) set[list[i]] = true;
+    return set;
+  })();
+  function _searchKeywords(title, limit) {
+    var n = limit || 4;
+    var all = (title || '').replace(/[^a-zа-яё0-9\s]/gi, '').trim().split(/\s+/).filter(Boolean);
+    var kept = all.filter(function (w) { return !STOP_WORDS[w.toLowerCase()]; });
+    var words = (kept.length ? kept : all).slice(0, n);
+    return words.join(' ');
+  }
+
   // Mirror of the onSelect 'similar' push: all-sources keyword from element.title.
   function selectSimilar(object, element) {
-    var words = (element.title || '').replace(/[^a-zа-яё0-9\s]/gi, '').trim().split(/\s+/).slice(0, 4);
     return {
       component:   'cherry_grid',
       title:       'cherry_similar_titles: ' + element.title,
       source_id:   element.source,
-      query:       words.join(' '),
+      query:       _searchKeywords(element.title, 4),
       all_sources: true,
       page:        1
     };
@@ -337,8 +358,30 @@ describe('C10: nested actions on all_sources result cards', function () {
   it('«Похожие по названию» opens an all_sources keyword grid', function () {
     var pushed = selectSimilar(allSourcesObject, resultCard);
     expect(pushed.all_sources).toBe(true);
+    // 'Hot Scene' is all-stop ('hot'+'scene') → fallback preserves the title.
     expect(pushed.query).toBe('Hot Scene');
     expect(pushed.source_id).toBe('pornhub');
+  });
+
+  it('stop-words: generic fillers are dropped so distinctive words key the query', function () {
+    var card = { id: 'v9', source: 'pornhub', title: 'Pierre Woodman Casting Hot Teen Anna', url: 'x' };
+    var pushed = selectSimilar(allSourcesObject, card);
+    // 'Hot'/'Teen' stripped; the old slice(0,4) kept 'Hot' and dropped 'Anna'.
+    expect(pushed.query).toBe('Pierre Woodman Casting Anna');
+    expect(pushed.query).not.toMatch(/\bHot\b/);
+  });
+
+  it('stop-words (RU): cyrillic fillers (в, с) are dropped', function () {
+    var card = { id: 'v10', source: 'pornhub', title: 'Девушка в чулках трахается с парнем', url: 'x' };
+    var pushed = selectSimilar(allSourcesObject, card);
+    expect(pushed.query).toBe('чулках трахается парнем');
+  });
+
+  it('stop-words fallback: an all-stop title yields the unfiltered words (never empty)', function () {
+    var card = { id: 'v11', source: 'pornhub', title: 'Hot Sex Porn Video', url: 'x' };
+    var pushed = selectSimilar(allSourcesObject, card);
+    expect(pushed.query).toBe('Hot Sex Porn Video');
+    expect(pushed.query.length).toBeGreaterThan(0);
   });
 
   it('a card whose source lacks getRelated still offers «Похожие по названию»', function () {

@@ -1303,8 +1303,7 @@
               );
               Lampa.Controller.toggle('content');
             } else if (item.action === 'similar') {
-              var words = (element.title || '').replace(/[^a-zа-яё0-9\s]/gi, '').trim().split(/\s+/).slice(0, 4);
-              var query = words.join(' ');
+              var query = _searchKeywords(element.title, 4);
               Lampa.Activity.push({
                 component:   'cherry_grid',
                 title:       Lampa.Lang.translate('cherry_similar_titles') + ': ' + element.title,
@@ -1899,6 +1898,34 @@ function _titleFromUrl(url) {
     if (/^\d+$/.test(seg)) return '';
     return seg.charAt(0).toUpperCase() + seg.slice(1);
   } catch (e) { return ''; }
+}
+
+// Generic words that dilute «Похожие по названию» relevance (the "woodman"
+// effect: keeping 'casting' over the model's name keys the search on the genre
+// instead of the distinctive subject). Stripped BEFORE picking top keywords so
+// the query leans on names/acts. EN + RU high-frequency fillers + porn-generic.
+var STOP_WORDS = (function () {
+  var list = ('the a an and or of to in on at for with from by as is are be ' +
+    'his her she he it its they them you your my our this that these those ' +
+    'hot sex porn porno video videos girl girls guy guys teen milf babe babes ' +
+    'amateur scene clip full hd new free' + ' ' +
+    'и в во на с со по для она его ее их они ты вы мой моя наш это эта эти тот ' +
+    'как что так все всё за из от до о об у не да нет porno секс порно видео ' +
+    'девушка девушки парень молодая молодые любительское сцена новое').split(/\s+/);
+  var set = {};
+  for (var i = 0; i < list.length; i++) if (list[i]) set[list[i]] = true;
+  return set;
+})();
+
+// Build the «Похожие по названию» query from a card title: drop punctuation,
+// remove STOP_WORDS, then take the top distinctive words. Robust fallback: if
+// filtering empties the list, use the unfiltered top words (never empty query).
+function _searchKeywords(title, limit) {
+  var n = limit || 4;
+  var all = (title || '').replace(/[^a-zа-яё0-9\s]/gi, '').trim().split(/\s+/).filter(Boolean);
+  var kept = all.filter(function (w) { return !STOP_WORDS[w.toLowerCase()]; });
+  var words = (kept.length ? kept : all).slice(0, n);
+  return words.join(' ');
 }
 
 // Infinite-scroll pagination without fragile markup parsing: a full page implies
@@ -3483,8 +3510,10 @@ function _porntrexCards(html) {
         if (seen[id]) continue;
         seen[id] = true;
 
-        // Forward-only chunk: thumb and title appear AFTER the href in KVS markup
-        var chunk = html.slice(m.index, m.index + 800);
+        // Forward-only chunk. Window 2600: the screenshots-list rotator (~10 <li>)
+        // sits between the href and the <div class="durations">/<div class="viewsthumb">
+        // meta — the old 800 cap clipped both, so cards lost duration/views overlay.
+        var chunk = html.slice(m.index, m.index + 2600);
 
         // PornTrex uses data-src="//ptx.cdntrex.com/...jpg?v=3" — strip query string, force https:
         // http://ptx.cdntrex.com redirects to porntrex.com homepage; TV browsers resolve // as http://
@@ -3499,14 +3528,16 @@ function _porntrexCards(html) {
         );
         if (!title) title = _titleFromUrl(videoUrl);
 
+        // KVS markup: <div class="durations"><i .../> 10:11</div> (icon <i> precedes
+        // the value → skip leading tags) and <div class="viewsthumb">1 views</div>.
         var duration = parseDur(
-            _attr(chunk, /<span[^>]*class="[^"]*time[^"]*"[^>]*>([^<]+)<\/span>/) ||
-            _attr(chunk, /(?:duration|time)[^>]*>([^<]+)</)
+            _attr(chunk, /class="durations"[^>]*>(?:\s*<[^>]+>)*\s*([^<]+)</) ||
+            _attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>(?:\s*<[^>]+>)*\s*([^<]+)</)
         );
 
         var views = parseViews(
-            _attr(chunk, /(?:views|view_count)[^>]*>([^<]+)</) ||
-            _attr(chunk, /(\d[\d,. kKmM]+)\s*(?:views|Views)/)
+            _attr(chunk, /class="viewsthumb"[^>]*>\s*([^<]+)</) ||
+            _attr(chunk, /class="[^"]*views?[^"]*"[^>]*>\s*([^<]+)</)
         );
 
         if (title || thumb) {
@@ -5338,8 +5369,12 @@ function _jopaCards(html) {
         var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
         var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
 
+        // Hover-preview mp4: each card's <img data-preview="…/prev_{id}.mp4"> (CDN
+        // absolute URL on yourstream.pro) — consistent with 3movs/pornve preview.
+        var preview = _attr(chunk, /data-preview="([^"]+\.mp4[^"]*)"/i);
+
         if (title || thumb) {
-            items.push({ id: id, source: 'jopaonline', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
+            items.push({ id: id, source: 'jopaonline', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views, preview: preview || undefined });
         }
     }
     return items;
