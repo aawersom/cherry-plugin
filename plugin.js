@@ -3333,7 +3333,7 @@ SOURCES.push(_kvsEngine({
     categoryFmt: 'https://www.xozilla.com/categories/{slug}/{page}/',
     catPageBase: 1, catPage1Omit: true,
     categories: _cats('amateur:Amateur,anal:Anal,asian:Asian,bbw:BBW,big-tits:Big Tits,blonde:Blonde,blowjob:Blowjob,creampie:Creampie,hairy:Hairy,hardcore:Hardcore,indian:Indian,interracial:Interracial,japanese:Japanese,lesbian:Lesbian,milf:MILF,pov:POV,stockings:Stockings,teen:Teen,threesome:Threesome,mature:Mature,granny-anal:Granny Anal,russian-anal:Russian Anal,russian-teens:Russian Teens 18+,teen-girls-18:Teen Girls 18+,muslim:Muslim,hijab:Hijab,top-rated:Top Rated,classic:Classic,milf-creampie:MILF Creampie'),
-    sorts: _cats('video_viewed:По популярности,post_date:Свежее,rating:По рейтингу,duration:Длинные,most_commented:По комментариям'),
+    sorts: _cats('video_viewed:По популярности,video_viewed_today:Популярное за день,video_viewed_week:Популярное за неделю,video_viewed_month:Популярное за месяц,rating_week:Рейтинг за неделю,post_date:Свежее,rating:По рейтингу,duration:Длинные,most_commented:По комментариям'),
     searchUrl: function(query, page) {
         return 'https://xozilla.com/?s=' + encodeURIComponent(query) + '&p=' + page;
     },
@@ -3482,7 +3482,7 @@ SOURCES.push(_kvsEngine({
     categoryFmt: 'https://www.analdin.com/categories/{slug}/{page}/',
     catPageBase: 1, catPage1Omit: true,
     categories: _cats('sex:Sex,blowjobs:Blowjobs,hot:Hot,pussy:Pussy,ass:Ass,sexy:Sexy,hardcore:Hardcore,babes:Babes,big-tits:Big Tits,tits:Tits,brunettes:Brunettes,teens:Teens 18+,big-ass:Big Ass,amateurs:Amateurs,blondes:Blondes,doggy-style:Doggy Style,anal:Anal,big-cock:Big Cock,cumshots:Cumshots,sluts:Sluts,pussy-licking:Pussy Licking,crazy:Crazy,pornstars:Pornstars,masturbation:Masturbation,young:Young,cowgirl:Cowgirl,oral:Oral,milfs:MILFs,pov:POV,hd:HD,small-tits:Small Tits,tattoos:Tattoos,lesbians:Lesbians,homemade:Homemade,interracial:Interracial,busty:Busty,natural-tits:Natural Tits,reverse-cowgirl:Reverse Cowgirl,facial:Facial,mature:Mature'),
-    sorts: _cats('video_viewed:По популярности,post_date:Свежее,rating:По рейтингу,duration:Длинные'),
+    sorts: _cats('video_viewed:По популярности,video_viewed_today:Популярное за день,video_viewed_week:Популярное за неделю,video_viewed_month:Популярное за месяц,rating_week:Рейтинг за неделю,post_date:Свежее,rating:По рейтингу,duration:Длинные'),
     searchUrl: function(query, page) {
         return 'https://analdin.com/?s=' + encodeURIComponent(query) + '&p=' + page;
     },
@@ -3530,7 +3530,7 @@ SOURCES.push({
     id: 'pornve',
     name: 'PornVe',
     host: 'pornve.com',
-    cfg: { categories: _cats('blowjob:Blowjob,japanese:Japanese,big-tits:Big Tits,teens:Teens,asian:Asian,brunette:Brunette,hardcore:Hardcore,blonde:Blonde,milf:MILF,big-cock:Big Cock,cumshot:Cumshot,anal:Anal,big-ass:Big Ass,babes:Babes,amateur:Amateur,small-tits:Small Tits,petite:Petite,one-on-one:One on One,creampie:Creampie,threesome:Threesome,masturbation:Masturbation,lesbian:Lesbian,interracial:Interracial,facial:Facial,handjob:Handjob,pov:POV,lingerie:Lingerie,cowgirl:Cowgirl,pussy-licking:Pussy Licking,fingering:Fingering,toys:Toys,deepthroat:Deepthroat,latina:Latina,doggy:Doggy,tattoo:Tattoo,shaved-pussy:Shaved Pussy,webcam:Webcam,natural-tits:Natural Tits,fetish:Fetish,redhead:Redhead'), sorts: _cats('video_viewed:По популярности,post_date:Свежее,rating:По рейтингу,duration:Длинные,most_commented:По комментариям') },
+    cfg: { categories: _cats('blowjob:Blowjob,japanese:Japanese,big-tits:Big Tits,teens:Teens,asian:Asian,brunette:Brunette,hardcore:Hardcore,blonde:Blonde,milf:MILF,big-cock:Big Cock,cumshot:Cumshot,anal:Anal,big-ass:Big Ass,babes:Babes,amateur:Amateur,small-tits:Small Tits,petite:Petite,one-on-one:One on One,creampie:Creampie,threesome:Threesome,masturbation:Masturbation,lesbian:Lesbian,interracial:Interracial,facial:Facial,handjob:Handjob,pov:POV,lingerie:Lingerie,cowgirl:Cowgirl,pussy-licking:Pussy Licking,fingering:Fingering,toys:Toys,deepthroat:Deepthroat,latina:Latina,doggy:Doggy,tattoo:Tattoo,shaved-pussy:Shaved Pussy,webcam:Webcam,natural-tits:Natural Tits,fetish:Fetish,redhead:Redhead'), sorts: _cats('video_viewed:По популярности,video_viewed_today:Популярное за день,video_viewed_week:Популярное за неделю,video_viewed_month:Популярное за месяц,rating_week:Рейтинг за неделю,rating_month:Рейтинг за месяц,post_date:Свежее,rating:По рейтингу,duration:Длинные,most_commented:По комментариям') },
 
     search: function (query, page) {
         var q = encodeURIComponent(query).replace(/%20/g, '+');
@@ -4009,7 +4009,7 @@ SOURCES.push(_kvsEngine({
   categoryFmt: 'https://hellporno.com/{slug}/{page}/',
   catPageBase: 1, catPage1Omit: true,
   categories: _cats('anal:Anal,arab:Arab,asian:Asian,bbw:BBW,bdsm:BDSM,big-ass:Big ass,big-tits:Big tits,casting:Casting,creampie:Creampie,ebony:Ebony,gangbang:Gangbang,granny:Granny,hairy:Hairy,handjob:Handjob,indian:Indian,interracial:Interracial,japanese:Japanese,milf:MILF,massage:Massage,masturbation:Masturbation,mature:Mature,mom:Mom,office:Office,pov:POV,pantyhose:Pantyhose,party:Party,pissing:Pissing,public:Public,russian:Russian,skinny:Skinny,solo:Solo,solo-girl:Solo girl,stockings:Stockings,teacher:Teacher,teen:Teen,threesome:Threesome'),
-  sorts: _cats('video_viewed:По популярности,post_date:Свежее,rating:По рейтингу,duration:Длинные,most_commented:По комментариям'),
+  sorts: _cats('video_viewed:По популярности,video_viewed_today:Популярное за день,video_viewed_week:Популярное за неделю,video_viewed_month:Популярное за месяц,rating_week:Рейтинг за неделю,post_date:Свежее,rating:По рейтингу,duration:Длинные,most_commented:По комментариям'),
   searchUrl: function(query, page) {
     return 'https://hellporno.com/search/' + (page || 1) + '/?q=' + encodeURIComponent(query);
   },
