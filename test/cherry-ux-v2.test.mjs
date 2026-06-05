@@ -1276,11 +1276,17 @@ describe('Step 2: query-param / API sorts (popular first, Russian labels)', () =
     expect(s[1].label).toBe('По комментариям');
   });
 
-  it('pornhub: 4 valid orderings, popular first, Russian labels', () => {
-    var s = sortsFor('pornhub');
-    expect(s.map(function (x) { return x.id; }))
-      .toEqual(['mostviewed', 'rating', 'mostrecent', 'longest']);
-    expect(s[0].label).toBe('По популярности');
+  it('pornhub: 3 base orderings (no dead longest) + composite period windows, popular first', () => {
+    // Base sorts come via _cats; the time-window composites are appended as literal
+    // objects (id carries a ':' so _cats can't hold them). `longest` is dropped (API no-op).
+    var base = sortsFor('pornhub');
+    expect(base.map(function (x) { return x.id; }))
+      .toEqual(['mostviewed', 'rating', 'mostrecent']);
+    expect(base[0].label).toBe('По популярности');
+    expect(base.map(function (x) { return x.id; })).not.toContain('longest');
+    // Composite period windows appended via .concat([...]) with ordering:period ids.
+    expect(SRC).toContain("{ id: 'mostviewed:weekly',  label: 'Популярное за неделю' }");
+    expect(SRC).toContain("{ id: 'mostviewed:monthly', label: 'Популярное за месяц' }");
   });
 
   it('eporner: popular label relabeled «По популярности», order ids preserved', () => {
@@ -1334,15 +1340,15 @@ describe('Step 3: PATH-segment sorts (popular first, Russian labels, segment in 
       shape: "'https://www.xvideos.com/c/s:' + s + '/{slug}/{page}'"
     },
     porntrex: {
-      ids:   ['most-popular', 'top-rated', 'longest', 'most-commented'],
+      ids:   ['most-popular', 'most-popular/weekly', 'most-popular/monthly', 'top-rated', 'longest', 'most-commented'],
       shape: "'https://www.porntrex.com/categories/{slug}/' + s + '/{page}/'"
     },
     pornone: {
-      ids:   ['views', 'rating'],
+      ids:   ['views', 'views/week', 'views/month', 'rating'],
       shape: "'https://pornone.com/{slug}/' + s + '/{page}/'"
     },
     '3movs': {
-      ids:   ['most-viewed/all-time', 'top-rated/all-time', 'longest', 'latest-updates'],
+      ids:   ['most-viewed/all-time', 'most-viewed/week', 'most-viewed/month', 'top-rated/all-time', 'top-rated/week', 'top-rated/month', 'longest', 'latest-updates'],
       shape: "'https://3movs.com/categories/{slug}/' + s + '/{page}/'"
     },
     jopaonline: {
@@ -1652,23 +1658,28 @@ describe('Final sort batch: xnxx PATH + youjizz/hqporner/spankbang GLOBAL feeds'
     return SRC.slice(bAt, bAt + 1100);
   }
 
-  // ---- xnxx: per-category PATH sort ----
-  it('xnxx: sorts removed (/tags/ ignores page & mis-parses sort)', () => {
-    var at = SRC.indexOf("id: 'xnxx'");
-    var w = SRC.slice(at, at + 5000);
-    expect(w).toMatch(/sorts:\s*\[\]/);
-    expect(w).not.toMatch(/views:По популярности/);
+  // ---- xnxx: sort as a FILTER prefix on the paginating /search route ----
+  it('xnxx: sorts = hits (popular) + month/year windows, popular first, Russian labels', () => {
+    var s = sortsFor('xnxx');
+    expect(s.map(function (x) { return x.id; })).toEqual(['hits', 'month', 'year']);
+    expect(s[0].label).toBe('По популярности');
+    s.forEach(function (x) {
+      expect(x.label).toMatch(/[А-Яа-я]/);
+      expect(x.label).not.toBe('Популярное');
+    });
   });
-  it('xnxx category browse uses the paginating /search/{slug}/{page} route (not /tags/)', () => {
+  it('xnxx category browse prepends sort as a /search/{sort}/{slug}/{page} filter segment', () => {
     var body = browseBodyOf('xnxx');
-    expect(body).toContain("'https://www.xnxx.com/search/' + encodeURIComponent(category) + '/' + p");
+    // sort is prepended as a path segment before the category slug
+    expect(body).toContain("var prefix = sort ? encodeURIComponent(sort) + '/' : '';");
+    expect(body).toContain("'https://www.xnxx.com/search/' + prefix + encodeURIComponent(category) + '/' + p");
     expect(body).not.toContain('/tags/{slug}');
   });
 
   // ---- youjizz / hqporner / spankbang: GLOBAL-feed sorts ----
   var globalSpecs = {
     youjizz: {
-      ids:    ['most-popular', 'trending', 'top-rated', 'newest-clips'],
+      ids:    ['most-popular', 'trending', 'top-rated', 'top-rated-week', 'top-rated-month', 'highdefinition', 'newest-clips'],
       // no-category global feed shape
       feed:   "'https://www.youjizz.com/' + (sort || 'most-popular') + '/' + p + '.html'",
       // category shape stays unchanged (no sort)
@@ -1814,8 +1825,9 @@ describe('Batch 2 categories — plugin.js source assertions (anti-drift)', () =
 describe('Batch 3 categories — plugin.js source assertions (anti-drift)', () => {
   // Category-URL templates must be present (position-independent — cfg may sit far from id).
   var fmts = {
-    // xnxx categories use the paginating /search/ route (/tags/ ignored the page param).
-    xnxx: "'https://www.xnxx.com/search/' + encodeURIComponent(category) + '/' + p",
+    // xnxx categories use the paginating /search/ route (/tags/ ignored the page param);
+    // a chosen sort is prepended as a filter segment (/search/{sort}/{slug}/{page}).
+    xnxx: "'https://www.xnxx.com/search/' + prefix + encodeURIComponent(category) + '/' + p",
     perfektdamen: 'https://www.perfektdamen.co/tags/{slug}/{page}/',
     hqporner: 'https://hqporner.com/category/{slug}/{page}'
   };
@@ -1920,11 +1932,16 @@ describe('Pornhub adapter — webmasters slugs/orderings/pagination', () => {
     expect(PH).not.toContain('hairy:');
   });
 
-  it('sorts use valid orderings (mostviewed, rating, mostrecent, longest)', () => {
+  it('sorts: 3 valid base orderings (no dead longest) + composite period windows', () => {
     const sortsMatch = PH.match(/sorts:\s*_cats\('([^']*)'\)/);
     expect(sortsMatch).toBeTruthy();
     const ids = sortsMatch[1].split(',').map(p => p.slice(0, p.indexOf(':')));
-    expect(ids).toEqual(['mostviewed', 'rating', 'mostrecent', 'longest']);
+    // `longest` removed — the webmasters API silently ignored it (no-op = mostrecent).
+    expect(ids).toEqual(['mostviewed', 'rating', 'mostrecent']);
+    expect(ids).not.toContain('longest');
+    // Time-window composites appended as literal objects (ids carry a ':').
+    expect(PH).toContain("{ id: 'mostviewed:weekly',  label: 'Популярное за неделю' }");
+    expect(PH).toContain("{ id: 'mostviewed:monthly', label: 'Популярное за месяц' }");
   });
 
   it('sorts contain NO legacy fake ids (mv/tr/mr)', () => {
@@ -1935,10 +1952,13 @@ describe('Pornhub adapter — webmasters slugs/orderings/pagination', () => {
     expect(ids).not.toContain('mr');
   });
 
-  it('browse/search pass sort verbatim, default mostviewed (no mv special-case)', () => {
-    expect(PH).toContain("var ordering = sort || 'mostviewed';");
+  it('browse/search split composite sort id into ordering+period (default mostviewed, no mv special-case)', () => {
+    // _sortParams splits "ordering:period" → {ordering, period}; no ':' = all-time.
+    expect(PH).toContain('_sortParams: function(sort)');
+    expect(PH).toContain("var parts = String(sort || 'mostviewed').split(':');");
     expect(PH).not.toContain("!== 'mv'");
-    expect(PH).toContain("'&ordering=' + ordering");
+    expect(PH).toContain("'&ordering=' + sp.ordering");
+    expect(PH).toContain("(sp.period ? '&period=' + sp.period : '')");
   });
 
   it('total_pages derived via _derivePages (generous forward, no broken total_pages parse)', () => {
