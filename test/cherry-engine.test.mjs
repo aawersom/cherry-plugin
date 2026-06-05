@@ -2017,6 +2017,18 @@ describe('FIX 2 — duration overlay anti-drift', function () {
     expect(m[1]).toMatch(/right/);
     expect(m[1]).toMatch(/z-index/);
   });
+
+  it('cardRender injects a .cherry-views overlay via formatViews(element.views)', function () {
+    expect(PLUGIN).toMatch(/cherry-views[\s\S]*?formatViews\(element\.views\)|formatViews\(element\.views\)[\s\S]*?cherry-views/);
+  });
+
+  it('.cherry-views CSS is present (bottom-left, z-index)', function () {
+    var m = /\.cherry-views\{([^}]*)\}/.exec(PLUGIN);
+    expect(m).not.toBe(null);
+    expect(m[1]).toMatch(/bottom/);
+    expect(m[1]).toMatch(/left/);
+    expect(m[1]).toMatch(/z-index/);
+  });
 });
 
 // ============================================================
