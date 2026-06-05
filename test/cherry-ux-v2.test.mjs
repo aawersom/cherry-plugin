@@ -547,8 +547,12 @@ describe('plugin.js source assertions (anti-drift)', () => {
   });
   it('anti-drift: xvideos, xnxx, eporner, pornone all expose getRelated', () => {
     ['xvideos', 'xnxx', 'eporner', 'pornone'].forEach((id) => {
-      const block = SRC.slice(SRC.indexOf("id: '" + id + "'"));
-      expect(block.slice(0, 6000)).toMatch(/getRelated:\s*function/);
+      // Scope to THIS source block (from its id to the next SOURCES.push) instead
+      // of a brittle fixed char window — keeps the guard valid as adapters grow.
+      const start = SRC.indexOf("id: '" + id + "'");
+      const next = SRC.indexOf('SOURCES.push', start + 1);
+      const block = SRC.slice(start, next === -1 ? undefined : next);
+      expect(block).toMatch(/getRelated:\s*function/);
     });
   });
   it('UX-C: SettingsApi.addComponent called for cherry', () => {
@@ -980,10 +984,32 @@ describe('Models discovery axis (anti-drift)', () => {
     // KVS engine exposes both conditionally on cfg.modelIndex.
     expect(SRC).toMatch(/getModels:\s*cfg\.modelIndex\s*\?/);
     expect(SRC).toMatch(/browseByModel:\s*cfg\.modelIndex\s*\?/);
-    // crocotube + pornobolt declare modelIndex configs.
-    expect((SRC.match(/modelIndex:\s*\{/g) || []).length).toBeGreaterThanOrEqual(2);
+    // crocotube + pornobolt + analdin + xozilla declare modelIndex configs.
+    expect((SRC.match(/modelIndex:\s*\{/g) || []).length).toBeGreaterThanOrEqual(4);
     // pornhub + xvideos + porndig + ebun + jopaonline expose getModels directly.
     expect((SRC.match(/getModels:\s*function/g) || []).length).toBeGreaterThanOrEqual(5);
+  });
+
+  // Regression: the reported bug was model cards rendering with NO avatar because
+  // a model-index config shipped without (or with a too-strict) thumbRx. Every
+  // model-index config block — both the cfg.modelIndex declarations and the inline
+  // _parseModelIndex({...}) calls inside direct getModels — MUST carry a thumbRx.
+  it('every model-index config declares a thumbRx (avatar parser)', () => {
+    // cfg.modelIndex: { … } blocks
+    var miRx = /modelIndex:\s*\{([\s\S]*?)\n\s{4}\}/g, mi, miCount = 0;
+    while ((mi = miRx.exec(SRC)) !== null) {
+      miCount++;
+      expect(mi[1]).toMatch(/thumbRx:\s*\[/);
+    }
+    expect(miCount).toBeGreaterThanOrEqual(4);
+
+    // inline _parseModelIndex({ … }) calls inside direct getModels
+    var piRx = /_parseModelIndex\(html,\s*\{([\s\S]*?)\}\);/g, pi, piCount = 0;
+    while ((pi = piRx.exec(SRC)) !== null) {
+      piCount++;
+      expect(pi[1]).toMatch(/thumbRx:\s*\[/);
+    }
+    expect(piCount).toBeGreaterThanOrEqual(5);
   });
 });
 

@@ -2141,8 +2141,11 @@ SOURCES.push({
       return _parseModelIndex(html, {
         hrefRx: /href="(\/pornstar\/[^"\/?#]+)"/g,
         normalizeUrl: function(raw) { return 'https://www.pornhub.com' + raw; },
-        nameRx: [/alt="([^"]+)"/],
-        thumbRx: [/data-image="(https?:\/\/[^"]+)"/i, /data-mediumthumb="(https?:\/\/[^"]+)"/i]
+        nameRx: [/alt="([^"]+)"/, /title="([^"]+)"/],
+        // Most performer cards render a plain <img class="pornstarThumb" src="…phncdn…">
+        // (no data-image). Fall back to the first <img src|data-thumb_url> after the href.
+        thumbRx: [/data-image="(https?:\/\/[^"]+)"/i, /data-mediumthumb="(https?:\/\/[^"]+)"/i,
+                  /<img[^>]+(?:data-thumb_url|src)="(https?:\/\/[^"]+\.jpg[^"]*)"/i]
       });
     }).catch(function() { return []; });
   },
@@ -2347,12 +2350,16 @@ SOURCES.push({
   // Models: /pornstars-index → /pornstars/{slug} links. ONLY the /pornstars/
   // links are used (they render thumb-block cards parseable by _parseCards via
   // browseByModel); /models/{slug} pages use a non-thumb-block markup _parseCards
-  // misses, so they are skipped. Index has no clean name text → derive from slug.
+  // misses, so they are skipped. Each card carries the avatar in an <img src=
+  // "…xvideos-cdn…"> (inside a document.write) and the name as the <a> link text.
   getModels: function() {
     return cherryFetch('https://www.xvideos.com/pornstars-index').then(function(html) {
       return _parseModelIndex(html, {
         hrefRx: /href="(\/pornstars\/[^"\/?#]+)"/g,
-        normalizeUrl: function(raw) { return 'https://www.xvideos.com' + raw; }
+        normalizeUrl: function(raw) { return 'https://www.xvideos.com' + raw; },
+        nameRx: [/<a[^>]*href="\/pornstars\/[^"]+"[^>]*>([^<]{2,60})<\/a>/],
+        thumbRx: [/<img[^>]+src="(https?:\/\/[^"]+xvideos-cdn[^"]+\.jpg)"/i,
+                  /(?:data-src|src)="(https?:\/\/[^"]+\.jpg)"/i]
       });
     }).catch(function() { return []; });
   },
@@ -3598,6 +3605,14 @@ SOURCES.push(_kvsEngine({
     idFromUrl: function(url) {
         return url.replace(/^https?:\/\/[^/]+/, '').replace(/[^a-z0-9]/gi, '_');
     },
+    // Models: /models/ index — clean KVS cards (href + title= + <img class="thumb">).
+    // Per-model /models/{slug}/{page}/ renders listing cards (auto via browseByModel).
+    modelIndex: {
+        url: function(p) { return p > 1 ? 'https://www.xozilla.com/models/' + p + '/' : 'https://www.xozilla.com/models/'; },
+        hrefRx: /href="(https?:\/\/(?:www\.)?xozilla\.com\/models\/[^"\/]+\/)"/g,
+        nameRx: [/title="([^"]+)"/, /alt="([^"]+)"/],
+        thumbRx: [/(?:data-src|src)="(https?:\/\/[^"]+\.jpe?g)"/i]
+    },
     chunkWindow: { before: 0, after: 800 },
     stripBase64: true,
     thumbRx: [
@@ -3749,6 +3764,14 @@ SOURCES.push(_kvsEngine({
     hrefRxSrc: 'href="(https?://(?:www\\.)?analdin\\.com/videos/[0-9]+/[^"]+)"',
     idFromUrl: function(url) {
         return url.replace(/^https?:\/\/[^/]+\//, '').replace(/[^a-z0-9]/gi, '_');
+    },
+    // Models: /models/ index — clean KVS cards (href + title= + <img class="thumb">).
+    // Per-model /models/{slug}/{page}/ renders listing cards (auto via browseByModel).
+    modelIndex: {
+        url: function(p) { return p > 1 ? 'https://analdin.com/models/' + p + '/' : 'https://analdin.com/models/'; },
+        hrefRx: /href="(https?:\/\/(?:www\.)?analdin\.com\/models\/[^"\/]+\/)"/g,
+        nameRx: [/title="([^"]+)"/, /alt="([^"]+)"/],
+        thumbRx: [/(?:data-src|src)="(https?:\/\/[^"]+\.jpe?g)"/i]
     },
     chunkWindow: { before: 0, after: 1400 },
     stripBase64: true,
@@ -4462,7 +4485,9 @@ SOURCES.push(_kvsEngine({
             return raw.charAt(0) === '/' ? 'https://sex.pornobolt.in' + raw : raw;
         },
         nameRx: [/class="dropdown-title">([^<]+)</],
-        thumbRx: [/data-orig="(https?:\/\/[^"]+\.jpe?g)"/i],
+        // Featured cards lazy-load via data-orig; the rest expose the avatar as a
+        // plain src= — try both so every card in the index gets a thumb.
+        thumbRx: [/data-orig="(https?:\/\/[^"]+\.jpe?g)"/i, /(?:data-src|src)="(https?:\/\/[^"]+\.jpe?g)"/i],
         videosUrl: function(modelUrl, p) {
             var u = modelUrl.replace(/\/+$/, '');
             return p > 1 ? u + '/' + p : u;

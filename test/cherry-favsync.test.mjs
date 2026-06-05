@@ -51,7 +51,9 @@ function makeSandbox(opts) {
       get: function (k, d) { return k in store ? store[k] : d; },
       set: function (k, v) { store[k] = v; }
     },
-    Activity: { active: function () { return null; } }
+    Activity: { active: function () { return null; } },
+    Noty: { show: function () {} },
+    Lang: { translate: function (k) { return k; } }
   };
   var PROXY_URL = 'https://cherry-proxy.test.workers.dev';
   function getProxyKey() { return Lampa.Storage.get('cherry_proxy_key', '1206'); }
