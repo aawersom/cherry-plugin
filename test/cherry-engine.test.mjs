@@ -6,7 +6,7 @@
  * Pattern: identical to plugin-helpers.test.js — copy-paste the pure
  * helpers verbatim at the top, then describe/it below.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -2276,6 +2276,79 @@ describe('FIX 3 — all_sources source-id stamp wiring', function () {
 
   it('cards inherit r._srcId when they carry no source (no clobber of a real source)', function () {
     expect(PLUGIN).toMatch(/r\.items\.forEach\(function \(v\) \{ if \(v && !v\.source\) v\.source = r\._srcId; \}\);/);
+  });
+});
+
+// ============================================================
+// all_sources first-screen-fast — a hung source must NOT block the page.
+// Mirror of the _gridLoad all_sources race+merge (verbatim logic) driven with
+// vitest fake timers so a never-resolving source still settles via the timeout.
+// ============================================================
+describe('all_sources first-screen-fast (hung source does not block)', function () {
+  var ALL_SRC_TIMEOUT_MS = 7000;
+
+  // Mirror of the per-source race wrapper in _gridLoad.
+  function searchWithTimeout(src, query, page) {
+    var search = src.search(query, page).then(function (r) {
+      r = r || { items: [] };
+      r._srcId = src.id;
+      return r;
+    }).catch(function () {
+      return { items: [], total_pages: 1, _srcId: src.id };
+    });
+    var timeout = new Promise(function (resolve) {
+      setTimeout(function () {
+        resolve({ items: [], total_pages: 1, _srcId: src.id });
+      }, ALL_SRC_TIMEOUT_MS);
+    });
+    return Promise.race([search, timeout]);
+  }
+
+  // Mirror of the merge: stamp source, flat-concat top-10, track anyFull.
+  function mergeResults(results) {
+    var flat = [];
+    var anyFull = false;
+    results.forEach(function (r) {
+      if (r && r.items && r.items.length) {
+        r.items.forEach(function (v) { if (v && !v.source) v.source = r._srcId; });
+        if (r.items.length >= 10) anyFull = true;
+        flat = flat.concat(r.items.slice(0, 10));
+      }
+    });
+    return { flat: flat, anyFull: anyFull };
+  }
+
+  it('a never-resolving source resolves to [] after the timeout and does not block fast sources', async function () {
+    vi.useFakeTimers();
+    try {
+      var fast = { id: 'fast', search: function () { return Promise.resolve({ items: [{ id: 'f1', title: 'cat' }] }); } };
+      var hung = { id: 'hung', search: function () { return new Promise(function () {}); } }; // never resolves
+
+      var all = Promise.all([fast, hung].map(function (s) { return searchWithTimeout(s, 'cat', 1); }));
+
+      // Let the fast source's microtasks flush, then advance past the timeout cap.
+      await vi.advanceTimersByTimeAsync(ALL_SRC_TIMEOUT_MS + 1);
+      var results = await all;
+
+      var merged = mergeResults(results);
+      // Fast source contributed; hung source timed out to [].
+      expect(merged.flat.length).toBe(1);
+      expect(merged.flat[0].id).toBe('f1');
+      expect(merged.flat[0].source).toBe('fast');
+      // Hung source's empty batch must not be counted as a full page.
+      expect(merged.anyFull).toBe(false);
+      var hungResult = results.find(function (r) { return r._srcId === 'hung'; });
+      expect(hungResult.items.length).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a fast source still wins the race before the timeout fires (real timers)', async function () {
+    var fast = { id: 'fast', search: function () { return Promise.resolve({ items: [{ id: 'f1', title: 'cat' }] }); } };
+    var r = await searchWithTimeout(fast, 'cat', 1);
+    expect(r._srcId).toBe('fast');
+    expect(r.items.length).toBe(1);
   });
 });
 

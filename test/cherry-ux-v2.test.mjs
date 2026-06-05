@@ -1490,7 +1490,7 @@ describe('Phase 3 A3(b): all_sources per-source title-match filter before slice'
   it('filter uses indexOf(query) and runs before slice(0,10)', () => {
     var at = SRC.indexOf('All-sources search');
     expect(at).toBeGreaterThan(-1);
-    var body = SRC.slice(at, at + 2700);
+    var body = SRC.slice(at, at + 3300);
     // per-source title match
     expect(body).toMatch(/\.toLowerCase\(\)\.indexOf\(ql\)\s*!==\s*-1/);
     // filter executes before the slice
@@ -1502,14 +1502,14 @@ describe('Phase 3 A3(b): all_sources per-source title-match filter before slice'
 
   it('non-ASCII (Cyrillic) queries skip the filter', () => {
     var at = SRC.indexOf('All-sources search');
-    var body = SRC.slice(at, at + 2700);
+    var body = SRC.slice(at, at + 3300);
     expect(body).toMatch(/isLatin\s*=\s*\/\^\[\\x00-\\x7F\]\*\$\/\.test\(ql\)/);
     expect(body).toMatch(/if\s*\(ql\s*&&\s*isLatin\)/);
   });
 
   it('keeps a source unfiltered top-N when its filtered slice is empty', () => {
     var at = SRC.indexOf('All-sources search');
-    var body = SRC.slice(at, at + 2700);
+    var body = SRC.slice(at, at + 3300);
     expect(body).toMatch(/if\s*\(matched\.length\)\s*picked\s*=\s*matched/);
   });
 });
@@ -1518,7 +1518,8 @@ describe('all_sources pagination wiring', () => {
   function allSourcesBody() {
     var at = SRC.indexOf('All-sources search');
     expect(at).toBeGreaterThan(-1);
-    return SRC.slice(at, at + 3200);
+    // Window widened: the branch grew with the per-source timeout race wrapper.
+    return SRC.slice(at, at + 4200);
   }
 
   it('queries every source for the requested page (not hardcoded 1)', () => {
@@ -1537,6 +1538,17 @@ describe('all_sources pagination wiring', () => {
     var body = allSourcesBody();
     // Generous forward window so InteractionCategory keeps paginating (page+1 stopped after one page).
     expect(body).toMatch(/resolve\(flat\.map\(toCard\),\s*anyFull\s*\?\s*\(page\s*\+\s*50\)\s*:\s*page\)/);
+  });
+
+  it('first-screen-fast: each source races search against a per-source timeout', () => {
+    var body = allSourcesBody();
+    // A named timeout const + a Promise.race so one hung source can never block
+    // the whole page (first screen returns in ≤ the cap, others stream on scroll).
+    expect(body).toMatch(/var ALL_SRC_TIMEOUT_MS = 7000;/);
+    expect(body).toMatch(/Promise\.race\(\[search, timeout\]\)/);
+    // A timed-out source resolves to an empty batch (so it contributes [] and is
+    // not miscounted toward anyFull / total_pages).
+    expect(body).toMatch(/setTimeout\(function \(\) \{[\s\S]{0,120}r\(\{ items: \[\], total_pages: 1, _srcId: src\.id \}\);[\s\S]{0,20}\}, ALL_SRC_TIMEOUT_MS\)/);
   });
 });
 
