@@ -2830,3 +2830,128 @@ describe('ebun _ebunCards (model + listing share parser; duration via meta-time)
     expect(body).toMatch(/\(\?:\\s\*<\[\^>\]\+>\)\*/);   // (?:\s*<[^>]+>)* tag-skip
   });
 });
+
+// ---- TAXONOMY EXPANSION + SEARCH FILTERS ------------------------------------
+// All assertions read the shipped plugin.js so cfg/URL drift is caught.
+const PLUGIN_SRC = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+
+// Pull the FIRST _cats('…') literal that appears AFTER a given anchor string —
+// used to grab a specific adapter's category list out of the IIFE source.
+function catsAfter(anchor, key) {
+  var at = PLUGIN_SRC.indexOf(anchor);
+  if (at < 0) throw new Error('anchor not found: ' + anchor);
+  var seg = PLUGIN_SRC.slice(at);
+  var idx = seg.indexOf(key + ': _cats(');
+  if (idx < 0) idx = seg.indexOf(key + ":_cats(");
+  if (idx < 0) throw new Error('key not found: ' + key + ' after ' + anchor);
+  var m = seg.slice(idx).match(/_cats\('([\s\S]*?)'\)/);
+  if (!m) throw new Error('no _cats literal for ' + key);
+  return m[1].split(',');
+}
+
+describe('taxonomy expansion (real curl-verified slugs)', function () {
+  it('pornhub categories expanded 40 → 100+ (real webmasters slugs)', function () {
+    var cats = catsAfter("id: 'pornhub'", 'categories');
+    expect(cats.length).toBeGreaterThanOrEqual(100);
+    // Spot-check new slugs verified via the webmasters API (each returned 30 cards).
+    var slugs = cats.map(function (p) { return p.split(':')[0]; });
+    ['red-head', 'bbw', '18-25', 'step-fantasy', 'cosplay', 'rough-sex', 'czech', 'deepthroat']
+      .forEach(function (s) { expect(slugs).toContain(s); });
+  });
+
+  it('hellporno categories expanded 37 → 120+ (real /categories/ slugs)', function () {
+    var cats = catsAfter("id: 'hellporno'", 'categories');
+    expect(cats.length).toBeGreaterThanOrEqual(120);
+    var slugs = cats.map(function (p) { return p.split(':')[0]; });
+    ['group-sex', 'doggy-style', 'cum-in-mouth', 'small-tits', 'hd', 'cuckold', 'cheating', 'compilation']
+      .forEach(function (s) { expect(slugs).toContain(s); });
+  });
+});
+
+describe('eporner orientation filter (gay param wiring)', function () {
+  // Mirror of the shipped _orient() — kept in sync with the adapter.
+  function _orient(sort) {
+    var m = String(sort || '').match(/^(.*?)~gay([012])$/);
+    if (m) return { order: m[1] || 'most-popular', gay: m[2] };
+    return { order: sort || 'most-popular', gay: '0' };
+  }
+
+  it('default sorts → gay=0 (straight, unchanged behaviour)', function () {
+    expect(_orient('most-popular').gay).toBe('0');
+    expect(_orient('latest').gay).toBe('0');
+    expect(_orient('').gay).toBe('0');
+  });
+
+  it('~gay1 → gay=1 (gay) and ~gay2 → gay=2 (trans), order preserved', function () {
+    expect(_orient('latest~gay1')).toEqual({ order: 'latest', gay: '1' });
+    expect(_orient('latest~gay2')).toEqual({ order: 'latest', gay: '2' });
+  });
+
+  it('cfg.sorts exposes Гей + Транс orientation entries', function () {
+    var at = PLUGIN_SRC.indexOf("id: 'eporner'");
+    var seg = PLUGIN_SRC.slice(at, at + 4000);
+    expect(seg).toContain("id: 'latest~gay1'");
+    expect(seg).toContain("id: 'latest~gay2'");
+    expect(seg).toContain('Гей');
+    expect(seg).toContain('Транс');
+  });
+
+  it('browse() AND search() thread gay into the URL via _orient', function () {
+    var at = PLUGIN_SRC.indexOf("id: 'eporner'");
+    var seg = PLUGIN_SRC.slice(at, at + 7000);
+    // No more hardcoded gay=0; gay comes from _orient now.
+    expect(seg).toContain("&gay=' + gay");       // search()
+    expect(seg).toContain("&gay=' + o.gay");     // browse()
+    expect(seg).not.toContain('&gay=0&format');  // old hardcode gone
+  });
+});
+
+describe('xvideos search filters (sort + duration/quality/date facets)', function () {
+  // Mirror of the shipped _searchFacets() — kept in sync with the adapter.
+  function _searchFacets(sort) {
+    var s = String(sort || '');
+    var parts = s.split('~');
+    var out = { sort: parts[0] || '' };
+    for (var i = 1; i < parts.length; i++) {
+      var kv = parts[i].split('=');
+      if (kv[0] && kv[1]) out[kv[0]] = kv[1];
+    }
+    return out;
+  }
+
+  it('plain sort ids pass through unchanged (no facets)', function () {
+    expect(_searchFacets('rating')).toEqual({ sort: 'rating' });
+    expect(_searchFacets('views')).toEqual({ sort: 'views' });
+    expect(_searchFacets('')).toEqual({ sort: '' });
+  });
+
+  it('faceted ids split into sort + durf/quality/datef', function () {
+    expect(_searchFacets('rating~quality=hd')).toEqual({ sort: 'rating', quality: 'hd' });
+    expect(_searchFacets('uploaddate~datef=week')).toEqual({ sort: 'uploaddate', datef: 'week' });
+    expect(_searchFacets('relevance~durf=10min_more')).toEqual({ sort: 'relevance', durf: '10min_more' });
+  });
+
+  it('search() threads sort + facets into the &k= query (was ignored before)', function () {
+    var at = PLUGIN_SRC.indexOf("id: 'xvideos'");
+    var seg = PLUGIN_SRC.slice(at, at + 6000);
+    expect(seg).toContain('_searchFacets');
+    expect(seg).toContain("'&sort='");
+    expect(seg).toContain("'&durf='");
+    expect(seg).toContain("'&quality='");
+    expect(seg).toContain("'&datef='");
+  });
+
+  it('browse() strips the search-only ~facet suffix (uses base sort only)', function () {
+    var at = PLUGIN_SRC.indexOf("id: 'xvideos'");
+    var seg = PLUGIN_SRC.slice(at, at + 8000);
+    expect(seg).toContain('var baseSort = self._searchFacets(sort).sort');
+  });
+
+  it('cfg.sorts exposes search-only faceted entries', function () {
+    var at = PLUGIN_SRC.indexOf("id: 'xvideos'");
+    var seg = PLUGIN_SRC.slice(at, at + 5000);
+    expect(seg).toContain('rating~quality=hd');
+    expect(seg).toContain('relevance~durf=10min_more');
+    expect(seg).toContain('uploaddate~datef=week');
+  });
+});

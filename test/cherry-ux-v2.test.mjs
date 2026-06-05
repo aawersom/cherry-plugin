@@ -1384,7 +1384,8 @@ describe('Phase 3 A3(a): eporner SEARCH uses relevance order (no forced most-pop
   it('eporner search() drops order=most-popular', () => {
     var at = SRC.indexOf("id: 'eporner'");
     expect(at).toBeGreaterThan(-1);
-    var searchAt = SRC.indexOf('search: function(query, page)', at);
+    // search() now also takes `sort` (orientation suffix); match on the prefix.
+    var searchAt = SRC.indexOf('search: function(query, page', at);
     expect(searchAt).toBeGreaterThan(-1);
     var searchBody = SRC.slice(searchAt, searchAt + 900);
     // Assert the SEARCH URL line itself has no order param (a comment may mention
@@ -1399,9 +1400,13 @@ describe('Phase 3 A3(a): eporner SEARCH uses relevance order (no forced most-pop
     var at = SRC.indexOf("id: 'eporner'");
     var browseAt = SRC.indexOf('browse: function(category, page', at);
     expect(browseAt).toBeGreaterThan(-1);
-    var browseBody = SRC.slice(browseAt, browseAt + 700);
-    expect(browseBody).toMatch(/var order = sort \|\| 'most-popular'/);
-    expect(browseBody).toMatch(/&order=' \+ order/);
+    var browseBody = SRC.slice(browseAt, browseAt + 900);
+    // _orient() now extracts {order, gay}; the chosen sort flows through to &order=.
+    expect(browseBody).toMatch(/var o = self\._orient\(sort\)/);
+    expect(browseBody).toMatch(/&order=' \+ o\.order/);
+    // The default order (most-popular) lives in the shared _orient helper.
+    var epBody = SRC.slice(at, browseAt);
+    expect(epBody).toMatch(/order: sort \|\| 'most-popular'/);
   });
   it('eporner cfg exposes API order sorts (no longer sorts:[])', () => {
     var at = SRC.indexOf("id: 'eporner'");
