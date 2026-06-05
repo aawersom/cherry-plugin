@@ -2088,27 +2088,49 @@ SOURCES.push({
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
+  // Parse pornhub video-listing HTML (model /videos pages AND related blocks).
+  // Iterate by the canonical card container <li class="…videoblock…"> so each
+  // card's thumb/preview/duration are bound to ITS block — a fixed char-window
+  // around the href clipped the deeply-nested mediabook (+~1500) / duration
+  // (+~3000) and yielded bare cards inside models. Field regexes mirror the API
+  // _mapVideo output (source/thumb/title/url/duration/views) plus data-mediabook
+  // preview, so model cards render IDENTICALLY to listing cards (now WITH preview).
   _parseHtmlCards: function(html) {
     var items = [];
     var seen = {};
-    var hrefRx = /href="(\/view_video\.php\?viewkey=([a-z0-9]+)[^"]*)"/g;
-    var m;
-    while ((m = hrefRx.exec(html)) !== null) {
-      var href = m[1];
-      var vkey = m[2];
-      if (!vkey || seen[vkey]) continue;
+    // Split into per-card blocks by the videoblock <li> boundaries. Append the
+    // tail so the last card gets a full block.
+    var liRx = /<li[^>]*class="[^"]*videoblock[^"]*"/g;
+    var starts = [];
+    var lm;
+    while ((lm = liRx.exec(html)) !== null) starts.push(lm.index);
+    // Fallback: no videoblock containers (markup change) → degrade to href scan
+    // over the whole document so we still surface SOMETHING rather than nothing.
+    if (!starts.length) starts.push(0);
+    starts.push(html.length);
+    for (var i = 0; i < starts.length - 1; i++) {
+      var block = html.slice(starts[i], starts[i + 1]);
+      var vk = block.match(/viewkey=([a-z0-9]+)/);
+      if (!vk) continue;
+      var vkey = vk[1];
+      if (seen[vkey]) continue;
       seen[vkey] = true;
-      var videoUrl = 'https://www.pornhub.com' + href;
-      var chunk = html.slice(Math.max(0, m.index - 200), m.index + 800);
-      var thumb = _attr(chunk, /data-mediumthumb="([^"]+)"/) ||
-                  _attr(chunk, /data-thumb_url="([^"]+)"/) || '';
-      var preview = _attr(chunk, /data-mediabook="([^"]+)"/);
+      var href = _attr(block, /href="(\/view_video\.php\?viewkey=[a-z0-9]+[^"]*)"/);
+      var videoUrl = href ? 'https://www.pornhub.com' + href
+                          : 'https://www.pornhub.com/view_video.php?viewkey=' + vkey;
+      var thumb = _attr(block, /data-mediumthumb="([^"]+)"/) ||
+                  _attr(block, /data-thumb_url="([^"]+)"/) ||
+                  _attr(block, /data-image="([^"]+)"/) ||
+                  _attr(block, /<img[^>]+(?:data-src|src)="(https?:\/\/[^"]*phncdn[^"]+\.jpg[^"]*)"/) || '';
+      var preview = _attr(block, /data-mediabook="([^"]+)"/);
       var title = _decodeHtml(
-        _attr(chunk, /class="[^"]*videoTitle[^"]*"[^>]*>([^<]+)/) ||
-        _attr(chunk, /title="([^"]+)"/)
+        _attr(block, /class="[^"]*videoTitle[^"]*"[^>]*>([^<]+)/) ||
+        _attr(block, /title="([^"]+)"/)
       );
-      var duration = parseDur(_attr(chunk, /<var class="duration">([^<]+)</));
-      var views    = parseViews(_attr(chunk, /class="[^"]*videoViewCount[^"]*"[^>]*>([^<]+)</));
+      // Duration class varies (`duration` vs `bgShadeEffect duration tooltipTrig`),
+      // so match the word `duration` anywhere in the <var> class.
+      var duration = parseDur(_attr(block, /<var class="[^"]*\bduration\b[^"]*"[^>]*>([^<]+)</));
+      var views    = parseViews(_attr(block, /class="[^"]*videoViewCount[^"]*"[^>]*>([^<]+)</));
       if (title || thumb) {
         items.push({ id: vkey, source: 'pornhub', title: title, thumb: thumb,
                      preview: preview, url: videoUrl, duration: duration, views: views });
@@ -2334,16 +2356,54 @@ SOURCES.push({
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
+  // Map ONE xvideos profile-videos JSON object to a card identical in shape to
+  // _parseCards output (id/source/title/thumb/preview/hd/url/duration). The model
+  // page does NOT server-render thumb-block cards — it loads them from the JSON
+  // endpoint /profiles/{slug}/videos/best/{page}. The video URL is built from the
+  // `eid` token as /video.{eid}/{slug} (same canonical form _parseCards yields, so
+  // getStream is unchanged); preview is the per-card ipu (…/preview.mp4) attr.
+  _mapModelVideo: function(o) {
+    if (!o || !o.eid) return null;
+    var dur = 0;
+    var dm = o.d && String(o.d).match(/(\d+)\s*min/);
+    if (dm) dur = parseInt(dm[1], 10) * 60;
+    return {
+      id:       'xv' + o.eid,
+      source:   'xvideos',
+      title:    _decodeHtml(o.tf || o.t || ''),
+      thumb:    o.il || o.i || o.ip || '',
+      preview:  o.ipu || '',
+      hd:       o.hm ? (/2160|4k/i.test(String(o.h || '')) ? '4K' : 'HD') : '',
+      // /video.{eid}/{slug}: slug is cosmetic (token resolves the page), but pull
+      // the real slug from `u` (…/{eid}/{slug}) when present for a clean URL.
+      url:      'https://www.xvideos.com/video.' + o.eid + '/' +
+                ((String(o.u || '').match(/\/[a-z0-9]+\/([^\/?#]+)\/?$/) || [, o.eid])[1]),
+      duration: dur,
+      views:    parseViews(String(o.n || 0))
+    };
+  },
+
   browseByModel: function(modelUrl, page) {
     var self = this;
     var p = page || 1;
     var pageIdx = p - 1;
-    var baseUrl = modelUrl.replace(/\/$/, '');
-    // xvideos model pages: baseUrl for page 1, baseUrl/{pageIdx} for subsequent
-    var url = pageIdx === 0 ? baseUrl : baseUrl + '/' + pageIdx;
-    return cherryFetch(url).then(function(html) {
-      var items = self._parseCards(html, p);
-      return { items: items, total_pages: _derivePages(items.length, p, 20) };
+    // modelUrl is the /pornstars/{slug} (or /profiles/{slug}) page. Its videos are
+    // served from a sibling JSON endpoint /profiles/{slug}/videos/best/{pageIdx}.
+    // Normalize ANY /pornstars|/models|/profiles base to /profiles/{slug}.
+    var slugM = modelUrl.replace(/\/$/, '').match(/\/(?:pornstars|models|profiles)\/([^\/?#]+)/);
+    var slug = slugM ? slugM[1] : modelUrl.replace(/\/$/, '').split('/').pop();
+    var url = 'https://www.xvideos.com/profiles/' + slug + '/videos/best/' + pageIdx;
+    return cherryFetch(url).then(function(text) {
+      var data;
+      try { data = JSON.parse(text); } catch (e) { data = null; }
+      var vids = (data && data.videos) || [];
+      var items = [];
+      vids.forEach(function(o) { var c = self._mapModelVideo(o); if (c) items.push(c); });
+      // total_pages from nb_videos / nb_per_page when present, else derive.
+      var total = (data && data.nb_videos && data.nb_per_page)
+        ? Math.ceil(data.nb_videos / data.nb_per_page)
+        : _derivePages(items.length, p, 20);
+      return { items: items, total_pages: total || 1 };
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
@@ -3613,7 +3673,11 @@ SOURCES.push(_kvsEngine({
         nameRx: [/title="([^"]+)"/, /alt="([^"]+)"/],
         thumbRx: [/(?:data-src|src)="(https?:\/\/[^"]+\.jpe?g)"/i]
     },
-    chunkWindow: { before: 0, after: 800 },
+    // after:1000 — the per-card duration <div class="duration"> sits at ~+786 from
+    // the href (right past the old 800 cap), so listing AND model cards were losing
+    // their duration overlay. Widened so duration is captured (thumb +409, preview
+    // vthumb right after href all still inside). Applies to browse + browseByModel.
+    chunkWindow: { before: 0, after: 1000 },
     stripBase64: true,
     thumbRx: [
         /(?:data-original|data-src|src)="([^"?#]+\.jpe?g)/i,
@@ -4743,8 +4807,10 @@ function _ebunCards(html) {
         if (seen[id]) continue;
         seen[id] = true;
 
-        // Look only FORWARD from href — title in alt="" and data-src in img after the href
-        var chunk = html.slice(m.index, m.index + 900);
+        // Look only FORWARD from href. Window 1100: the duration/views meta block
+        // (<div class="meta-time">) sits at ~+950 from the href — the old 900 cap
+        // clipped it, so listing AND model cards lost their duration overlay.
+        var chunk = html.slice(m.index, m.index + 1100);
 
         var thumb = _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i) ||
                     _attr(chunk, /(?:data-src|src)="([^"]+\.(?:webp|png))"/i);
@@ -4756,8 +4822,11 @@ function _ebunCards(html) {
         );
         if (!title) title = _titleFromUrl(videoUrl);
 
-        var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
-        var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
+        // Duration/views render as <div class="meta-time"><span.../>28:50</div> —
+        // an inner <span> icon precedes the value, so skip leading tags before the
+        // captured text (the bare >([^<]+)< form matched the empty span instead).
+        var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>(?:\s*<[^>]+>)*\s*([^<]+)</));
+        var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>(?:\s*<[^>]+>)*\s*([^<]+)</));
 
         if (title || thumb) {
             items.push({ id: id, source: 'ebun', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
