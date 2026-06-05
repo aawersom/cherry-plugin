@@ -465,8 +465,12 @@
       self._running = true;
       var url = PROXY_URL + '/favs?pin=' + encodeURIComponent(pin) +
                 '&key=' + encodeURIComponent(getProxyKey());
+      var localCount = Fav._records().length;
+      console.log('[Cherry] Sync.run: POST', url, '| local records =', localCount);
       return cherryPostJson(url, { records: Fav._records() })
         .then(function (res) {
+          var got = (res && Array.isArray(res.records)) ? res.records.length : -1;
+          console.log('[Cherry] Sync.run: server responded, records =', got);
           if (res && Array.isArray(res.records)) {
             Fav._merge(res.records);
             Sync._refreshGrid();
@@ -477,7 +481,7 @@
           }
         })
         .catch(function (err) {
-          console.warn('[Cherry] sync failed:', err);
+          console.warn('[Cherry] Sync.run FAILED:', err && err.message ? err.message : err);
           if (report) Lampa.Noty.show(Lampa.Lang.translate('cherry_sync_err'));
         })
         .then(function () { self._running = false; });
@@ -1314,7 +1318,9 @@
               nosave: true
             }, function (v) {
               Lampa.Controller.toggle('content');
-              var p = (v || '').trim();
+              // v may arrive as a string or, on some builds, an object — coerce safely.
+              var p = String(v == null ? '' : (v.value != null ? v.value : v)).trim();
+              console.log('[Cherry] sync tile: entered value =', v, '→ pin =', p);
               if (/^[0-9]{4,12}$/.test(p)) {
                 Lampa.Noty.show(Lampa.Lang.translate('cherry_sync') + '… (PIN ' + p + ')');
                 Sync.setPin(p);   // runs a REPORTED sync → shows result/error Noty
