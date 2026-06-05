@@ -431,12 +431,12 @@
       return Lampa.Storage.get('cherry_sync_pin', '');
     },
 
-    /** @param {string} p 4–12 digits. Persists + triggers a run. */
+    /** @param {string} p 4–12 digits. Persists + triggers a REPORTED run. */
     setPin: function (p) {
       p = ('' + (p || '')).trim();
       if (!/^[0-9]{4,12}$/.test(p)) return false;
       Lampa.Storage.set('cherry_sync_pin', p);
-      this.run();
+      this.run(true);   // report result to the user via Noty
       return true;
     },
 
@@ -454,11 +454,14 @@
      * Pull+merge+push in one POST. Swallows network errors (stays local).
      * Guards against concurrent runs.
      */
-    run: function () {
+    run: function (report) {
       var self = this;
       if (self._running) return Promise.resolve();
       var pin = self.getPin();
-      if (!/^[0-9]{4,12}$/.test('' + pin)) return Promise.resolve();
+      if (!/^[0-9]{4,12}$/.test('' + pin)) {
+        if (report) Lampa.Noty.show(Lampa.Lang.translate('cherry_sync') + ': PIN 4–12 цифр');
+        return Promise.resolve();
+      }
       self._running = true;
       var url = PROXY_URL + '/favs?pin=' + encodeURIComponent(pin) +
                 '&key=' + encodeURIComponent(getProxyKey());
@@ -468,9 +471,14 @@
             Fav._merge(res.records);
             Sync._refreshGrid();
           }
+          if (report) {
+            var n = Fav.all().length;
+            Lampa.Noty.show(Lampa.Lang.translate('cherry_sync_ok') + ' (' + n + ')');
+          }
         })
         .catch(function (err) {
-          console.warn('[Cherry] sync failed (offline?), keeping local favorites:', err);
+          console.warn('[Cherry] sync failed:', err);
+          if (report) Lampa.Noty.show(Lampa.Lang.translate('cherry_sync_err'));
         })
         .then(function () { self._running = false; });
     },
@@ -1308,8 +1316,8 @@
               Lampa.Controller.toggle('content');
               var p = (v || '').trim();
               if (/^[0-9]{4,12}$/.test(p)) {
-                Sync.setPin(p);
-                Lampa.Noty.show(Lampa.Lang.translate('cherry_sync') + ': PIN ' + p);
+                Lampa.Noty.show(Lampa.Lang.translate('cherry_sync') + '… (PIN ' + p + ')');
+                Sync.setPin(p);   // runs a REPORTED sync → shows result/error Noty
               } else {
                 Lampa.Noty.show('PIN — 4–12 цифр');
               }
@@ -1403,6 +1411,8 @@
       cherry_sources:     { ru: 'Источники',           en: 'Sources'            },
       cherry_favorites:   { ru: 'Избранное',           en: 'Favorites'          },
       cherry_sync:        { ru: 'Синхронизация',       en: 'Sync'               },
+      cherry_sync_ok:     { ru: 'Избранное синхронизировано', en: 'Favorites synced' },
+      cherry_sync_err:    { ru: 'Синхронизация не удалась — проверьте сеть', en: 'Sync failed — check connection' },
       cherry_no_results:  { ru: 'Нет результатов',     en: 'No results'         },
       cherry_fav_empty_hint: { ru: 'Удерживайте ОК на видео чтобы добавить в избранное', en: 'Hold OK on a video to add it to favorites' },
       cherry_loading:     { ru: 'Загрузка…',           en: 'Loading…'           },
