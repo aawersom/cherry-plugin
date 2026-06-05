@@ -2145,6 +2145,95 @@ describe('FIX 1 — _titleFromUrl fallback in HTML parsers', function () {
 });
 
 // ============================================================
+// pornone — _pornoneCards parses ONLY real /{cat}/{slug}/{id}/ video cards
+// (anchors on class="…videocard…"; drops nav/lang/pagination + viewsIcon junk).
+// Live-HTML shape verified by curl: 35 cards/page, all with a numeric id + .jpg poster.
+// ============================================================
+describe('pornone — _pornoneCards real-card parsing', function () {
+  const PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+
+  // Extract a function body verbatim from plugin.js (brace-balanced).
+  function grab(name) {
+    const i = PLUGIN.indexOf('function ' + name + '(');
+    expect(i).toBeGreaterThan(-1);
+    let depth = 0;
+    for (let k = PLUGIN.indexOf('{', i); k < PLUGIN.length; k++) {
+      if (PLUGIN[k] === '{') depth++;
+      else if (PLUGIN[k] === '}' && --depth === 0) return PLUGIN.slice(i, k + 1);
+    }
+    throw new Error('unbalanced ' + name);
+  }
+
+  const deps = ['parseDur', 'parseViews', '_attr', '_decodeHtml', '_titleFromUrl', '_pornoneCards']
+    .map(grab).join('\n');
+  // eslint-disable-next-line no-new-func
+  const _pornoneCards = new Function(deps + '\nreturn _pornoneCards;')();
+
+  // Minimal fixture mirroring the live grid: one real card (with ?rr= tracker, lazy
+  // data-src poster, durlabel, viewsIcon), plus a language-nav link and a pagination
+  // link that the OLD slug-windowing parser turned into junk "view" cards.
+  const HTML =
+    '<a href="https://pornone.com/se/amator/">lang nav</a>' +
+    '<a href="https://pornone.com/amateur/2/">page 2</a>' +
+    '<a href="https://pornone.com/czech/sexy-brunette-casting-fuck/280636853/?rr=151" ' +
+      'class="popbop vidLinkFX  videocard links">' +
+      '<div class="thumbcont"><span class="durlabel">' +
+        '<img alt="HD Video" src="https://th-eu4.pornone.com/images/svg/hd.svg">08:00</span>' +
+      '<img src="" data-src="https://th-eu4.pornone.com/t/53/280636853/b161.jpg" ' +
+        'alt="sexy brunette casting fuck" class="imgvideo thumbimg"/></div>' +
+      '<div class="videoinfo"><div class="titlecont">' +
+        '<div class="videotitle ">Sexy Brunette Casting Fuck</div>' +
+        '<div class="author"><span><i class="statsicon viewsIcon"></i>243</span></div>' +
+      '</div></div></a>';
+
+  const items = _pornoneCards(HTML);
+
+  it('returns exactly one card (drops nav + pagination junk)', function () {
+    expect(items.length).toBe(1);
+  });
+
+  it('extracts the numeric id and strips the ?rr= tracker from the URL', function () {
+    expect(items[0].id).toBe('280636853');
+    expect(items[0].url).toBe('https://pornone.com/czech/sexy-brunette-casting-fuck/280636853/');
+  });
+
+  it('reads title, .jpg poster, duration and views', function () {
+    expect(items[0].title).toBe('Sexy Brunette Casting Fuck');
+    expect(items[0].thumb).toMatch(/th-eu4\.pornone\.com\/t\/53\/280636853\/b161\.jpg$/);
+    expect(items[0].duration).toBe(480);   // 08:00
+    expect(items[0].views).toBe(243);
+  });
+
+  it('never emits viewsIcon / lang-nav / pagination as cards', function () {
+    items.forEach(function (v) {
+      expect(v.url).not.toMatch(/\/se\/amator\//);
+      expect(v.url).not.toMatch(/\/amateur\/2\//);
+      expect(/^\d+$/.test(v.id)).toBe(true);
+    });
+  });
+});
+
+// ============================================================
+// pornone — getStream picks the real CDN <source>, never the gallery ad clip
+// ============================================================
+describe('pornone — getStream regex selects real stream', function () {
+  const PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+
+  it('the getStream <source> regex anchors on s*.pornone.com/vid2 (not gallery.vcmdiawe)', function () {
+    expect(PLUGIN.includes('s\\d+\\.pornone\\.com\\/vid2')).toBe(true);
+    expect(PLUGIN).toMatch(/gallery\.vcmdiawe\.com livecam ad/); // documented exclusion
+  });
+
+  it('the <source>/contentUrl regexes match a real pornone mp4 and reject the ad clip', function () {
+    const srcRx = /<source\s+src="(https?:\/\/s\d+\.pornone\.com\/vid2\/[^"]+?\.mp4[^"]*)"[^>]*?(?:res|label)="(\d+)p?"/i;
+    const real = '<source src="https://s3007.pornone.com/vid2/abc/1/39/280641839/280641839_1920x1080_4000k.mp4?lang=en" type="video/mp4" res="720"/>';
+    const ad   = '<a data-live="https://gallery.vcmdiawe.com/lpp/2/x/x.20.mp4">';
+    expect(srcRx.test(real)).toBe(true);
+    expect(srcRx.test(ad)).toBe(false);
+  });
+});
+
+// ============================================================
 // FIX 2 — duration overlay (.cherry-dur) + HD-only quality slot
 // ============================================================
 describe('FIX 2 — duration overlay anti-drift', function () {
@@ -2244,7 +2333,8 @@ describe('S1 total_pages anti-drift', function () {
     // Flagged HTML adapters whose _pages helpers must now derive on no-match.
     var flaggedHelpers = [
       '_3movsPages', '_porndigPages', '_pornonePages',
-      '_lenpornoPages', '_rolikaPages', '_jopaPages', '_perfektPages'
+      '_lenpornoPages', '_rolikaPages', '_jopaPages', '_perfektPages',
+      '_familypornPages'
     ];
     flaggedHelpers.forEach(function (name) {
       var rx = new RegExp('function ' + name + '\\([^)]*\\)\\s*\\{[\\s\\S]*?\\n\\}');
@@ -2334,5 +2424,102 @@ describe('S4 pornhub _mapVideo model field', function () {
     expect(/v\.pornstars\s*&&\s*v\.pornstars\[0\]\s*&&\s*v\.pornstars\[0\]\.pornstar_name/.test(PLUGIN)).toBe(true);
     expect(/card\.model\s*=\s*\{/.test(PLUGIN)).toBe(true);
     expect(/https:\/\/www\.pornhub\.com\/pornstar\//.test(PLUGIN)).toBe(true);
+  });
+});
+
+// =====================================================================
+// FamilyPorn — standalone card parser + pagination (curl-confirmed markup)
+// Real card URL format is /videos/{slug}/ (NOT numeric ids); cards carry a
+// data-preview="…_preview.mp4/" hover clip; KVS AJAX pagination has no
+// page-numbered URLs so total_pages must derive from page fullness.
+// =====================================================================
+// ---- _familypornCards (verbatim from plugin.js) ----
+function _familypornCards(html) {
+    var items = [];
+    var hrefRx = /href="(https?:\/\/familyporn\.tv\/videos\/[^"]+)"/g;
+    var seen = {};
+    var m;
+    while ((m = hrefRx.exec(html)) !== null) {
+        var videoUrl = m[1];
+        var slugMatch = /\/videos\/([^/"?]+)/.exec(videoUrl);
+        var id = slugMatch ? slugMatch[1] : videoUrl;
+        if (seen[id]) continue;
+        seen[id] = true;
+        var chunk = html.slice(m.index, m.index + 800);
+        var thumb = _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\/contents\/videos_screenshots\/[^"?#]+)/i) ||
+                    _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.jpe?g)/i);
+        var title = _decodeHtml(
+            _attr(chunk, /title="([^"]+)"/) ||
+            _attr(chunk, /<strong[^>]*class="[^"]*title[^"]*"[^>]*>\s*([^<]+)/) ||
+            _attr(chunk, /alt="([^"]+)"/)
+        );
+        if (!title) title = _titleFromUrl(videoUrl);
+        var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
+        var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
+        var preview = _attr(chunk, /data-preview="([^"]+\.mp4[^"]*)"/i);
+        if (title || thumb) {
+            items.push({ id: id, source: 'familyporn', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views, preview: preview || undefined });
+        }
+    }
+    return items;
+}
+// ---- _familypornPages (verbatim from plugin.js) ----
+function _familypornPages(html, page, itemsLen) {
+    return _derivePages(itemsLen, page || 1, 24);
+}
+
+describe('FamilyPorn card parser (curl-confirmed /videos/{slug}/ format)', function () {
+  // Mirrors real category markup: <a class="link" href=".../videos/{slug}/" title="…">
+  // <div class="img-wrap"><img src="…/contents/videos_screenshots/…/1.jpg"
+  // data-preview="…/66955_preview.mp4/"><div class="duration">21:22</div>…
+  function card(slug, withPreview) {
+    return '<a class="link" href="https://familyporn.tv/videos/' + slug + '/" title="Title ' + slug + '">' +
+           '<div class="img-wrap">' +
+           '<img class="img" src="https://familyporn.tv/contents/videos_screenshots/66000/66955/289x217/1.jpg"' +
+           (withPreview ? ' data-preview="https://familyporn.tv/get_file/3/abc/66000/66955/66955_preview.mp4/"' : '') +
+           ' alt="Title ' + slug + '">' +
+           '<div class="duration">21:22</div></div></a>';
+  }
+
+  it('matches slug URLs (NOT numeric) — all cards parse', function () {
+    var html = card('skinny-stepmom-jumped-on-top', true) +
+               card('caught-taking-a-dick-pic-s2-e4', true) +
+               card('hot-stepmom-returns-the-favor', false);
+    var items = _familypornCards(html);
+    expect(items.length).toBe(3);
+    expect(items[0].id).toBe('skinny-stepmom-jumped-on-top');
+    expect(items[0].url).toBe('https://familyporn.tv/videos/skinny-stepmom-jumped-on-top/');
+    expect(items[0].title).toBe('Title skinny-stepmom-jumped-on-top');
+    expect(items[0].thumb).toContain('/contents/videos_screenshots/');
+    expect(items[0].duration).toBe(21 * 60 + 22);
+  });
+
+  it('extracts data-preview hover-clip (.mp4) when present, omits it otherwise', function () {
+    var items = _familypornCards(card('a-slug', true) + card('b-slug', false));
+    expect(items[0].preview).toBe('https://familyporn.tv/get_file/3/abc/66000/66955/66955_preview.mp4/');
+    expect(items[1].preview).toBeUndefined();
+  });
+
+  it('dedupes repeated slugs', function () {
+    var items = _familypornCards(card('dup', true) + card('dup', true) + card('uniq', true));
+    expect(items.map(function (i) { return i.id; })).toEqual(['dup', 'uniq']);
+  });
+
+  it('pagination keeps scrolling on a full page, caps on a short one', function () {
+    // 24 cards/page → half-full threshold is 12.
+    expect(_familypornPages('', 1, 24)).toBe(51);   // full → generous forward window
+    expect(_familypornPages('', 3, 24)).toBe(53);
+    expect(_familypornPages('', 5, 4)).toBe(5);      // short page → cap (no infinite empty scroll)
+    expect(_familypornPages('', 1, 0)).toBe(1);      // empty → cap
+  });
+
+  it('anti-drift: shipped _familypornCards uses slug hrefRx + data-preview; pages derive', function () {
+    var PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+    var pAt = PLUGIN.indexOf('function _familypornPages');
+    var body = PLUGIN.slice(PLUGIN.indexOf('function _familypornCards'), pAt);
+    expect(body).toContain('familyporn\\.tv\\/videos\\/');
+    expect(body).toMatch(/data-preview="\(\[\^"\]\+\\\.mp4/);
+    expect(body).toContain('preview: preview || undefined');
+    expect(PLUGIN.slice(pAt, pAt + 200)).toContain('_derivePages(itemsLen');
   });
 });

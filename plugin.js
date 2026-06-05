@@ -3111,20 +3111,25 @@ SOURCES.push({
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
             var clean = html.replace(/\\\//g, '/').replace(/\\"/g, '"');
-            var fpRx = /sources\s*[=:]\s*\[[\s\S]{0,2000}?['"]?src['"]?\s*:\s*['"]([^'"]+\.(?:mp4|m3u8)[^'"]{0,200})['"]/i;
-            var fpM = fpRx.exec(clean);
-            if (fpM) return { url: buildProxyUrl(fpM[1], 'https://pornone.com/'), quality: {} };
-            var result = extractStreams(clean);
-            if (result.url) {
-                var q = {};
-                Object.keys(result.quality).forEach(function(k) {
-                    q[k] = buildProxyUrl(result.quality[k], 'https://pornone.com/');
-                });
-                return { url: buildProxyUrl(result.url, 'https://pornone.com/'), quality: q };
+            // The player's <source> tags carry the REAL stream:
+            //   <source src="https://sNNNN.pornone.com/vid2/.../{id}_WxH_Nk.mp4?lang=en" res="720">
+            // Anchor strictly on the pornone CDN host so we never pick up the
+            // gallery.vcmdiawe.com livecam ad clips (the "short video that closes fast" bug).
+            var srcRx = /<source\s+src="(https?:\/\/s\d+\.pornone\.com\/vid2\/[^"]+?\.mp4[^"]*)"[^>]*?(?:res|label)="(\d+)p?"/gi;
+            var quality = {};
+            var best = '', bestRes = -1, sm;
+            while ((sm = srcRx.exec(clean)) !== null) {
+                var url = sm[1], res = parseInt(sm[2], 10) || 0;
+                quality[res + 'p'] = buildProxyUrl(url, 'https://pornone.com/');
+                if (res > bestRes) { bestRes = res; best = url; }
             }
-            var m = clean.match(/['"](?:file|src|source|video_url|videoUrl)['"][\s:,]+['"]([^'"]+\.(?:mp4|m3u8)[^'"]*)['"]/i) ||
-                    clean.match(/["'](https?:\/\/[^"'\s]+\.mp4[^"'\s]*)['"]/i);
-            if (m) return { url: buildProxyUrl(m[1], 'https://pornone.com/'), quality: {} };
+            if (best) {
+                return { url: buildProxyUrl(best, 'https://pornone.com/'), quality: quality };
+            }
+            // Fallback: JSON-LD contentUrl (always the real pornone CDN, never the ad clip).
+            var ld = clean.match(/"contentUrl"\s*:\s*"(https?:\/\/s\d+\.pornone\.com\/vid2\/[^"]+?\.mp4[^"]*)"/i) ||
+                     clean.match(/(https?:\/\/s\d+\.pornone\.com\/vid2\/[^"'\s]+?\.mp4[^"'\s]*)/i);
+            if (ld) return { url: buildProxyUrl(ld[1], 'https://pornone.com/'), quality: {} };
             return { url: '', quality: {} };
         }).catch(function () { return { url: '', quality: {} }; });
     }
@@ -3132,48 +3137,45 @@ SOURCES.push({
 
 function _pornoneCards(html) {
     var items = [];
-    // Video URLs on pornone end with / and contain a slug — filter out pure nav links
-    var hrefRx = /href="(https?:\/\/pornone\.com\/([^"?#]+)\/)"/g;
+    // Real video cards are <a class="…videocard…"> anchors whose href is the canonical
+    // video URL  https://pornone.com/{cat}/{title-slug}/{id}/[?rr=NNN]  (34–35 per page).
+    // Anchor ON the videocard class — this skips nav/lang/pagination links AND the
+    // viewsIcon stat elements that the old slug-windowing parser turned into junk cards.
+    var cardRx = /<a\s+href="(https?:\/\/pornone\.com\/[^"]*?\/(\d{4,})\/[^"]*)"[^>]*class="[^"]*videocard[^"]*"/gi;
     var seen = {};
     var m;
-    while ((m = hrefRx.exec(html)) !== null) {
-        var videoUrl = m[1];
-        var slug = m[2];
-        // Skip single-segment nav URLs: reserved words, 2-letter lang codes, bare numbers
-        if (!slug || (slug.indexOf('/') === -1 && /^(?:page|category|tag|search|feed|wp-content|[a-z]{2}|\d+)$/i.test(slug))) continue;
-        // Extract numeric ID from slug (pornone: category/title-slug/ID)
-        var slugParts = slug.split('/');
-        var numId = '';
-        for (var pi = slugParts.length - 1; pi >= 0; pi--) {
-            if (/^\d+$/.test(slugParts[pi])) { numId = slugParts[pi]; break; }
-        }
-        var id = numId || slug.replace(/[^a-z0-9]/gi, '_');
+    while ((m = cardRx.exec(html)) !== null) {
+        var videoUrl = m[1].replace(/[?&]rr=\d+/, '');   // strip the rotation tracker param
+        var id = m[2];
         if (!id || seen[id]) continue;
         seen[id] = true;
-        // Title derived from URL slug (segment before the numeric ID)
-        var titleSlug = slugParts.length >= 2 ? slugParts[slugParts.length - (numId ? 2 : 1)] : slug;
-        var derivedTitle = titleSlug ? titleSlug.replace(/-/g, ' ') : '';
 
-        // Chunk: pornone img+title appear ~1200+ chars AFTER the href → need 2500 forward
-        var chunk = html.slice(m.index, m.index + 2500);
+        // Card body runs to the closing </a>; cap the lookahead so cards can't bleed.
+        var end = html.indexOf('</a>', m.index);
+        var chunk = html.slice(m.index, end === -1 ? m.index + 2500 : end + 4);
 
-        // Thumb: CDN img at th-eu4.pornone.com/t/{id%100}/{id}/d{n}.jpg
-        var thumb = _attr(chunk, /src="(https:\/\/th-eu4\.pornone\.com\/t\/\d+\/\d+\/d\d+\.jpe?g)"/i) ||
-                    _attr(chunk, /src="(https?:\/\/th-eu4\.pornone\.com\/[^"]+\.jpe?g)"/i);
+        // Thumb: poster .jpg lives in data-src (lazy) or a populated src; either way it
+        // sits under /t/.../{b|d}NNN.jpg — match the FILE, not the data-path directory.
+        // data-path + first data-thumbs frame is the final fallback.
+        var thumb = _attr(chunk, /(?:data-src|src)="(https?:\/\/th-eu4\.pornone\.com\/t\/[^"]+\.jpe?g)"/i);
+        if (!thumb) {
+            var base = _attr(chunk, /data-path="(https?:\/\/th-eu4\.pornone\.com\/[^"]+?)"/i);
+            var frame = _attr(chunk, /data-thumbs="\[(\d+)/);
+            if (base && frame) thumb = base + 'b' + frame + '.jpg';
+        }
 
         var title = _decodeHtml(
-            _attr(chunk, /<div[^>]*class="[^"]*videotitle[^"]*"[^>]*>([^<]+)<\/div>/) ||
-            _attr(chunk, /th-eu4\.pornone\.com\/t\/[^"]+"\s+alt="([^"]{10,})"/) ||
-            derivedTitle
+            _attr(chunk, /<div[^>]*class="[^"]*videotitle[^"]*"[^>]*>([^<]+)<\/div>/i) ||
+            _attr(chunk, /th-eu4\.pornone\.com\/[^"]+"\s+alt="([^"]{6,})"/i)
         );
         if (!title) title = _titleFromUrl(videoUrl);
 
-        var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
-        var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
+        // Duration sits in the .durlabel span as MM:SS (HD svg precedes the digits).
+        var duration = parseDur(_attr(chunk, /class="[^"]*durlabel[^"]*"[\s\S]*?(\d{1,2}:\d{2}(?::\d{2})?)/i));
+        // Views follow the <i class="…viewsIcon"></i> marker.
+        var views    = parseViews(_attr(chunk, /viewsIcon[^>]*><\/i>\s*([\d.,KkMm]+)/));
 
-        if (title || thumb) {
-            items.push({ id: id, source: 'pornone', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
-        }
+        items.push({ id: id, source: 'pornone', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
     }
     return items;
 }
@@ -3857,9 +3859,11 @@ SOURCES.push({
     cfg: { categories: _cats('sisters:Sisters,cousin:Cousin,grandma-grandson:Grandma & Grandson,virgin:Virgin,stepbrother-stepsister:Stepbrother & Stepsister,stepdaughter-stepdad:Stepdad & Stepdaughter,brother-sister:Brother & Sister,grandpa-granddaughter:Grandpa & Granddaughter,niece-nephew:Niece & Nephew,stepmom-stepson:Stepmom & Stepson,dad-daughter:Dad & Daughter,mother-daughter:Mother & Daughter'), sorts: _cats('video_viewed:По популярности,post_date:Свежее,rating:По рейтингу,duration:Длинные,most_commented:По комментариям') },
 
     search: function (query, page) {
-        var url = 'https://familyporn.tv/search/?q=' + encodeURIComponent(query) + '&page=' + page;
+        var p = page || 1;
+        var url = 'https://familyporn.tv/search/?q=' + encodeURIComponent(query) + '&page=' + p;
         return cherryFetch(url).then(function (html) {
-            return { items: _familypornCards(html), total_pages: _familypornPages(html) };
+            var items = _familypornCards(html);
+            return { items: items, total_pages: _familypornPages(html, p, items.length) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
@@ -3873,7 +3877,8 @@ SOURCES.push({
             url += (url.indexOf('?') >= 0 ? '&' : '?') + 'sort_by=' + s;
         }
         return cherryFetch(url).then(function (html) {
-            return { items: _familypornCards(html), total_pages: _familypornPages(html) };
+            var items = _familypornCards(html);
+            return { items: items, total_pages: _familypornPages(html, p, items.length) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
@@ -3926,16 +3931,23 @@ function _familypornCards(html) {
         var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
         var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
 
+        // Hover-preview mp4 — KVS cards carry data-preview="…_preview.mp4/" (same as 3movs/pornve).
+        var preview = _attr(chunk, /data-preview="([^"]+\.mp4[^"]*)"/i);
+
         if (title || thumb) {
-            items.push({ id: id, source: 'familyporn', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
+            items.push({ id: id, source: 'familyporn', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views, preview: preview || undefined });
         }
     }
     return items;
 }
 
-function _familypornPages(html) {
-    var m = /[?&]page=(\d+)["'][^>]*(?:last|>>)|\/(\d+)\/["'][^>]*(?:last|>>)/i.exec(html);
-    return m ? (parseInt(m[1] || m[2], 10) || 10) : 10;
+// FamilyPorn paginates via KVS AJAX (data-parameters="…;from:N") — no page-numbered
+// URLs or a last-link in the markup, so the old page=/N/-last regex never matched and
+// returned a hardcoded 10, capping infinite scroll at ~10 pages. Derive a generous
+// window from the page fill instead (24 cards/page) so scroll keeps requesting while
+// the site still serves a full page.
+function _familypornPages(html, page, itemsLen) {
+    return _derivePages(itemsLen, page || 1, 24);
 }
 
 // ---- 7. Porndig ----

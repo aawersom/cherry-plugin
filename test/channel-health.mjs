@@ -30,7 +30,7 @@ const CH = {
   crocotube:    { url: 'https://crocotube.com/categories/amateur/', proxy: 'cf', marker: /\/videos\/\d+\//g },
   '3movs':      { url: 'https://3movs.com/categories/amateur/most-viewed/all-time/', proxy: 'cf', marker: /\/videos\/\d+\//g },
   pornve:       { url: 'https://pornve.com/categories/teens/', proxy: 'cf', marker: /\/video\/\d+\//g },
-  familyporn:   { url: 'https://familyporn.tv/categories/stepmom-stepson/', proxy: 'cf', marker: /\/videos\/\d+\//g },
+  familyporn:   { url: 'https://familyporn.tv/categories/stepmom-stepson/', proxy: 'cf', marker: /\/videos\/[a-z0-9][a-z0-9-]+\//g },
   perfektdamen: { url: 'https://www.perfektdamen.co/popular', proxy: 'deno', marker: /\/video\/\d+\//g },
   tizam:        { url: 'https://tv4.tizam.org/fil_my_dlya_vzroslyh/s_russkim_perevodom/', proxy: 'deno', marker: /\/\d+-[a-z0-9-]+\.html/g },
   ebun:         { url: 'https://www1.ebun.tv/categories/amateur/', proxy: 'cf', marker: /\/videos\/\d+\//g },
