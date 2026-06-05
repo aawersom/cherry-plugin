@@ -192,8 +192,9 @@
 
   // Related video panel state (REQ-4).
   var _relatedGeneration = 0;
-  var _pendingRelated    = [];
+  var _pendingRelated    = [];   // non-empty marker that page-1 related exists
   var _relatedSrc        = null;
+  var _relatedVideo      = null; // the video whose related grid we push on close
 
   // Fetches an HLS m3u8 through the proxy and rewrites all non-comment lines:
   //   - Sub-playlist lines (.m3u8) → recursively proxied → inner blob URL
@@ -589,13 +590,19 @@
       var myGen       = _relatedGeneration;
       _pendingRelated = [];
       _relatedSrc     = null;
+      _relatedVideo   = null;
 
+      // Probe whether this video HAS related (page 1). On player close we push a
+      // PAGINATED related grid (carrying the video + source), not a fixed snapshot,
+      // so the panel scrolls. We only remember the video/source when page 1 has
+      // cards — an empty related means no panel.
       if (source.getRelated) {
-        source.getRelated(video).then(function (items) {
+        source.getRelated(video, 1).then(function (items) {
           if (myGen !== _relatedGeneration) return;
           if (items && items.length) {
-            _pendingRelated = items;
+            _pendingRelated = items;          // non-empty marker: related exists
             _relatedSrc     = source;
+            _relatedVideo   = video;
           }
         }).catch(function () {});
       }
@@ -659,7 +666,7 @@
     // Right-edge action-menu applicability (Поиск → Сортировка → Категории).
     // model_url excluded: model browse is already filtered to a performer.
     var _source    = source;
-    var _canSearch = !object.is_favorites && !object.all_sources && !object._related_items && !object.model_url && !object.models_index;
+    var _canSearch = !object.is_favorites && !object.all_sources && !object.related_video && !object.model_url && !object.models_index;
     // Server sort applies only to a single-source grid. In all-sources search the
     // resolved `source` is SOURCES[0] (which HAS cfg.sorts), so without this guard the
     // menu showed BOTH «Сортировка» (server) AND «Сортировка» (client) — a duplicate.
@@ -672,7 +679,7 @@
     // normal browse grid (not inside model browse / search / favorites / all-sources).
     var _hasModels = !!(source && source.getModels &&
                         !object.is_favorites && !object.all_sources &&
-                        !object._related_items && !object.model_url && !object.models_index);
+                        !object.related_video && !object.model_url && !object.models_index);
     // A2: all_sources search has no single source to honor a server sort, so offer
     // a lightweight CLIENT-side sort (relevance/duration) applied in _gridLoad.
     var _hasClientSort = !!(object.all_sources && object.query);
@@ -711,10 +718,27 @@
         return;
       }
 
-      // «Похожие»: a one-shot recommendations snapshot fetched once via getRelated
-      // (related blocks carry no page param), so it's genuinely single-page.
-      if (object._related_items) {
-        resolve(object._related_items.map(toCard), 1);
+      // «Похожие»: a PAGINATED grid of the card's source-site related videos.
+      // Carries the VIDEO (related_video) + its source, not a pre-fetched list, so
+      // it scrolls like any other grid. getRelated(video, page) returns an array;
+      // we map it through toCard and derive pages generously via _derivePages.
+      // Adapters whose related is the video-page's fixed block ignore `page` and
+      // re-serve the same cards → the cross-page dedup guard yields ZERO new cards
+      // on page 2 → the grid stops cleanly after page 1 (honest, no infinite dupes).
+      // Any adapter that threads `page` (reusing a listing parser) keeps scrolling.
+      if (object.related_video) {
+        var relSrc = sourceById(object.related_video_source || object.source_id);
+        if (!relSrc || !relSrc.getRelated) { resolve([], 1); return; }
+        relSrc.getRelated(object.related_video, page).then(function (rel) {
+          rel = rel || [];
+          // Stamp each related card with the source it came from so nested
+          // «Похожие» on these cards re-opens the same channel.
+          rel.forEach(function (v) { if (v && !v.source) v.source = relSrc.id; });
+          resolve(rel.map(toCard), _derivePages(rel.length, page, 20));
+        }).catch(function (err) {
+          console.warn('[Cherry] related load error (page ' + page + '):', err);
+          reject();
+        });
         return;
       }
 
@@ -1077,10 +1101,11 @@
     };
 
     comp.nextPageReuest = function (object, resolve, reject) {
-      // Genuinely single-page modes never paginate: favorites is a local list and
-      // _related_items is a one-shot recommendations snapshot (no page param).
-      // all_sources+query DOES paginate now — it falls through to _gridLoad.
-      if (object.is_favorites || object._related_items) {
+      // Favorites is the only genuinely single-page mode (a local list, no pages).
+      // «Похожие» (related_video) now paginates through _gridLoad like every other
+      // grid — the dedup guard caps fixed-block adapters after page 1. all_sources
+      // also falls through to _gridLoad.
+      if (object.is_favorites) {
         resolve({ title: screenTitle, results: [], total_pages: 1 });
         return;
       }
@@ -1228,23 +1253,18 @@
               });
               Lampa.Controller.toggle('content');
             } else if (item.action === 'related') {
-              cardSrc.getRelated(element).then(function (rel) {
-                if (rel && rel.length) {
-                  Lampa.Controller.toggle('content');
-                  Lampa.Activity.push({
-                    component:      'cherry_grid',
-                    title:          Lampa.Lang.translate('cherry_related') + ': ' + element.title,
-                    source_id:      cardSrc.id,
-                    _related_items: rel,
-                    page:           1
-                  });
-                } else {
-                  Lampa.Noty.show(Lampa.Lang.translate('cherry_no_results'), { style: 'info' });
-                  Lampa.Controller.toggle('content');
-                }
-              }).catch(function () {
-                Lampa.Noty.show(Lampa.Lang.translate('cherry_error'), { style: 'warn' });
-                Lampa.Controller.toggle('content');
+              // «Похожие» = the card's SOURCE-site related, opened as a PAGINATED
+              // grid (carry the video + its source; the grid fetches getRelated per
+              // page). On all_sources/related result cards, cardSrc resolves from
+              // element.source so it opens the exact channel the card came from.
+              Lampa.Controller.toggle('content');
+              Lampa.Activity.push({
+                component:            'cherry_grid',
+                title:                Lampa.Lang.translate('cherry_related') + ': ' + element.title,
+                source_id:            cardSrc.id,
+                related_video:        element,
+                related_video_source: cardSrc.id,
+                page:                 1
               });
             } else if (item.action === 'model') {
               Lampa.Controller.toggle('content');
@@ -1656,19 +1676,23 @@
           _blobUrls.forEach(function (u) { try { URL.revokeObjectURL(u); } catch (_) {} });
           _blobUrls = [];
         }
-        // REQ-4: invalidate any in-flight getRelated then push related grid if ready.
+        // REQ-4: invalidate any in-flight getRelated then push a PAGINATED related
+        // grid if page-1 related existed. We push the video + source (not the
+        // snapshot) so the panel scrolls via _gridLoad's related_video branch.
         _relatedGeneration++;
-        if (_pendingRelated.length) {
-          var items = _pendingRelated;
+        if (_pendingRelated.length && _relatedVideo && _relatedSrc) {
           var rSrc  = _relatedSrc;
+          var rVid  = _relatedVideo;
           _pendingRelated = [];
           _relatedSrc     = null;
+          _relatedVideo   = null;
           Lampa.Activity.push({
-            component:      'cherry_grid',
-            title:          Lampa.Lang.translate('cherry_related'),
-            source_id:      rSrc ? rSrc.id : '',
-            _related_items: items,
-            page:           1
+            component:            'cherry_grid',
+            title:                Lampa.Lang.translate('cherry_related'),
+            source_id:            rSrc.id,
+            related_video:        rVid,
+            related_video_source: rSrc.id,
+            page:                 1
           });
         }
       }

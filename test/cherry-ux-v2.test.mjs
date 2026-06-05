@@ -259,6 +259,106 @@ describe('S4: model menu item — POST behaviour', function () {
 });
 
 // ============================================================
+// C10 — nested long-press actions on all_sources / related result cards.
+// A card inside «Похожие по названию» (all_sources) must offer BOTH:
+//   «Похожие»            → that card's SOURCE-site related (paginated grid)
+//   «Похожие по названию» → all-sources keyword
+// Both resolve the card's OWN source via element.source (stamped at load).
+// ============================================================
+
+describe('C10: nested actions on all_sources result cards', function () {
+  var mockLampa = {
+    Lang: { translate: function (k) { return k; } }
+  };
+
+  // sourceById mirror: all_sources cards are stamped with element.source.
+  var SOURCES = {
+    pornhub: { id: 'pornhub', getRelated: function () { return Promise.resolve([]); } },
+    xvideos: { id: 'xvideos' } // no getRelated
+  };
+  function sourceById(id) { return SOURCES[id] || null; }
+
+  // Mirror of onMenu: cardSrc = sourceById(element.source) || sourceById(object.source_id).
+  function buildMenuItems(object, element) {
+    var cardSrc = sourceById(element.source) || sourceById(object.source_id);
+    var items = [];
+    if (cardSrc && cardSrc.getRelated) {
+      items.push({ title: mockLampa.Lang.translate('cherry_related'), action: 'related' });
+    }
+    items.push({ title: mockLampa.Lang.translate('cherry_similar_titles'), action: 'similar' });
+    return items;
+  }
+
+  // Mirror of the onSelect 'related' push (paginated): carries the VIDEO + source.
+  function selectRelated(object, element) {
+    var cardSrc = sourceById(element.source) || sourceById(object.source_id);
+    return {
+      component:            'cherry_grid',
+      title:                'cherry_related: ' + element.title,
+      source_id:            cardSrc.id,
+      related_video:        element,
+      related_video_source: cardSrc.id,
+      page:                 1
+    };
+  }
+
+  // Mirror of the onSelect 'similar' push: all-sources keyword from element.title.
+  function selectSimilar(object, element) {
+    var words = (element.title || '').replace(/[^a-zа-яё0-9\s]/gi, '').trim().split(/\s+/).slice(0, 4);
+    return {
+      component:   'cherry_grid',
+      title:       'cherry_similar_titles: ' + element.title,
+      source_id:   element.source,
+      query:       words.join(' '),
+      all_sources: true,
+      page:        1
+    };
+  }
+
+  // An all_sources result card stamped with its origin source (pornhub).
+  var resultCard = { id: 'v1', source: 'pornhub', title: 'Hot Scene', url: 'https://ph/v/1' };
+  var allSourcesObject = { all_sources: true, query: 'hot' };
+
+  it('result card offers BOTH «Похожие» and «Похожие по названию»', function () {
+    var actions = buildMenuItems(allSourcesObject, resultCard).map(function (i) { return i.action; });
+    expect(actions).toContain('related');
+    expect(actions).toContain('similar');
+  });
+
+  it('«Похожие» resolves the card OWN source (element.source) → paginated related grid', function () {
+    var pushed = selectRelated(allSourcesObject, resultCard);
+    expect(pushed.component).toBe('cherry_grid');
+    expect(pushed.source_id).toBe('pornhub');             // card's source, not object's
+    expect(pushed.related_video).toEqual(resultCard);     // carries the video (paginated)
+    expect(pushed.related_video_source).toBe('pornhub');
+    expect(pushed._related_items).toBeUndefined();         // NOT a one-shot snapshot
+  });
+
+  it('«Похожие по названию» opens an all_sources keyword grid', function () {
+    var pushed = selectSimilar(allSourcesObject, resultCard);
+    expect(pushed.all_sources).toBe(true);
+    expect(pushed.query).toBe('Hot Scene');
+    expect(pushed.source_id).toBe('pornhub');
+  });
+
+  it('a card whose source lacks getRelated still offers «Похожие по названию»', function () {
+    var xvCard = { id: 'v2', source: 'xvideos', title: 'Clip', url: 'https://xv/v/2' };
+    var actions = buildMenuItems(allSourcesObject, xvCard).map(function (i) { return i.action; });
+    expect(actions).not.toContain('related');             // no getRelated on xvideos
+    expect(actions).toContain('similar');                 // keyword always available
+  });
+
+  it('nested: a card INSIDE a related grid re-opens its source related (element.source stamped)', function () {
+    // Related result cards are stamped with relSrc.id at load → same path works.
+    var relObject = { related_video: { id: 'orig' }, source_id: 'pornhub' };
+    var nestedCard = { id: 'v3', source: 'pornhub', title: 'Next', url: 'https://ph/v/3' };
+    var pushed = selectRelated(relObject, nestedCard);
+    expect(pushed.source_id).toBe('pornhub');
+    expect(pushed.related_video).toEqual(nestedCard);
+  });
+});
+
+// ============================================================
 // UX-C — Lampa.SettingsApi registration contract (behaviour documentation)
 // ============================================================
 
@@ -388,9 +488,26 @@ describe('plugin.js source assertions (anti-drift)', () => {
     expect(SRC).toMatch(/cardSrc\s*&&\s*cardSrc\.getRelated/);
     expect(SRC).toMatch(/action:\s*'related'/);
   });
-  it('UX-G: empty related uses cherry_no_results not cherry_error', () => {
-    // the related-empty branch should reference cherry_no_results
-    expect(SRC).toMatch(/cherry_no_results/);
+  it('C9: «Похожие» action pushes a PAGINATED grid (related_video, not _related_items)', () => {
+    // The related onSelect branch carries the VIDEO + its source so the grid pages;
+    // it must NOT pre-fetch a one-shot _related_items snapshot.
+    var at = SRC.indexOf("item.action === 'related'");
+    expect(at).toBeGreaterThan(-1);
+    var body = SRC.slice(at, at + 1000);
+    expect(body).toMatch(/related_video:\s*element/);
+    expect(body).toMatch(/related_video_source:\s*cardSrc\.id/);
+    expect(body).not.toContain('_related_items');
+    // No longer awaits getRelated before pushing (the grid fetches per page).
+    expect(body).not.toMatch(/cardSrc\.getRelated\(element\)\.then/);
+  });
+  it('C9: _gridLoad has a paginated related_video branch calling getRelated(video, page) via _derivePages', () => {
+    var at = SRC.indexOf('if (object.related_video)');
+    expect(at).toBeGreaterThan(-1);
+    var body = SRC.slice(at, at + 700);
+    expect(body).toMatch(/getRelated\(\s*object\.related_video\s*,\s*page\s*\)/);
+    expect(body).toMatch(/_derivePages\(/);
+    // Stamps each related card with its source so nested «Похожие» works.
+    expect(body).toMatch(/v\.source\s*=\s*relSrc\.id/);
   });
   it('labels: cherry_related = "Похожие" / "Related"', () => {
     expect(SRC).toMatch(/cherry_related\s*:\s*\{\s*ru:\s*'Похожие',\s*en:\s*'Related'/);
@@ -609,9 +726,9 @@ describe('P0: computeVisibility — POST behaviour', function () {
   /**
    * Pure mirror of the canSearch / hasSorts / hasCats rules in CherryGrid.create().
    *
-   * canSearch  = NOT is_favorites AND NOT all_sources AND NOT _related_items AND NOT model_url
+   * canSearch  = NOT is_favorites AND NOT all_sources AND NOT related_video AND NOT model_url
    *              (model browse is already filtered to a performer, so per-source text
-   *               search does not apply there).
+   *               search does not apply there; related is a fixed-purpose grid).
    * sort       = source.cfg.sorts exists & length > 0
    * cat        = source.cfg.categories exists & length > 0
    *
@@ -621,7 +738,7 @@ describe('P0: computeVisibility — POST behaviour', function () {
     object = object || {};
     var canSearch = !object.is_favorites
                  && !object.all_sources
-                 && !object._related_items
+                 && !object.related_video
                  && !object.model_url;
     var hasSorts = !!(source && source.cfg && source.cfg.sorts && source.cfg.sorts.length);
     var hasCats  = !!(source && source.cfg && source.cfg.categories && source.cfg.categories.length);
@@ -654,8 +771,8 @@ describe('P0: computeVisibility — POST behaviour', function () {
     expect(v.search).toBe(false);
   });
 
-  it('related-items grid: search false', function () {
-    var v = computeVisibility({ _related_items: [{ title: 'a' }], source_id: 'pornhub' }, fullSource);
+  it('related grid: search false', function () {
+    var v = computeVisibility({ related_video: { title: 'a' }, source_id: 'pornhub' }, fullSource);
     expect(v.search).toBe(false);
   });
 
@@ -769,9 +886,9 @@ describe('P0: plugin.js source assertions (anti-drift)', () => {
     );
   });
 
-  it('_canSearch excludes is_favorites, all_sources, _related_items AND model_url', () => {
+  it('_canSearch excludes is_favorites, all_sources, related_video AND model_url', () => {
     expect(SRC).toMatch(
-      /_canSearch\s*=\s*!object\.is_favorites[\s\S]{0,120}!object\.all_sources[\s\S]{0,120}!object\._related_items[\s\S]{0,120}!object\.model_url/
+      /_canSearch\s*=\s*!object\.is_favorites[\s\S]{0,120}!object\.all_sources[\s\S]{0,120}!object\.related_video[\s\S]{0,120}!object\.model_url/
     );
   });
 
@@ -882,21 +999,22 @@ describe('Models discovery axis (anti-drift)', () => {
 
 describe('P1: nextPageReuest paging — POST behaviour', function () {
   /**
-   * Mirror of the single-page guard in comp.nextPageReuest: ONLY favorites and
-   * related-items resolve with an empty page (total_pages stays 1) so the base
-   * class stops paginating. all-sources search now falls through to _gridLoad and
-   * paginates like every other mode (advances to currentPage + 1).
+   * Mirror of the single-page guard in comp.nextPageReuest: ONLY favorites resolves
+   * with an empty page (total_pages stays 1) so the base class stops paginating.
+   * «Похожие» (related_video) and all-sources search now BOTH fall through to
+   * _gridLoad and paginate like every other mode (advancing to currentPage + 1);
+   * the dedup guard caps fixed-block related after page 1.
    */
   function isSinglePageMode(object) {
-    return !!(object.is_favorites || object._related_items);
+    return !!object.is_favorites;
   }
 
   it('favorites is single-page (no further pages requested)', function () {
     expect(isSinglePageMode({ is_favorites: true })).toBe(true);
   });
 
-  it('related-items is single-page', function () {
-    expect(isSinglePageMode({ _related_items: [{ title: 'a' }] })).toBe(true);
+  it('related now paginates (was single-page) — dedup guard caps fixed blocks', function () {
+    expect(isSinglePageMode({ related_video: { title: 'a' }, source_id: 'pornhub' })).toBe(false);
   });
 
   it('all-sources search now paginates (was single-page)', function () {
@@ -943,11 +1061,11 @@ describe('P1: plugin.js source assertions (anti-drift)', () => {
     expect(SRC).toMatch(/resolve\(\{\s*title:[\s\S]{0,80}results:[\s\S]{0,40}total_pages:/);
   });
 
-  it('single-page modes short-circuit nextPageReuest (favorites/related only; all_sources paginates)', () => {
-    // Only favorites + related short-circuit now. all_sources+query falls through
-    // to _gridLoad so global search / similar-titles paginate.
-    expect(SRC).toMatch(/object\.is_favorites\s*\|\|\s*object\._related_items\b/);
-    expect(SRC).not.toMatch(/object\.is_favorites\s*\|\|\s*object\._related_items\s*\|\|\s*\(object\.all_sources\s*&&\s*object\.query\)/);
+  it('single-page mode short-circuits nextPageReuest (favorites only; related + all_sources paginate)', () => {
+    // Only favorites short-circuits now. related_video AND all_sources+query both
+    // fall through to _gridLoad so «Похожие» / global search / similar-titles paginate.
+    expect(SRC).toMatch(/if\s*\(object\.is_favorites\)\s*\{[\s\S]{0,160}resolve\(\{\s*title:[\s\S]{0,80}total_pages:\s*1/);
+    expect(SRC).not.toMatch(/object\.is_favorites\s*\|\|\s*object\._related_items/);
   });
 
   it('next page advances currentPage + 1', () => {

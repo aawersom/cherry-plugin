@@ -1235,7 +1235,8 @@ function makeRelatedState() {
   var state = {
     relatedGeneration: 0,
     pendingRelated:    [],
-    relatedSrc:        null
+    relatedSrc:        null,
+    relatedVideo:      null
   };
 
   function playVideoRelated(video, source, _getRelated) {
@@ -1243,12 +1244,16 @@ function makeRelatedState() {
     var myGen          = state.relatedGeneration;
     state.pendingRelated = [];
     state.relatedSrc     = null;
+    state.relatedVideo   = null;
     if (source.getRelated) {
-      _getRelated(video).then(function (items) {
+      // Probe page 1; non-empty marks that related exists. On close we push a
+      // PAGINATED grid carrying the video (not the snapshot) so the panel scrolls.
+      _getRelated(video, 1).then(function (items) {
         if (myGen !== state.relatedGeneration) return;
         if (items && items.length) {
-          state.pendingRelated = items;
+          state.pendingRelated = items;     // non-empty marker
           state.relatedSrc     = source;
+          state.relatedVideo   = video;
         }
       }).catch(function () {});
     }
@@ -1256,17 +1261,19 @@ function makeRelatedState() {
 
   function onPlayerDestroy(ActivityPush, translateFn) {
     state.relatedGeneration++;
-    if (state.pendingRelated.length) {
-      var items = state.pendingRelated;
+    if (state.pendingRelated.length && state.relatedVideo && state.relatedSrc) {
       var rSrc  = state.relatedSrc;
+      var rVid  = state.relatedVideo;
       state.pendingRelated = [];
       state.relatedSrc     = null;
+      state.relatedVideo   = null;
       ActivityPush({
-        component:      'cherry_grid',
-        title:          translateFn('cherry_related'),
-        source_id:      rSrc ? rSrc.id : '',
-        _related_items: items,
-        page:           1
+        component:            'cherry_grid',
+        title:                translateFn('cherry_related'),
+        source_id:            rSrc.id,
+        related_video:        rVid,
+        related_video_source: rSrc.id,
+        page:                 1
       });
     }
   }
@@ -1310,7 +1317,10 @@ describe('REQ-4 related videos', function () {
     r.onPlayerDestroy(function(p) { pushed = p; }, function(k) { return k; });
     expect(pushed).not.toBeNull();
     expect(pushed.component).toBe('cherry_grid');
-    expect(pushed._related_items.length).toBe(1);
+    // Paginated path: pushes the VIDEO + its source, not a fixed snapshot.
+    expect(pushed.related_video).toEqual({ id: 'v1' });
+    expect(pushed.related_video_source).toBe('pornhub');
+    expect(pushed._related_items).toBeUndefined();
   });
 
   it('AC-4.4: player destroy with empty pendingRelated — Activity.push NOT called', function () {
@@ -1348,27 +1358,56 @@ describe('REQ-4 related videos', function () {
     expect(r.state.pendingRelated[0].id).toBe('2');
   });
 
-  it('AC-4.5: CherryGrid with _related_items — renderCards called, no loadPage', function () {
-    // Simulate the create() branch logic
-    var rendered = false;
+  it('AC-4.5: CherryGrid with related_video PAGINATES through _gridLoad (not a one-shot)', function () {
+    // Mirror of the _gridLoad branch order. related_video is now a PAGINATED grid
+    // mode: it routes through the paged loader (loadPage), NOT a one-shot snapshot.
     var loadPageCalled = false;
-    var object = { _related_items: [{ id: '1' }, { id: '2' }] };
+    var relatedBranch  = false;
+    var object = { related_video: { id: 'v1', url: 'https://x/v/1' }, source_id: 'pornhub' };
 
-    function simulateCreate() {
+    function simulateGridLoad() {
       if (object.is_favorites) {
-        // ...
-      } else if (object._related_items) {
-        rendered = true;
-        // renderCards(object._related_items, ...)
+        // local list
+      } else if (object.related_video) {
+        relatedBranch = true;     // calls src.getRelated(video, page) → _derivePages
+        loadPageCalled = true;    // paged, scrolls like any grid
       } else if (object.all_sources) {
         // ...
       } else {
         loadPageCalled = true;
       }
     }
-    simulateCreate();
-    expect(rendered).toBe(true);
-    expect(loadPageCalled).toBe(false);
+    simulateGridLoad();
+    expect(relatedBranch).toBe(true);
+    expect(loadPageCalled).toBe(true);
+  });
+
+  it('AC-4.8: related branch calls getRelated(video, page) and paginates via _derivePages', async function () {
+    // Fixed-block adapter (ignores page): page 2 re-serves the same cards, the
+    // dedup guard yields zero new → grid stops cleanly. Generous total_pages on
+    // a full page lets a paginatable adapter keep scrolling.
+    var pages = [];
+    var src = {
+      id: 'pornhub',
+      getRelated: function (video, page) {
+        pages.push(page);
+        return Promise.resolve([{ id: 'a' }, { id: 'b' }]); // fixed block
+      }
+    };
+    function gridLoad(object, page) {
+      return src.getRelated(object.related_video, page).then(function (rel) {
+        rel.forEach(function (v) { if (!v.source) v.source = src.id; });
+        return { items: rel, total_pages: _derivePages(rel.length, page, 20) };
+      });
+    }
+    var object = { related_video: { id: 'v1' }, source_id: 'pornhub' };
+    var p1 = await gridLoad(object, 1);
+    var p2 = await gridLoad(object, 2);
+    expect(pages).toEqual([1, 2]);            // page threaded through
+    expect(p1.items[0].source).toBe('pornhub'); // cards stamped with source
+    // short fixed block (2 < half of 20) → total_pages caps at the current page
+    expect(p1.total_pages).toBe(1);
+    expect(p2.total_pages).toBe(2);
   });
 });
 
