@@ -2859,16 +2859,10 @@ SOURCES.push({
     }
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html);
-      // Pagination: look for highest page number in /hdporn/N links
-      var pgNums = [];
-      var pgRe = /\/hdporn\/(\d+)/g;
-      var m;
-      while ((m = pgRe.exec(html)) !== null) {
-        var n = parseInt(m[1], 10);
-        if (!isNaN(n)) pgNums.push(n);
-      }
-      var total = pgNums.length ? Math.max.apply(null, pgNums) : p + 5;
-      return { items: items, total_pages: total };
+      // Generous forward window; the cross-page dedup guard caps it cleanly at the real
+      // end. (The old `/hdporn/N` page-number scrape matched the leading digits of video
+      // SLUGS, e.g. /hdporn/82041-... → 82041, producing a huge bogus total_pages.)
+      return { items: items, total_pages: _derivePages(items.length, p, 50) };
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
