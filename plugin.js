@@ -2923,6 +2923,11 @@ SOURCES.push({
       var viewsMatch = block.match(/class="[^"]*format-views[^"]*"[^>]*>\s*([\d.,]+)/);
       var views = viewsMatch ? parseViews(viewsMatch[1]) : 0;
 
+      // Hover-preview mp4 — the <a class="frame video"> carries data-clip="…-clip.mp4?…".
+      // URL is protocol-relative (//cdne-mobile.youjizz.com/…); prefix https:.
+      var pvM = block.match(/data-clip="([^"]+\.mp4[^"]*)"/i);
+      var preview = pvM ? pvM[1].replace(/^\/\//, 'https://') : '';
+
       items.push({
         id: 'yj-' + id,
         source: 'youjizz',
@@ -2931,7 +2936,8 @@ SOURCES.push({
         hd: hd,
         url: videoUrl,
         duration: duration,
-        views: views
+        views: views,
+        preview: preview || undefined
       });
     }
     return items;
@@ -3390,9 +3396,29 @@ function _porntrexPages(html) {
       if (/2160|\b4k\b/i.test(chunk)) hd = '4K';
       else if (/class="[^"]*\bhd\b[^"]*"|>\s*HD\s*<|is_hd|hd-(?:button|mark)/i.test(chunk)) hd = 'HD';
 
+      // Hover-preview mp4 — KVS cards expose it via one of several per-site attrs.
+      // A per-site cfg.previewRx wins; otherwise probe the known KVS variants in
+      // order: data-preview, vthumb, data-trailer, data-video, then an inline
+      // <video class="...trailer..." src="…mp4">. Absolute URL guaranteed by source
+      // markup (all confirmed full https:// in the verification curls).
+      var preview = '';
+      if (cfg.previewRx) {
+        preview = _attr(chunk, cfg.previewRx);
+      }
+      if (!preview) preview = _attr(chunk, /data-preview="([^"]+\.mp4[^"]*)"/i);
+      if (!preview) preview = _attr(chunk, /\bvthumb="([^"]+\.mp4[^"]*)"/i);
+      if (!preview) preview = _attr(chunk, /data-trailer="([^"]+\.mp4[^"]*)"/i);
+      if (!preview) preview = _attr(chunk, /data-video="([^"]+\.mp4[^"]*)"/i);
+      // Inline <video> trailer: attribute order varies (class before OR after src,
+      // e.g. hellporno emits src= then class="trailer_video"), so match the trailer
+      // mp4 URL directly — these are always named "…_trailer[_360p].mp4".
+      if (!preview) preview = _attr(chunk, /src="([^"]+_trailer[^"]*\.mp4[^"]*)"/i);
+      if (!preview) preview = _attr(chunk, /<video[^>]*class="[^"]*trailer[^"]*"[^>]*src="([^"]+\.mp4[^"]*)"/i);
+
       if (title || thumb) {
         items.push({ id: id, source: cfg.id, title: title, thumb: thumb,
-                     url: videoUrl, duration: duration, views: views, hd: hd || undefined });
+                     url: videoUrl, duration: duration, views: views, hd: hd || undefined,
+                     preview: preview || undefined });
       }
     }
 
@@ -3657,8 +3683,11 @@ function _3movsCards(html) {
         var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
         var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
 
+        // Hover-preview mp4 — every 3movs card carries data-preview="…_preview.mp4/".
+        var preview = _attr(chunk, /data-preview="([^"]+\.mp4[^"]*)"/i);
+
         if (title || thumb) {
-            items.push({ id: id, source: '3movs', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
+            items.push({ id: id, source: '3movs', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views, preview: preview || undefined });
         }
     }
     return items;
@@ -3804,8 +3833,11 @@ function _pornveCards(html) {
 
         var views = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
 
+        // Hover-preview mp4 — every pornve card carries data-preview="…_preview.mp4/".
+        var preview = _attr(chunk, /data-preview="([^"]+\.mp4[^"]*)"/i);
+
         if (title || thumb) {
-            items.push({ id: id, source: 'pornve', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
+            items.push({ id: id, source: 'pornve', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views, preview: preview || undefined });
         }
     }
     return items;
@@ -4286,6 +4318,12 @@ SOURCES.push(_kvsEngine({
                      block.match(/([\d]+:[\d]{2})/);
       var duration = durMatch ? parseDur(durMatch[1].trim()) : 0;
 
+      // Hover-preview mp4 — each card has <video … src="…_trailer_360p.mp4" class="trailer_video">.
+      // The class follows src in the live markup, so match the "_trailer_" filename directly.
+      var pvM = block.match(/src="([^"]+_trailer[^"]*\.mp4[^"]*)"/i) ||
+                block.match(/<video[^>]*class="[^"]*trailer[^"]*"[^>]*src="([^"]+\.mp4[^"]*)"/i);
+      var preview = pvM ? pvM[1] : '';
+
       items.push({
         id: 'hp-' + id,
         source: 'hellporno',
@@ -4293,7 +4331,8 @@ SOURCES.push(_kvsEngine({
         thumb: thumb,
         url: videoUrl,
         duration: duration,
-        views: 0
+        views: 0,
+        preview: preview || undefined
       });
     }
     return items;
