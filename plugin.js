@@ -3193,9 +3193,14 @@ function _porntrexPages(html) {
       var viewsStr = _attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</);
       var views    = parseViews(viewsStr);
 
+      // HD/4K badge — KVS listing cards expose a per-card quality marker.
+      var hd = '';
+      if (/2160|\b4k\b/i.test(chunk)) hd = '4K';
+      else if (/class="[^"]*\bhd\b[^"]*"|>\s*HD\s*<|is_hd|hd-(?:button|mark)/i.test(chunk)) hd = 'HD';
+
       if (title || thumb) {
         items.push({ id: id, source: cfg.id, title: title, thumb: thumb,
-                     url: videoUrl, duration: duration, views: views });
+                     url: videoUrl, duration: duration, views: views, hd: hd || undefined });
       }
     }
 
@@ -4431,7 +4436,11 @@ SOURCES.push({
                 var pjStr = fileM[1];
                 var quality = {};
                 var best = '';
-                var pjRe = /(?:\[([^\]]+)\])?(https?:\/\/[^,\[\]<>\s"']+\.mp4)/gi;
+                // Allow whitespace between the [label] and the URL — lenporno emits
+                // "[240p] https://...mp4,[480p] https://...mp4"; without \s* the label
+                // failed to bind, every url fell to the unlabeled branch, and best
+                // stayed the FIRST (240p). With it, the quality map fills → max wins.
+                var pjRe = /(?:\[([^\]]+)\]\s*)?(https?:\/\/[^,\[\]<>\s"']+\.mp4)/gi;
                 var m;
                 while ((m = pjRe.exec(pjStr)) !== null) {
                     var lbl = m[1] ? m[1].trim() : null;
