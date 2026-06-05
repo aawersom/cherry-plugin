@@ -659,9 +659,14 @@
     // Right-edge action-menu applicability (Поиск → Сортировка → Категории).
     // model_url excluded: model browse is already filtered to a performer.
     var _source    = source;
-    var _canSearch = !object.is_favorites && !object.all_sources && !object._related_items && !object.model_url;
+    var _canSearch = !object.is_favorites && !object.all_sources && !object._related_items && !object.model_url && !object.models_index;
     var _hasSorts  = !!(source && source.cfg && source.cfg.sorts && source.cfg.sorts.length);
     var _hasCats   = !!(source && source.cfg && source.cfg.categories && source.cfg.categories.length);
+    // «Модели»: offered only when the adapter can list a model index, and only on a
+    // normal browse grid (not inside model browse / search / favorites / all-sources).
+    var _hasModels = !!(source && source.getModels &&
+                        !object.is_favorites && !object.all_sources &&
+                        !object._related_items && !object.model_url && !object.models_index);
     // A2: all_sources search has no single source to honor a server sort, so offer
     // a lightweight CLIENT-side sort (relevance/duration) applied in _gridLoad.
     var _hasClientSort = !!(object.all_sources && object.query);
@@ -768,6 +773,31 @@
       // Paged modes need a source adapter.
       var src = sourceById(object.source_id);
       if (!src) { resolve([], 1); return; }
+
+      // Models INDEX mode — a grid of model cards (not videos). Each becomes a
+      // _model card whose onEnter opens that model's videos via model_url.
+      if (object.models_index) {
+        if (!src.getModels) { resolve([], 1); return; }
+        src.getModels(page).then(function (models) {
+          models = models || [];
+          var cards = models.map(function (m) {
+            return {
+              id:        'model_' + (m.url || m.name),
+              source:    src.id,
+              title:     m.name || _titleFromUrl(m.url),
+              thumb:     m.thumb || '',
+              url:       m.url,
+              _model:    true,
+              model_url: m.url
+            };
+          });
+          resolve(cards.map(toCard), _derivePages(cards.length, page, 20));
+        }).catch(function (err) {
+          console.warn('[Cherry] models_index load error (page ' + page + '):', err);
+          reject();
+        });
+        return;
+      }
 
       var promise;
       if (object.model_url) {
@@ -925,6 +955,19 @@
       });
     }
 
+    // «Модели» — open this source's model INDEX grid (models_index mode).
+    function _openModels() {
+      if (!_source || !_source.getModels) return;
+      Lampa.Activity.push({
+        component:    'cherry_grid',
+        title:        Lampa.Lang.translate('cherry_models') + ' · ' + _source.name,
+        source_id:    object.source_id,
+        models_index: true,
+        page:         1
+      });
+      Lampa.Controller.toggle('content');
+    }
+
     // A2: client-side sort for all_sources search. Re-pushes the same all_sources
     // activity with a client_sort param that _gridLoad applies after building flat.
     // Only metadata that exists on every adapter card is offered (duration);
@@ -966,6 +1009,7 @@
       if (_hasSorts)      items.push({ title: Lampa.Lang.translate('cherry_sort'),     action: 'sort'       });
       if (_hasClientSort) items.push({ title: Lampa.Lang.translate('cherry_sort'),     action: 'clientsort' });
       if (_hasCats)       items.push({ title: Lampa.Lang.translate('cherry_category'), action: 'cat'        });
+      if (_hasModels)     items.push({ title: Lampa.Lang.translate('cherry_models'),   action: 'models'     });
       if (!items.length) return false;
       Lampa.Select.show({
         title: _source ? _source.name : 'Cherry',
@@ -975,6 +1019,7 @@
           else if (item.action === 'sort')       _openSort();
           else if (item.action === 'clientsort') _openClientSort();
           else if (item.action === 'cat')        _openCat();
+          else if (item.action === 'models')     _openModels();
         },
         onBack: function () { Lampa.Controller.toggle('content'); }
       });
@@ -1065,6 +1110,17 @@
     comp.cardRender = function (object, element, card) {
       card.onEnter = function () {
         _stopCurrentPreview();
+        // Model card → open that performer's videos via the model_url grid path.
+        if (element._model) {
+          Lampa.Activity.push({
+            component: 'cherry_grid',
+            title:     element.title,
+            source_id: element.source,
+            model_url: element.model_url,
+            page:      1
+          });
+          return;
+        }
         var s = sourceById(element.source);
         if (s) playVideo(element, s);
         else Lampa.Noty.show(Lampa.Lang.translate('cherry_error'), { style: 'warn' });
@@ -1438,6 +1494,7 @@
       cherry_category_default: { ru: 'Все категории',       en: 'All categories'     },
       cherry_model_videos:     { ru: 'Видео модели',        en: 'Model videos'       },
       cherry_model:            { ru: 'Модель',              en: 'Model'              },
+      cherry_models:           { ru: 'Модели',              en: 'Models'             },
       cherry_preview_setting:  { ru: 'Предпросмотр',        en: 'Preview'            },
       cherry_related:          { ru: 'Похожие',             en: 'Related'            },
       cherry_proxy_key_init:   { ru: 'Cherry: ключ прокси — 1206. Для смены — измените cherry_proxy_key в хранилище Lampa.', en: 'Cherry: proxy key — 1206. To change, update cherry_proxy_key in Lampa Storage.' }
@@ -1807,6 +1864,68 @@ function _splitCards(html, splitRx) {
 }
 
 /**
+ * Humanize a URL slug into a display name: "abella-danger" → "Abella Danger".
+ * Used for model index entries whose markup carries no clean name text.
+ * @param {string} slug
+ * @returns {string}
+ */
+function _humanizeName(slug) {
+    var s = String(slug || '').replace(/\.(html?|php)$/i, '').replace(/[-_]+/g, ' ').trim();
+    return s.replace(/\b([a-z])/g, function (m) { return m.toUpperCase(); });
+}
+
+/**
+ * Generic model-INDEX scraper shared by HTML adapters. Walks each href matching
+ * `hrefRx`, derives the model page url + display name (+ optional thumb) from the
+ * surrounding chunk, and dedups by url. Mirrors the per-card parser pattern but
+ * returns [{name, url, thumb}] for the "Модели" discovery grid.
+ *
+ * @param {string} html
+ * @param {Object} opts
+ * @param {RegExp} opts.hrefRx       global regex; group1 = href (group used for url)
+ * @param {Function} [opts.normalizeUrl]  (rawHref) → absolute model url
+ * @param {Function} [opts.exclude]  (url) → true to skip (nav/pagination/sort links)
+ * @param {RegExp[]} [opts.nameRx]   title/alt/span patterns tried against the chunk
+ * @param {RegExp[]} [opts.thumbRx]  thumb patterns tried against the chunk
+ * @param {number} [opts.window]     chunk size after the href (default 500)
+ * @returns {Array<{name:string,url:string,thumb:string}>}
+ */
+function _parseModelIndex(html, opts) {
+    var items = [];
+    var seen  = {};
+    var win   = opts.window || 500;
+    var m;
+    opts.hrefRx.lastIndex = 0;
+    while ((m = opts.hrefRx.exec(html)) !== null) {
+        var raw = m[1];
+        var url = opts.normalizeUrl ? opts.normalizeUrl(raw, m) : raw;
+        if (!url || seen[url]) continue;
+        if (opts.exclude && opts.exclude(url)) continue;
+        seen[url] = true;
+
+        var chunk = html.slice(m.index, m.index + win);
+
+        var name = '';
+        var nameRx = opts.nameRx || [];
+        for (var ni = 0; ni < nameRx.length; ni++) {
+            name = _decodeHtml(_attr(chunk, nameRx[ni]));
+            if (name) break;
+        }
+        if (!name) name = _humanizeName(url.replace(/\/+$/, '').split('/').pop());
+
+        var thumb = '';
+        var thumbRx = opts.thumbRx || [];
+        for (var ti = 0; ti < thumbRx.length; ti++) {
+            thumb = _attr(chunk, thumbRx[ti]);
+            if (thumb) break;
+        }
+
+        items.push({ name: name, url: url, thumb: thumb });
+    }
+    return items;
+}
+
+/**
  * Pick the highest MP4 quality label from a set of KVS stream URLs.
  * Labels found in filename portion: _480p, _720p, _1080p, _2160p.
  * @param {string[]} urls
@@ -1969,6 +2088,22 @@ SOURCES.push({
         : (p + 5);
       return { items: items, total_pages: total || 1 };
     }).catch(function() { return { items: [], total_pages: 0 }; });
+  },
+
+  // Models: /pornstars HTML index (paginated ?page=N). Links /pornstar/{slug};
+  // name in alt=, thumb in data-image. modelUrl = /pornstar/{slug} (NO /videos —
+  // the existing browseByModel appends "/videos?page=P" itself).
+  getModels: function(page) {
+    var p = page || 1;
+    var url = 'https://www.pornhub.com/pornstars' + (p > 1 ? '?page=' + p : '');
+    return cherryFetch(url).then(function(html) {
+      return _parseModelIndex(html, {
+        hrefRx: /href="(\/pornstar\/[^"\/?#]+)"/g,
+        normalizeUrl: function(raw) { return 'https://www.pornhub.com' + raw; },
+        nameRx: [/alt="([^"]+)"/],
+        thumbRx: [/data-image="(https?:\/\/[^"]+)"/i, /data-mediumthumb="(https?:\/\/[^"]+)"/i]
+      });
+    }).catch(function() { return []; });
   },
 
   getRelated: function(video) {
@@ -2166,6 +2301,19 @@ SOURCES.push({
       var items = self._parseCards(html, p);
       return { items: items, total_pages: _derivePages(items.length, p, 20) };
     }).catch(function() { return { items: [], total_pages: 0 }; });
+  },
+
+  // Models: /pornstars-index → /pornstars/{slug} links. ONLY the /pornstars/
+  // links are used (they render thumb-block cards parseable by _parseCards via
+  // browseByModel); /models/{slug} pages use a non-thumb-block markup _parseCards
+  // misses, so they are skipped. Index has no clean name text → derive from slug.
+  getModels: function() {
+    return cherryFetch('https://www.xvideos.com/pornstars-index').then(function(html) {
+      return _parseModelIndex(html, {
+        hrefRx: /href="(\/pornstars\/[^"\/?#]+)"/g,
+        normalizeUrl: function(raw) { return 'https://www.xvideos.com' + raw; }
+      });
+    }).catch(function() { return []; });
   },
 
   getRelated: function(video) {
@@ -3341,6 +3489,27 @@ function _porntrexPages(html) {
         }).catch(function () { return []; });
       },
 
+      // «Модели» — model INDEX scrape (only when the cfg declares one). Returns
+      // [{name,url,thumb}] for the models_index grid. Reuses _parseModelIndex.
+      getModels: cfg.modelIndex ? function (page) {
+        return cherryFetch(cfg.modelIndex.url(page || 1)).then(function (html) {
+          return _parseModelIndex(html, cfg.modelIndex);
+        }).catch(function () { return []; });
+      } : undefined,
+
+      // browseByModel — a model's videos, reusing THIS engine's card parser
+      // (KVS model pages render listing-identical cards). Never touches getStream.
+      browseByModel: cfg.modelIndex ? function (modelUrl, page) {
+        var p = page || 1;
+        var url = cfg.modelIndex.videosUrl
+          ? cfg.modelIndex.videosUrl(modelUrl, p)
+          : _buildCatUrl(modelUrl.replace(/\/+$/, '') + '/{page}', '', p, 1, true);
+        return cherryFetch(url).then(function (html) {
+          var items = _kvsParseCards(html, cfg);
+          return { items: items, total_pages: _kvsPages(html, cfg.pagesRx, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+      } : undefined,
+
       getStream: cfg.getStream
     };
   }
@@ -3765,6 +3934,36 @@ SOURCES.push({
 
     getRelated: _relatedFrom(_porndigCards),
 
+    // Models: /pornstars/ index (30/page, paginated /pornstars/page/{N}/). Model
+    // links /pornstars/{id}/{slug}.html (relative); name in title=. Per-model page
+    // renders 30 listing cards (reuse _porndigCards). Pagination /page/{N}/.
+    getModels: function (page) {
+        var p = page || 1;
+        var url = p > 1
+            ? 'https://porndig.com/pornstars/page/' + p + '/'
+            : 'https://porndig.com/pornstars/';
+        return cherryFetch(url).then(function (html) {
+            return _parseModelIndex(html, {
+                hrefRx: /href="((?:https?:\/\/porndig\.com)?\/pornstars\/\d+\/[^"]+\.html)"/g,
+                normalizeUrl: function (raw) {
+                    return raw.charAt(0) === '/' ? 'https://porndig.com' + raw : raw;
+                },
+                nameRx: [/title="([^"]+)"/, /<h3>([^<]+)<\/h3>/],
+                thumbRx: [/(?:data-src|src)="(https?:\/\/[^"]+\.jpe?g[^"]*)"/i]
+            });
+        }).catch(function () { return []; });
+    },
+
+    browseByModel: function (modelUrl, page) {
+        var p = page || 1;
+        var u = modelUrl.replace(/\.html$/i, '');
+        var url = p > 1 ? u + '/page/' + p + '/' : modelUrl;
+        return cherryFetch(url).then(function (html) {
+            var items = _porndigCards(html);
+            return { items: items, total_pages: _porndigPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
             var m = /src="(https?:\/\/videos\.porndig\.com\/[^"]+)"/i.exec(html);
@@ -4168,6 +4367,21 @@ SOURCES.push(_kvsEngine({
     normalizeUrl: function(rawUrl) {
         return rawUrl.charAt(0) === '/' ? 'https://sex.pornobolt.in' + rawUrl : rawUrl;
     },
+    // Models: /aktrisy index (36 models, relative /models/{name} links, name in
+    // .dropdown-title, thumb in data-orig). Per-model /models/{name}/{page} cards.
+    modelIndex: {
+        url: function() { return 'https://sex.pornobolt.in/aktrisy'; },
+        hrefRx: /href="((?:https?:\/\/sex\.pornobolt\.in)?\/models\/[^"\/]+)"/g,
+        normalizeUrl: function(raw) {
+            return raw.charAt(0) === '/' ? 'https://sex.pornobolt.in' + raw : raw;
+        },
+        nameRx: [/class="dropdown-title">([^<]+)</],
+        thumbRx: [/data-orig="(https?:\/\/[^"]+\.jpe?g)"/i],
+        videosUrl: function(modelUrl, p) {
+            var u = modelUrl.replace(/\/+$/, '');
+            return p > 1 ? u + '/' + p : u;
+        }
+    },
     chunkWindow: { before: 800, after: 600 },
     thumbRx: [
         /(?:data-src|src)="(https?:\/\/pbcdn\.tv\/pornobolt-kartinki\/huge-[^"]+\.jpe?g)"/i
@@ -4226,6 +4440,18 @@ SOURCES.push(_kvsEngine({
     hrefRxSrc: 'href="(https?://crocotube\\.com/videos/[^"]+)"',
     idFromUrl: function(url) {
         return url.replace(/^https?:\/\/[^/]+\/videos\//, '').replace(/[^a-z0-9]/gi, '_');
+    },
+    // Models: /pornstars/ index (single-page, 5331 models inline). Per-model page
+    // /pornstars/{slug}/ renders listing cards (reuse _kvsParseCards via browseByModel).
+    modelIndex: {
+        url: function() { return 'https://crocotube.com/pornstars/'; },
+        hrefRx: /href="(https?:\/\/crocotube\.com\/pornstars\/[^"\/]+\/)"/g,
+        nameRx: [/<span>([^<]+)<\/span>/, /alt="([^"]+)"/],
+        thumbRx: [/(?:data-src|src)="(https?:\/\/[^"]+\.jpe?g)"/i],
+        videosUrl: function(modelUrl, p) {
+            var u = modelUrl.replace(/\/+$/, '');
+            return p > 1 ? u + '/' + p + '/' : u + '/';
+        }
     },
     chunkWindow: { before: 0, after: 1000 },
     thumbRx: [
@@ -4346,6 +4572,33 @@ SOURCES.push({
             : 'https://www1.ebun.tv/latest-updates/?page=' + p;
         return cherryFetch(url).then(function (html) {
             return { items: _ebunCards(html), total_pages: _ebunPages(html) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    // Models: /models/ index lists real model links /models/{slug}/ (excluding
+    // single-letter section nav and /{xx}-model/total-videos/ country filters).
+    // Per-model /models/{slug}/ renders listing cards (reuse _ebunCards). Model
+    // pages appear single-page (/{slug}/2/ → 404), so total_pages derives small.
+    getModels: function () {
+        return cherryFetch('https://www1.ebun.tv/models/').then(function (html) {
+            return _parseModelIndex(html, {
+                hrefRx: /href="(https?:\/\/www1\.ebun\.tv\/models\/[^"]+\/)"/g,
+                exclude: function (url) {
+                    return /\/models\/[A-Za-z0-9]\/$/.test(url) || /\/total-videos\//.test(url);
+                },
+                nameRx: [/title="([^"]+)"/],
+                thumbRx: [/(?:data-src|src)="(https?:\/\/[^"]+\.(?:jpe?g|webp|png))"/i]
+            });
+        }).catch(function () { return []; });
+    },
+
+    browseByModel: function (modelUrl, page) {
+        var p = page || 1;
+        var u = modelUrl.replace(/\/+$/, '');
+        var url = p > 1 ? u + '/' + p + '/' : u + '/';
+        return cherryFetch(url).then(function (html) {
+            var items = _ebunCards(html);
+            return { items: items, total_pages: _ebunPages(html) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
@@ -4639,6 +4892,34 @@ SOURCES.push({
     },
 
     getRelated: _relatedFrom(_jopaCards),
+
+    // Models: /models index (24 real models/page; excludes numeric pagination
+    // links and /models/sort-by-* sort links). Per-model /models/{slug}/{page}
+    // renders listing cards (reuse _jopaCards). Index name markup is garbled
+    // Cyrillic → derive name from slug via _humanizeName (default in helper).
+    getModels: function (page) {
+        var p = page || 1;
+        var url = p > 1 ? 'https://jopaonline.mobi/models/' + p : 'https://jopaonline.mobi/models';
+        return cherryFetch(url).then(function (html) {
+            return _parseModelIndex(html, {
+                hrefRx: /href="(https?:\/\/jopaonline\.mobi\/models\/[a-z0-9-]+)"/g,
+                exclude: function (u) {
+                    return /\/models\/\d+$/.test(u) || /\/models\/sort-by-/.test(u);
+                },
+                thumbRx: [/(?:data-src|src|class="lazylodsrc"[^>]*src)="(https?:\/\/[^"]+\.(?:jpe?g|webp|png))"/i]
+            });
+        }).catch(function () { return []; });
+    },
+
+    browseByModel: function (modelUrl, page) {
+        var p = page || 1;
+        var u = modelUrl.replace(/\/+$/, '');
+        var url = p > 1 ? u + '/' + p : u;
+        return cherryFetch(url).then(function (html) {
+            var items = _jopaCards(html);
+            return { items: items, total_pages: _jopaPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
 
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
