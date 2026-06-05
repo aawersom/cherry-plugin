@@ -2748,10 +2748,235 @@ describe('FamilyPorn card parser (curl-confirmed /videos/{slug}/ format)', funct
 });
 
 // ============================================================
-// browseByModel card parity — model-grid cards must carry the SAME fields
-// (source/thumb/title/url/duration/preview where the site exposes them) as
-// the listing cards, so they render IDENTICALLY inside a model.
+// _parseModelIndex + per-channel model INDEX scrape (3movs/pornve/familyporn/
+// perfektdamen/porntrex). Verbatim mirror of the shipped helpers, then a
+// realistic-markup fixture per added channel. Plus anti-drift on the shipped
+// getModels hrefRx/thumbRx so the parser stays in sync with the markup.
 // ============================================================
+
+// ---- _humanizeName (verbatim from plugin.js) ----
+function _humanizeName(slug) {
+    var s = String(slug || '').replace(/\.(html?|php)$/i, '').replace(/[-_]+/g, ' ').trim();
+    return s.replace(/\b([a-z])/g, function (m) { return m.toUpperCase(); });
+}
+// ---- _parseModelIndex (verbatim from plugin.js) ----
+function _parseModelIndex(html, opts) {
+    var items = [];
+    var seen  = {};
+    var win   = opts.window || 500;
+    var m;
+    opts.hrefRx.lastIndex = 0;
+    while ((m = opts.hrefRx.exec(html)) !== null) {
+        var raw = m[1];
+        var url = opts.normalizeUrl ? opts.normalizeUrl(raw, m) : raw;
+        if (!url || seen[url]) continue;
+        if (opts.exclude && opts.exclude(url)) continue;
+        seen[url] = true;
+        var chunk = html.slice(m.index, m.index + win);
+        var name = '';
+        var nameRx = opts.nameRx || [];
+        for (var ni = 0; ni < nameRx.length; ni++) {
+            name = _decodeHtml(_attr(chunk, nameRx[ni]));
+            if (name) break;
+        }
+        if (!name) name = _humanizeName(url.replace(/\/+$/, '').split('/').pop());
+        var thumb = '';
+        var thumbRx = opts.thumbRx || [];
+        for (var ti = 0; ti < thumbRx.length; ti++) {
+            thumb = _attr(chunk, thumbRx[ti]);
+            if (thumb) break;
+        }
+        items.push({ name: name, url: url, thumb: thumb });
+    }
+    return items;
+}
+
+const MODEL_PLUGIN_SRC = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+// Slice the shipped getModels body for a given source id (adapter blocks are in
+// SOURCES.push order; we cut from the getModels marker to the next browseByModel).
+function getModelsBody(id) {
+  var at = MODEL_PLUGIN_SRC.indexOf("id: '" + id + "'");
+  var gm = MODEL_PLUGIN_SRC.indexOf('getModels:', at);
+  var end = MODEL_PLUGIN_SRC.indexOf('browseByModel:', gm);
+  return MODEL_PLUGIN_SRC.slice(gm, end);
+}
+// Slice the shipped browseByModel body for a given source id.
+function browseByModelBody(id) {
+  var at = MODEL_PLUGIN_SRC.indexOf("id: '" + id + "'");
+  var bm = MODEL_PLUGIN_SRC.indexOf('browseByModel:', at);
+  var end = MODEL_PLUGIN_SRC.indexOf('getStream:', bm);
+  return MODEL_PLUGIN_SRC.slice(bm, end);
+}
+
+describe('3movs getModels (/pornstars/ index — avatar + sort-nav exclude)', function () {
+  // Real markup: <a class="thumb album item model"><a href="/pornstars/{slug}/"
+  // class="wrap_image" title="Name"><img data-src="…/contents/models/…jpg"></a>
+  function card(slug, name) {
+    return '<div class="thumb album item model"><div class="th">' +
+      '<a href="https://www.3movs.com/pornstars/' + slug + '/" class="wrap_image" title="' + name + '">' +
+      '<img class="img lazyload" src="data:image/gif;base64,R0lGOD" ' +
+      'data-src="https://img.3movs.com/contents/models/701/s1_' + slug + '.jpg" alt="' + name + '"/></a></div></div>';
+  }
+  const html = card('abella-danger', 'Abella Danger') + card('lana-rhoades', 'Lana Rhoades') +
+    // sort-control links that must be excluded:
+    '<a href="https://www.3movs.com/pornstars/title/">Name</a>' +
+    '<a href="https://www.3movs.com/pornstars/most-viewed/">Views</a>';
+  const opts = {
+    hrefRx: /href="(https?:\/\/(?:www\.)?3movs\.com\/pornstars\/[a-z][a-z0-9-]+\/)"/g,
+    exclude: function (u) { return /\/pornstars\/(?:title|top-rated|most-viewed|videos|videos-rating|videos-views)\/$/.test(u); },
+    nameRx: [/title="([^"]+)"/, /alt="([^"]+)"/],
+    thumbRx: [/(?:data-src|data-webp|src)="(https?:\/\/[^"]+\.jpe?g)"/i]
+  };
+
+  it('parses model cards with name + avatar, excluding sort-nav links', function () {
+    var items = _parseModelIndex(html, opts);
+    expect(items.length).toBe(2);
+    expect(items[0].name).toBe('Abella Danger');
+    expect(items[0].url).toBe('https://www.3movs.com/pornstars/abella-danger/');
+    expect(items[0].thumb).toContain('/contents/models/');
+  });
+
+  it('browseByModel reuses the canonical _3movsCards + _3movsPages parser', function () {
+    var body = browseByModelBody('3movs');
+    expect(body).toContain('_3movsCards(html)');
+    expect(body).toContain('_3movsPages(html');
+  });
+
+  it('anti-drift: shipped 3movs getModels carries pornstars hrefRx + avatar thumbRx', function () {
+    var body = getModelsBody('3movs');
+    expect(body).toContain('3movs\\.com\\/pornstars\\/');
+    expect(body).toContain('thumbRx');
+    expect(body).toContain('most-viewed');
+  });
+});
+
+describe('pornve getModels (/models/ index — cdn avatar)', function () {
+  function card(slug, name) {
+    return '<div class="thumb"><a class="item" href="https://pornve.com/models/' + slug + '/" title="' + name + '">' +
+      '<div class="img-holder"><img src="https://cdn.pornve.com/contents/models/19385/s1_' + slug + '.jpg" alt="' + name + '"/></div></a></div>';
+  }
+  const opts = {
+    hrefRx: /href="(https?:\/\/pornve\.com\/models\/[a-z][a-z0-9-]+\/)"/g,
+    nameRx: [/title="([^"]+)"/, /alt="([^"]+)"/],
+    thumbRx: [/(?:data-src|src)="(https?:\/\/[^"]+\/contents\/models\/[^"]+\.jpe?g)"/i, /(?:data-src|src)="(https?:\/\/[^"]+\.jpe?g)"/i]
+  };
+  it('parses model cards with name + cdn avatar', function () {
+    var items = _parseModelIndex(card('vittoria-divine', 'Vittoria Divine') + card('riley-reyes', 'Riley Reyes'), opts);
+    expect(items.length).toBe(2);
+    expect(items[1].name).toBe('Riley Reyes');
+    expect(items[1].url).toBe('https://pornve.com/models/riley-reyes/');
+    expect(items[1].thumb).toContain('cdn.pornve.com/contents/models/');
+  });
+  it('browseByModel reuses the canonical _pornveCards + _pornvePages parser', function () {
+    var body = browseByModelBody('pornve');
+    expect(body).toContain('_pornveCards(html)');
+    expect(body).toContain('_pornvePages(html)');
+  });
+  it('anti-drift: shipped pornve getModels carries models hrefRx + thumbRx', function () {
+    var body = getModelsBody('pornve');
+    expect(body).toContain('pornve\\.com\\/models\\/');
+    expect(body).toContain('contents\\/models\\/');
+  });
+});
+
+describe('familyporn getModels (single-page A-Z roster — letter-tile fallback)', function () {
+  // Real markup: <a class="link models-link" href="/models/{slug}/" title="Name">
+  // <div class="name">Name</div><span class="text">N video</span></a> — NO avatar.
+  function card(slug, name) {
+    return '<li class="item models-list"><div class="thumb-vertical">' +
+      '<a class="link models-link" href="https://familyporn.tv/models/' + slug + '/" title="' + name + '">' +
+      '<div class="name">' + name + '</div><span class="text">5 video</span></a></div></li>';
+  }
+  const opts = {
+    hrefRx: /href="(https?:\/\/familyporn\.tv\/models\/[a-z][a-z0-9-]+\/)"/g,
+    nameRx: [/title="([^"]+)"/, /class="name"[^>]*>([^<]+)</],
+    thumbRx: [/(?:data-original|data-src|src)="(https?:\/\/[^"]+\.(?:jpe?g|webp|png))"/i]
+  };
+  it('parses name-only model cards (no avatar → empty thumb)', function () {
+    var items = _parseModelIndex(card('zuzi-rose', 'Zuzi Rose') + card('tony', 'Tony'), opts);
+    expect(items.length).toBe(2);
+    expect(items[0].name).toBe('Zuzi Rose');
+    expect(items[0].url).toBe('https://familyporn.tv/models/zuzi-rose/');
+    expect(items[0].thumb).toBe('');
+  });
+  it('browseByModel reuses the canonical _familypornCards + _familypornPages parser', function () {
+    var body = browseByModelBody('familyporn');
+    expect(body).toContain('_familypornCards(html)');
+    expect(body).toContain('_familypornPages(html');
+  });
+  it('anti-drift: shipped familyporn getModels carries models hrefRx', function () {
+    var body = getModelsBody('familyporn');
+    expect(body).toContain('familyporn\\.tv\\/models\\/');
+    expect(body).toContain('thumbRx');
+  });
+});
+
+describe('porntrex getModels (/models/ index — protocol-relative avatar)', function () {
+  function card(slug, name) {
+    return '<div class="item dropdown-item"><a href="https://www.porntrex.com/models/' + slug + '/" title="' + name + '">' +
+      '<div class="image"><img class="thumb lazyload" data-src="//ptx.cdntrex.com/contents/models/3820/s1_x.jpg" alt="' + name + '"/></div>' +
+      '<div class="info">' + name + '</div></a></div>';
+  }
+  const opts = {
+    hrefRx: /href="(https?:\/\/(?:www\.)?porntrex\.com\/models\/[a-z0-9][a-z0-9-]+\/)"/g,
+    exclude: function (u) { return /\/models\/[a-z0-9]\/$/i.test(u); },
+    nameRx: [/title="([^"]+)"/, /alt="([^"]+)"/, /class="info"[^>]*>([^<]+)</],
+    thumbRx: [/(?:data-original|data-src|src)="((?:https?:)?\/\/[^"]+\/contents\/models\/[^"?#]+\.jpe?g)/i, /(?:data-original|data-src|src)="((?:https?:)?\/\/[^"?#]+\.jpe?g)/i]
+  };
+  it('parses model cards + avatar, excludes single-letter nav', function () {
+    var html = card('amy-gross', 'Amy Gross') + card('lana-rhoades', 'Lana Rhoades') +
+      '<a href="https://www.porntrex.com/models/a/">A</a>';
+    var items = _parseModelIndex(html, opts);
+    expect(items.length).toBe(2);
+    expect(items[0].name).toBe('Amy Gross');
+    expect(items[0].thumb).toContain('/contents/models/');
+  });
+  it('browseByModel reuses the canonical _porntrexCards + _porntrexPages parser', function () {
+    var body = browseByModelBody('porntrex');
+    expect(body).toContain('_porntrexCards(html)');
+    expect(body).toContain('_porntrexPages(html)');
+  });
+  it('anti-drift: shipped porntrex getModels carries models hrefRx + letter exclude', function () {
+    var body = getModelsBody('porntrex');
+    expect(body).toContain('porntrex\\.com\\/models\\/');
+    expect(body).toContain('contents\\/models\\/');
+    expect(body).toContain('[a-z0-9]\\/$');
+  });
+});
+
+describe('perfektdamen getModels (/pornstars/ index — relative links + nav exclude)', function () {
+  function card(slug, name) {
+    return '<li class="item"><a href="/pornstars/' + slug + '/" title="' + name + '">' +
+      '<img data-original="//static.perfektdamen.co/models/' + slug + '.jpg" alt="' + name + '"/>' +
+      '<p>' + name + '</p></a></li>';
+  }
+  const opts = {
+    hrefRx: /href="((?:https?:\/\/(?:www\.)?perfektdamen\.co)?\/pornstars\/([a-z0-9][a-z0-9-]*)\/)"/g,
+    exclude: function (u) { return /\/pornstars\/(?:abc|favorites|videos|updated|page|\d+)\/?$/.test(u); },
+    normalizeUrl: function (raw) { return raw.charAt(0) === '/' ? 'https://www.perfektdamen.co' + raw : raw; },
+    nameRx: [/title="([^"]+)"/, /alt="([^"]+)"/, /<p>\s*([^<]+)/],
+    thumbRx: [/<img[^>]+(?:data-original|data-src|src)="([^"?#]+\.(?:jpe?g|webp|png))/i]
+  };
+  it('parses relative model links → absolute url, excludes sort-nav + pagination', function () {
+    var html = card('valentina-nappi', 'Valentina Nappi') + card('riley-reyes', 'Riley Reyes') +
+      '<a href="/pornstars/videos/">Videos</a><a href="/pornstars/2/">2</a>';
+    var items = _parseModelIndex(html, opts);
+    expect(items.length).toBe(2);
+    expect(items[0].name).toBe('Valentina Nappi');
+    expect(items[0].url).toBe('https://www.perfektdamen.co/pornstars/valentina-nappi/');
+    expect(items[0].thumb).toContain('.jpg');
+  });
+  it('browseByModel reuses the canonical _perfektCards + _perfektPages parser', function () {
+    var body = browseByModelBody('perfektdamen');
+    expect(body).toContain('_perfektCards(html)');
+    expect(body).toContain('_perfektPages(html');
+  });
+  it('anti-drift: shipped perfektdamen getModels carries pornstars hrefRx + nav exclude', function () {
+    var body = getModelsBody('perfektdamen');
+    expect(body).toContain('pornstars\\/([a-z0-9]');
+    expect(body).toContain('favorites|videos|updated');
+  });
+});
 
 describe('pornhub _parseHtmlCards (model videos li-block parser)', function () {
   // A videoblock <li> mirroring the real model page: title-href near top, then
