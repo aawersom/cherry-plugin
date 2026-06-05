@@ -972,6 +972,15 @@ describe('P1: plugin.js source assertions (anti-drift)', () => {
     expect(SRC).toMatch(/var\s+f\s*=\s*card\.onFocus/);
     expect(SRC).toMatch(/if\s*\(f\)\s*f\(target,\s*card_data\)/);
   });
+
+  it('onFocus starts a hover-preview for ANY card with element.preview (source-agnostic)', () => {
+    // The render path must be generic: gated only on element.preview (+ the user
+    // setting), NOT on a specific source. So a non-xvideos card (e.g. analdin,
+    // pornve, youjizz) whose parser set .preview gets the same hover treatment.
+    expect(SRC).toMatch(/if\s*\(\s*element\.preview\s*&&[\s\S]*?_startPreview\(\s*target\s*,\s*element\.preview\s*\)/);
+    // Guard against accidental per-source gating of the preview start.
+    expect(SRC).not.toMatch(/element\.source\s*===\s*['"]xvideos['"][\s\S]{0,60}_startPreview/);
+  });
 });
 
 // ============================================================

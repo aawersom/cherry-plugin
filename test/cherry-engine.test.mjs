@@ -158,9 +158,23 @@ function _kvsParseCards(html, cfg) {
     if (/2160|\b4k\b/i.test(chunk)) hd = '4K';
     else if (/class="[^"]*\bhd\b[^"]*"|>\s*HD\s*<|is_hd|hd-(?:button|mark)/i.test(chunk)) hd = 'HD';
 
+    // Hover-preview mp4 (mirror plugin.js): per-site cfg.previewRx wins, else probe
+    // the known KVS variants in order.
+    var preview = '';
+    if (cfg.previewRx) {
+      preview = _attr(chunk, cfg.previewRx);
+    }
+    if (!preview) preview = _attr(chunk, /data-preview="([^"]+\.mp4[^"]*)"/i);
+    if (!preview) preview = _attr(chunk, /\bvthumb="([^"]+\.mp4[^"]*)"/i);
+    if (!preview) preview = _attr(chunk, /data-trailer="([^"]+\.mp4[^"]*)"/i);
+    if (!preview) preview = _attr(chunk, /data-video="([^"]+\.mp4[^"]*)"/i);
+    if (!preview) preview = _attr(chunk, /src="([^"]+_trailer[^"]*\.mp4[^"]*)"/i);
+    if (!preview) preview = _attr(chunk, /<video[^>]*class="[^"]*trailer[^"]*"[^>]*src="([^"]+\.mp4[^"]*)"/i);
+
     if (title || thumb) {
       items.push({ id: id, source: cfg.id, title: title, thumb: thumb,
-                   url: videoUrl, duration: duration, views: views, hd: hd || undefined });
+                   url: videoUrl, duration: duration, views: views, hd: hd || undefined,
+                   preview: preview || undefined });
     }
   }
 
@@ -501,6 +515,57 @@ describe('_kvsParseCards', () => {
     var result = _kvsParseCards(html, cfg);
     expect(result).toHaveLength(1);
     expect(result[0].title).toBe('Bare link');
+  });
+
+  // ---- hover-preview mp4 capture (per-channel KVS variants) -----------------
+  function previewHtml(attrTag) {
+    return [
+      '<a href="https://example.com/videos/55/preview-test/" ' + attrTag + '>',
+      '<img data-src="https://cdn.example.com/t.jpg">',
+      '</a>',
+      '<strong class="title-label">Preview Test</strong>'
+    ].join('\n');
+  }
+
+  it('captures preview from data-preview (crocotube/3movs/pornve)', () => {
+    var html = previewHtml('data-preview="https://example.com/get_file/1/abc/0/55/55_trailer_360p.mp4/"');
+    var r = _kvsParseCards(html, BASE_CFG);
+    expect(r[0].preview).toBe('https://example.com/get_file/1/abc/0/55/55_trailer_360p.mp4/');
+  });
+
+  it('captures preview from vthumb (analdin)', () => {
+    var html = previewHtml('vthumb="https://www.analdin.com/get_file/x/787278_vthumb.mp4/"');
+    var r = _kvsParseCards(html, BASE_CFG);
+    expect(r[0].preview).toBe('https://www.analdin.com/get_file/x/787278_vthumb.mp4/');
+  });
+
+  it('captures preview from data-video (pornobolt)', () => {
+    var html = previewHtml('data-video="https://stat.pornobolt.vip/pornobolt-kartinki/large-slug.mp4"');
+    var r = _kvsParseCards(html, BASE_CFG);
+    expect(r[0].preview).toBe('https://stat.pornobolt.vip/pornobolt-kartinki/large-slug.mp4');
+  });
+
+  it('captures preview from an inline <video> trailer (hellporno: src before class)', () => {
+    var html = [
+      '<a href="https://example.com/videos/55/preview-test/"></a>',
+      '<video muted loop src="https://hellporno.com/get_file/1/x/190000/190613/190613_trailer_360p.mp4" class="trailer_video"></video>',
+      '<strong class="title-label">Preview Test</strong>'
+    ].join('\n');
+    var r = _kvsParseCards(html, BASE_CFG);
+    expect(r[0].preview).toBe('https://hellporno.com/get_file/1/x/190000/190613/190613_trailer_360p.mp4');
+  });
+
+  it('cfg.previewRx override wins over the generic probes', () => {
+    var cfg = Object.assign({}, BASE_CFG, { previewRx: /data-myprev="([^"]+\.mp4)"/i });
+    var html = previewHtml('data-myprev="https://x/custom.mp4" data-preview="https://x/generic.mp4"');
+    var r = _kvsParseCards(html, cfg);
+    expect(r[0].preview).toBe('https://x/custom.mp4');
+  });
+
+  it('card with no preview attr → preview undefined (unaffected)', () => {
+    var r = _kvsParseCards(FIXTURE_HTML, BASE_CFG);
+    expect(r).toHaveLength(1);
+    expect(r[0].preview).toBeUndefined();
   });
 });
 
@@ -1968,8 +2033,10 @@ function yjParseCards(html) {
                      block.match(/src="([^"?#]+\.jpe?g)/i);
     var thumb = thumbMatch ? thumbMatch[1] : '';
     var hd = /class="i-hd"/.test(block) ? 'HD' : '';
+    var pvM = block.match(/data-clip="([^"]+\.mp4[^"]*)"/i);
+    var preview = pvM ? pvM[1].replace(/^\/\//, 'https://') : '';
     items.push({ id: 'yj-' + id, source: 'youjizz', thumb: thumb, hd: hd,
-                 url: videoUrl, duration: 0, views: 0 });
+                 url: videoUrl, duration: 0, views: 0, preview: preview || undefined });
   }
   return items;
 }
@@ -1991,6 +2058,21 @@ describe('S2 youjizz — i-hd marker → v.hd "HD"', function () {
                '<img data-original="https://cdn/x.jpg"></a></div>';
     var items = yjParseCards(html);
     expect(items[0].hd).toBe('');
+  });
+
+  it('captures data-clip mp4 → preview (protocol-relative → https:)', function () {
+    var html = '<div class="video-thumb"><a class="frame video" href="/videos/slug-12345.html" ' +
+               'data-clip="//cdne-mobile.youjizz.com/abc/slug-12345-clip.mp4?token=1">' +
+               '<img data-original="https://cdn/x.jpg"></a></div>';
+    var items = yjParseCards(html);
+    expect(items[0].preview).toBe('https://cdne-mobile.youjizz.com/abc/slug-12345-clip.mp4?token=1');
+  });
+
+  it('card without data-clip → preview undefined', function () {
+    var html = '<div class="video-thumb"><a href="/videos/slug-12345.html">' +
+               '<img data-original="https://cdn/x.jpg"></a></div>';
+    var items = yjParseCards(html);
+    expect(items[0].preview).toBeUndefined();
   });
 });
 
