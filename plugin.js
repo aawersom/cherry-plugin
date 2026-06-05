@@ -2041,7 +2041,7 @@ SOURCES.push({
     ]),
     // Pornhub categories are SLUGS passed to the webmasters API (&category=), not numeric ids.
     // Slugs verified against the webmasters/categories endpoint.
-    categories: _cats('asian:Asian,amateur:Amateur,big-ass:Big Ass,babe:Babe,bbw:BBW,anal:Anal,big-dick:Big Dick,big-tits:Big Tits,blonde:Blonde,blowjob:Blowjob,bondage:Bondage,brunette:Brunette,creampie:Creampie,cumshot:Cumshot,ebony:Ebony,fetish:Fetish,handjob:Handjob,hardcore:Hardcore,latina:Latina,lesbian:Lesbian,mature:Mature,milf:MILF,pornstar:Pornstar,pov:POV,public:Public,red-head:Red Head,small-tits:Small Tits,squirt:Squirt,18-25:Teen 18-25,threesome:Threesome,toys:Toys,interracial:Interracial,gangbang:Gangbang,japanese:Japanese,russian:Russian,webcam:Webcam,hd-porn:HD Porn,vintage:Vintage,compilation:Compilation,parody:Parody')
+    categories: _cats('18-25:Teen 18-25,ai:AI,ai-straight:AI Straight,amateur:Amateur,anal:Anal,arab:Arab,asian:Asian,babe:Babe,babysitter-18:Babysitter 18+,bbw:BBW,behind-the-scenes:Behind The Scenes,big-ass:Big Ass,big-dick:Big Dick,big-tits:Big Tits,bisexual-male:Bisexual Male,black:Black,blonde:Blonde,blowjob:Blowjob,bondage:Bondage,brazilian:Brazilian,british:British,brunette:Brunette,bukkake:Bukkake,cartoon:Cartoon,casting:Casting,celebrity:Celebrity,college-18:College 18+,compilation:Compilation,cosplay:Cosplay,creampie:Creampie,cuckold:Cuckold,cumshot:Cumshot,czech:Czech,deepthroat:Deepthroat,double-penetration:Double Penetration,ebony:Ebony,euro:Euro,exclusive:Exclusive,feet:Feet,female-orgasm:Female Orgasm,fetish:Fetish,ffm:FFM,fingering:Fingering,fisting:Fisting,fmm:FMM,french:French,gangbang:Gangbang,gay:Gay,german:German,golden-shower:Golden Shower,handjob:Handjob,hardcore:Hardcore,hd-porn:HD Porn,hentai:Hentai,indian:Indian,interracial:Interracial,italian:Italian,japanese:Japanese,korean:Korean,latina:Latina,lesbian:Lesbian,lipstick:Lipstick,massage:Massage,masturbation:Masturbation,mature:Mature,milf:MILF,muscular-men:Muscular Men,old-young-18:Old/Young 18+,orgy:Orgy,parody:Parody,party:Party,pissing:Pissing,pornstar:Pornstar,pov:POV,public:Public,pussy-licking:Pussy Licking,real-couples:Real Couples,reality:Reality,red-head:Red Head,role-play:Role Play,romantic:Romantic,rough-sex:Rough Sex,russian:Russian,school-18:School 18+,scissoring:Scissoring,small-tits:Small Tits,smoking:Smoking,solo-female:Solo Female,solo-male:Solo Male,squirt:Squirt,step-fantasy:Step Fantasy,strap-on:Strap On,striptease:Striptease,tattooed-women:Tattooed Women,threesome:Threesome,toys:Toys,trans-male:Trans Male,trans-with-girl:Trans With Girl,trans-with-guy:Trans With Guy,transgender:Transgender,twink-18:Twink 18+,uncensored:Uncensored,verified-amateurs:Verified Amateurs,verified-couples:Verified Couples,verified-models:Verified Models,vintage:Vintage,vr:VR,webcam:Webcam,wet-pussy:Wet Pussy')
   },
 
   // Webmasters API returns {videos:[...]} with NO total_pages key. It serves a
@@ -2319,15 +2319,50 @@ SOURCES.push({
   },
 
   cfg: {
-    sorts: _cats('views:По популярности,uploaddate:Свежее,rating:По рейтингу,length:Длинные'),
+    // Base sorts (map 1:1 to /c/ category path segments AND to search &sort=).
+    // The faceted entries below are SEARCH-ONLY (duration/quality/date facets exist
+    // only on /?k=); browse() strips the ~facet suffix so they degrade to the base
+    // sort if ever chosen on a category. All combos curl-verified (HTTP 200+cards).
+    sorts: _cats('views:По популярности,uploaddate:Свежее,rating:По рейтингу,length:Длинные').concat([
+      { id: 'rating~quality=hd',                 label: 'Поиск: HD по рейтингу' },
+      { id: 'rating~quality=1080P',              label: 'Поиск: 1080p по рейтингу' },
+      { id: 'relevance~durf=10min_more',         label: 'Поиск: длинные (10+ мин)' },
+      { id: 'relevance~durf=20min_more',         label: 'Поиск: длинные (20+ мин)' },
+      { id: 'relevance~durf=1-3min',             label: 'Поиск: короткие (1-3 мин)' },
+      { id: 'uploaddate~datef=today',            label: 'Поиск: за сегодня' },
+      { id: 'uploaddate~datef=week',             label: 'Поиск: за неделю' },
+      { id: 'uploaddate~datef=month',            label: 'Поиск: за месяц' }
+    ]),
     categories: _cats('AI-239:AI,Amateur-65:Amateur,Anal-12:Anal,Arab-159:Arab,Asian_Woman-32:Asian,ASMR-229:ASMR,Ass-14:Ass,bbw-51:BBW,Bi_Sexual-62:Bi,Big_Ass-24:Big Ass,Big_Cock-34:Big Cock,Big_Tits-23:Big Tits,Black_Woman-30:Black,Blonde-20:Blonde,Blowjob-15:Blowjob,Brunette-25:Brunette,Cam_Porn-58:Cam Porn,Creampie-40:Creampie,Cuckold-237:Cuckold/Hotwife,Cumshot-18:Cumshot,Femdom-235:Femdom,Fisting-165:Fisting,Fucked_Up_Family-81:Fucked Up Family,Gangbang-69:Gangbang,Gapes-167:Gapes,Indian-89:Indian,Interracial-27:Interracial,Latina-16:Latina,Lesbian-26:Lesbian,Lingerie-83:Lingerie,Mature-38:Mature,Milf-19:Milf,Oiled-22:Oiled,Redhead-31:Redhead,Solo_and_Masturbation-33:Solo,Squirting-56:Squirting,Stockings-28:Stockings,Teen-13:Teen')
+  },
+
+  // Parse a (possibly faceted) search sort id into the xvideos /?k= query params.
+  // Plain sort ids (views/uploaddate/rating/length) come from the shared sort
+  // dropdown and map 1:1 to &sort=. SEARCH-ONLY facets (duration/quality/date)
+  // ride along as a `~durf=…~quality=…~datef=…` suffix on the id (no ':' so _cats
+  // keeps the id intact). All combos curl-verified (HTTP 200 + cards) on /?k=.
+  _searchFacets: function(sort) {
+    var s = String(sort || '');
+    var parts = s.split('~');
+    var out = { sort: parts[0] || '' };
+    for (var i = 1; i < parts.length; i++) {
+      var kv = parts[i].split('=');
+      if (kv[0] && kv[1]) out[kv[0]] = kv[1];   // durf | quality | datef
+    }
+    return out;
   },
 
   search: function(query, page, sort) {
     var self = this;
     var p = page || 1;
-    // Xvideos p is 0-indexed
-    var url = 'https://www.xvideos2.com/?k=' + encodeURIComponent(query) + '&p=' + (p - 1);
+    // Xvideos p is 0-indexed. Search HONOURS sort + the search-only duration/
+    // quality/date facets (previously the sort param was received but ignored).
+    var f = self._searchFacets(sort);
+    var url = 'https://www.xvideos2.com/?k=' + encodeURIComponent(query) + '&p=' + (p - 1) +
+      (f.sort    ? '&sort='    + f.sort    : '') +
+      (f.durf    ? '&durf='    + f.durf    : '') +
+      (f.quality ? '&quality=' + f.quality : '') +
+      (f.datef   ? '&datef='   + f.datef   : '');
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html, p);
       // xvideos grid serves ~27 cards/page; full batch ⇒ next page exists.
@@ -2340,14 +2375,17 @@ SOURCES.push({
     var p = page || 1;
     var pageIdx = p - 1;
     var url;
+    // Category/homepage listings accept ONLY the base sort (duration/quality/date
+    // facets are search-only on xvideos), so strip any ~facet suffix here.
+    var baseSort = self._searchFacets(sort).sort;
     if (category) {
       // /c/s:{value}/{Label-id}/{page} — sort is a path segment BEFORE the slug;
       // page is 0-based, omitted on page 1. Default sort = views (По популярности).
-      var s = sort || 'views';
+      var s = baseSort || 'views';
       url = _buildCatUrl('https://www.xvideos.com/c/s:' + s + '/{slug}/{page}', category, p, 0, true);
     } else {
       // Non-category homepage: sort='views' → /best/ prefix; else /
-      var base = (sort === 'views') ? 'https://www.xvideos2.com/best/' : 'https://www.xvideos2.com/';
+      var base = (baseSort === 'views') ? 'https://www.xvideos2.com/best/' : 'https://www.xvideos2.com/';
       url = pageIdx === 0 ? base : base + pageIdx;
     }
     return cherryFetch(url).then(function(html) {
@@ -2611,7 +2649,22 @@ SOURCES.push({
   id: 'eporner',
   name: 'Eporner',
   host: 'eporner.com',
-  cfg: { categories: _cats('4k-porn:4K Ultra HD,vr-porn:VR Porn,amateur:Amateur,anal:Anal,asian:Asian,asmr:ASMR,bbw:BBW,bdsm:BDSM,big-ass:Big Ass,big-dick:Big Dick,big-tits:Big Tits,bisexual:Bisexual,blonde:Blonde,blowjob:Blowjob,bondage:Bondage,brunette:Brunette,bukkake:Bukkake,creampie:Creampie,cumshot:Cumshot,double-penetration:Double Penetration,ebony:Ebony,fetish:Fetish,fisting:Fisting,footjob:Footjob,for-women:For Women,gay:Gay,group-sex:Group Sex,handjob:Handjob,hardcore:Hardcore,hentai:Hentai,homemade:Homemade,indian:Indian,interracial:Interracial,japanese:Japanese,latina:Latina,lesbians:Lesbian,lingerie:Lingerie,massage:Massage,masturbation:Masturbation,mature:Mature,milf:MILF,orgy:Orgy,outdoor:Outdoor,petite:Petite,pornstar:Pornstar,pov-porn:POV,public:Public,redhead:Redhead,shemale:Shemale,small-tits:Small Tits,squirt:Squirt,striptease:Striptease,students:Students,swingers:Swinger,teens:Teen,threesome:Threesome,toys:Toys,uniform:Uniform,vintage:Vintage,webcam:Webcam'), sorts: _cats('most-popular:По популярности,latest:Свежее,top-rated:По рейтингу,longest:Длинные,top-weekly:За неделю,top-monthly:За месяц') },
+  cfg: { categories: _cats('4k-porn:4K Ultra HD,vr-porn:VR Porn,amateur:Amateur,anal:Anal,asian:Asian,asmr:ASMR,bbw:BBW,bdsm:BDSM,big-ass:Big Ass,big-dick:Big Dick,big-tits:Big Tits,bisexual:Bisexual,blonde:Blonde,blowjob:Blowjob,bondage:Bondage,brunette:Brunette,bukkake:Bukkake,creampie:Creampie,cumshot:Cumshot,double-penetration:Double Penetration,ebony:Ebony,fetish:Fetish,fisting:Fisting,footjob:Footjob,for-women:For Women,gay:Gay,group-sex:Group Sex,handjob:Handjob,hardcore:Hardcore,hentai:Hentai,homemade:Homemade,indian:Indian,interracial:Interracial,japanese:Japanese,latina:Latina,lesbians:Lesbian,lingerie:Lingerie,massage:Massage,masturbation:Masturbation,mature:Mature,milf:MILF,orgy:Orgy,outdoor:Outdoor,petite:Petite,pornstar:Pornstar,pov-porn:POV,public:Public,redhead:Redhead,shemale:Shemale,small-tits:Small Tits,squirt:Squirt,striptease:Striptease,students:Students,swingers:Swinger,teens:Teen,threesome:Threesome,toys:Toys,uniform:Uniform,vintage:Vintage,webcam:Webcam'), sorts: _cats('most-popular:По популярности,latest:Свежее,top-rated:По рейтингу,longest:Длинные,top-weekly:За неделю,top-monthly:За месяц').concat([
+    // Orientation filter via the API `gay` param (0=straight default, 1=gay, 2=trans).
+    // Encoded as a `~gayN` suffix on the order id (no ':' so _cats keeps it intact);
+    // _orient() splits it back into {order, gay}. Curl-verified each value returns a
+    // distinct content vertical. Straight is the default everywhere (gay omitted).
+    { id: 'latest~gay1', label: 'Гей' },
+    { id: 'latest~gay2', label: 'Транс' }
+  ]) },
+
+  // Split a (possibly orientation-suffixed) sort id "order~gayN" into the order +
+  // gay API params. No suffix → straight (gay=0). Mirrors pornhub's _sortParams.
+  _orient: function(sort) {
+    var m = String(sort || '').match(/^(.*?)~gay([012])$/);
+    if (m) return { order: m[1] || 'most-popular', gay: m[2] };
+    return { order: sort || 'most-popular', gay: '0' };
+  },
 
   _apiFetch: function(url) {
     // eporner JSON search/browse API has Access-Control-Allow-Origin: * — direct fetch is safe here.
@@ -2634,14 +2687,16 @@ SOURCES.push({
     };
   },
 
-  search: function(query, page) {
+  search: function(query, page, sort) {
     var self = this;
     var p = page || 1;
     // A3(a): SEARCH uses eporner's default/relevance order (NO order param) so real
     // title matches surface instead of being drowned by all-time-popular videos.
     // browse() below keeps order=most-popular intentionally (category = popularity sort).
+    // Orientation (&gay=) is honoured from the sort id's ~gayN suffix (default straight=0).
+    var gay = self._orient(sort).gay;
     var url = 'https://www.eporner.com/api/v2/video/search/?query=' + encodeURIComponent(query) +
-      '&per_page=30&page=' + p + '&thumbsize=medium&gay=0&format=json';
+      '&per_page=30&page=' + p + '&thumbsize=medium&gay=' + gay + '&format=json';
     return self._apiFetch(url).then(function(text) {
       var data = JSON.parse(text);
       return { items: (data.videos || []).map(self._mapVideo), total_pages: parseInt(data.total_pages, 10) || 1 };
@@ -2654,9 +2709,11 @@ SOURCES.push({
     // Category via the JSON API search (slug → keyword); reuses _mapVideo. Hyphen → space.
     var q = category ? encodeURIComponent(category.replace(/-/g, ' ')) : '';
     // Native API order param (default popular). All values curl-verified.
-    var order = sort || 'most-popular';
+    // Orientation (&gay=) is carried in the sort id's ~gayN suffix (default straight=0);
+    // _orient() returns the bare order for normal sorts so existing behaviour is unchanged.
+    var o = self._orient(sort);
     var url = 'https://www.eporner.com/api/v2/video/search/?query=' + q + '&per_page=30&page=' + p +
-      '&thumbsize=medium&order=' + order + '&gay=0&format=json';
+      '&thumbsize=medium&order=' + o.order + '&gay=' + o.gay + '&format=json';
     return self._apiFetch(url).then(function(text) {
       var data = JSON.parse(text);
       return { items: (data.videos || []).map(self._mapVideo), total_pages: parseInt(data.total_pages, 10) || 1 };
@@ -4393,7 +4450,7 @@ SOURCES.push(_kvsEngine({
   host: 'hellporno.com',
   categoryFmt: 'https://hellporno.com/{slug}/{page}/',
   catPageBase: 1, catPage1Omit: true,
-  categories: _cats('anal:Anal,arab:Arab,asian:Asian,bbw:BBW,bdsm:BDSM,big-ass:Big ass,big-tits:Big tits,casting:Casting,creampie:Creampie,ebony:Ebony,gangbang:Gangbang,granny:Granny,hairy:Hairy,handjob:Handjob,indian:Indian,interracial:Interracial,japanese:Japanese,milf:MILF,massage:Massage,masturbation:Masturbation,mature:Mature,mom:Mom,office:Office,pov:POV,pantyhose:Pantyhose,party:Party,pissing:Pissing,public:Public,russian:Russian,skinny:Skinny,solo:Solo,solo-girl:Solo girl,stockings:Stockings,teacher:Teacher,teen:Teen,threesome:Threesome'),
+  categories: _cats('mature:Mature,teen:Teen,japanese:Japanese,granny:Granny,anal:Anal,mom:Mom,solo-girl:Solo girl,group-sex:Group sex,missionary:Missionary,threesome:Threesome,masturbation:Masturbation,milf:MILF,bdsm:BDSM,russian:Russian,pissing:Pissing,gangbang:Gangbang,big-tits:Big tits,skinny:Skinny,ebony:Ebony,hairy:Hairy,asian:Asian,creampie:Creampie,interracial:Interracial,handjob:Handjob,casting:Casting,arab:Arab,teacher:Teacher,bbw:BBW,spread-legs:Spread legs,public:Public,massage:Massage,stockings:Stockings,solo:Solo,party:Party,big-ass:Big ass,old-and-young:Old and young,indian:Indian,amateur:Amateur,pov:POV,blowjob:Blowjob,office:Office,pantyhose:Pantyhose,pussy-licking:Pussy licking,doggy-style:Doggy style,cum-in-mouth:Cum in mouth,ffm:FFM,small-tits:Small tits,hd:HD,cumshot:Cumshot,double-penetration:Double penetration,outdoor:Outdoor,moaning:Moaning,babes:Babes,pornstar:Pornstar,femdom:Femdom,reality:Reality,reverse-cowgirl:Reverse cowgirl,hardcore:Hardcore,cuckold:Cuckold,riding:Riding,cartoon:Cartoon,nun:Nun,nurse:Nurse,catfight:Catfight,nylon:Nylon,catsuit:Catsuit,caught:Caught,objects:Objects,cbt:CBT,celebrity:Celebrity,oil:Oil,cfnm:CFNM,chain:Chain,old-man:Old man,chained:Chained,on-stage:On stage,chair:Chair,oral:Oral,cheating:Cheating,orgasm:Orgasm,cheerleader:Cheerleader,orgy:Orgy,chinese:Chinese,christmas:Christmas,pain:Pain,chubby-guy:Chubby guy,pakistani:Pakistani,cigar:Cigar,pale:Pale,cigarette:Cigarette,panties:Panties,classroom:Classroom,cleaning:Cleaning,park:Park,clit:Clit,parking:Parking,close-up:Close up,parody:Parody,clothed:Clothed,clothespins:Clothespins,club:Club,collar:Collar,peaches:Peaches,college:College,perfect-body:Perfect body,periwig:Periwig,comics:Comics,persian:Persian,compilation:Compilation,pervert:Pervert,condom:Condom,pickup:Pickup,corset:Corset,pierced-clit:Pierced clit,costume:Costume,pierced-cock:Pierced cock,coach:Coach,pierced-nipples:Pierced nipples,country:Country,pierced-tongue:Pierced tongue,voyeur:Voyeur'),
   sorts: _cats('video_viewed:По популярности,video_viewed_today:Популярное за день,video_viewed_week:Популярное за неделю,video_viewed_month:Популярное за месяц,rating_week:Рейтинг за неделю,post_date:Свежее,rating:По рейтингу,duration:Длинные,most_commented:По комментариям'),
   searchUrl: function(query, page) {
     return 'https://hellporno.com/search/' + (page || 1) + '/?q=' + encodeURIComponent(query);
