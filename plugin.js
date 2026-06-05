@@ -660,8 +660,14 @@
     // model_url excluded: model browse is already filtered to a performer.
     var _source    = source;
     var _canSearch = !object.is_favorites && !object.all_sources && !object._related_items && !object.model_url && !object.models_index;
-    var _hasSorts  = !!(source && source.cfg && source.cfg.sorts && source.cfg.sorts.length);
-    var _hasCats   = !!(source && source.cfg && source.cfg.categories && source.cfg.categories.length);
+    // Server sort applies only to a single-source grid. In all-sources search the
+    // resolved `source` is SOURCES[0] (which HAS cfg.sorts), so without this guard the
+    // menu showed BOTH «Сортировка» (server) AND «Сортировка» (client) — a duplicate.
+    // Keep ALL sorting in one entry: server-sort for single source, client-sort for all-sources.
+    var _hasSorts  = !!(source && source.cfg && source.cfg.sorts && source.cfg.sorts.length
+                        && !object.all_sources && !object.models_index);
+    var _hasCats   = !!(source && source.cfg && source.cfg.categories && source.cfg.categories.length
+                        && !object.all_sources && !object.models_index);
     // «Модели»: offered only when the adapter can list a model index, and only on a
     // normal browse grid (not inside model browse / search / favorites / all-sources).
     var _hasModels = !!(source && source.getModels &&
