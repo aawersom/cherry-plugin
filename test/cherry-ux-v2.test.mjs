@@ -990,7 +990,7 @@ describe('Models discovery axis (anti-drift)', () => {
 
   it('_hasModels requires getModels and excludes models_index/model_url/etc', () => {
     expect(SRC).toMatch(/_hasModels\s*=\s*!!\(source\s*&&\s*source\.getModels/);
-    expect(SRC).toMatch(/_hasModels[\s\S]{0,200}!object\.models_index/);
+    expect(SRC).toMatch(/_hasModels[\s\S]{0,260}!object\.models_index/);
   });
 
   it('_openModels pushes cherry_grid with models_index:true', () => {
@@ -1068,8 +1068,8 @@ describe('Studios discovery axis (anti-drift)', () => {
 
   it('_hasStudios requires getStudios and excludes studios_index/studio_url/etc', () => {
     expect(SRC).toMatch(/_hasStudios\s*=\s*!!\(source\s*&&\s*source\.getStudios/);
-    expect(SRC).toMatch(/_hasStudios[\s\S]{0,260}!object\.studios_index/);
-    expect(SRC).toMatch(/_hasStudios[\s\S]{0,260}!object\.studio_url/);
+    expect(SRC).toMatch(/_hasStudios[\s\S]{0,300}!object\.studios_index/);
+    expect(SRC).toMatch(/_hasStudios[\s\S]{0,300}!object\.studio_url/);
   });
 
   it('_openStudios pushes cherry_grid with studios_index:true', () => {
@@ -1186,10 +1186,11 @@ describe('P1: plugin.js source assertions (anti-drift)', () => {
     expect(SRC).toMatch(/resolve\(\{\s*title:[\s\S]{0,80}results:[\s\S]{0,40}total_pages:/);
   });
 
-  it('single-page mode short-circuits nextPageReuest (favorites only; related + all_sources paginate)', () => {
-    // Only favorites short-circuits now. related_video AND all_sources+query both
-    // fall through to _gridLoad so «Похожие» / global search / similar-titles paginate.
-    expect(SRC).toMatch(/if\s*\(object\.is_favorites\)\s*\{[\s\S]{0,160}resolve\(\{\s*title:[\s\S]{0,80}total_pages:\s*1/);
+  it('single-page mode short-circuits nextPageReuest (favorites + history; related + all_sources paginate)', () => {
+    // Favorites + history (local lists) short-circuit. related_video AND
+    // all_sources+query both fall through to _gridLoad so «Похожие» / global
+    // search / similar-titles paginate.
+    expect(SRC).toMatch(/if\s*\(object\.is_favorites\s*\|\|\s*object\.is_history\)\s*\{[\s\S]{0,160}resolve\(\{\s*title:[\s\S]{0,80}total_pages:\s*1/);
     expect(SRC).not.toMatch(/object\.is_favorites\s*\|\|\s*object\._related_items/);
   });
 
