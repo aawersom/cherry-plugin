@@ -2376,14 +2376,19 @@ describe('UI/UX v2: P0 dead CSS removed, live 16:9 kept', () => {
   });
 });
 
-describe('UI/UX v2: focus = single native frame + zoom (no competing custom ring)', () => {
-  it('focused card view gets only a scale zoom, not a custom box-shadow ring', () => {
+describe('UX-batch-1: focus = brand ring + zoom on .card__view (inner box, no double frame)', () => {
+  it('focused card view gets a 1.07 scale zoom', () => {
     var m = SRC.match(/\.cherry-cat \.card\.focus \.card__view\{([^}]*)\}/);
     expect(m).not.toBeNull();
-    expect(m[1]).toMatch(/transform:scale/);
+    expect(m[1]).toMatch(/transform:scale\(1\.07\)/);
   });
-  it('no custom pink box-shadow ring (it stacked on the native frame = double)', () => {
-    expect(SRC).not.toMatch(/box-shadow:0 0 0 \.16em #e75480/);
+  it('focused card view gets the brand pink ring (.22em) + drop shadow', () => {
+    var m = SRC.match(/\.cherry-cat \.card\.focus \.card__view\{([^}]*)\}/);
+    expect(m[1]).toMatch(/box-shadow:0 0 0 \.22em #e75480/);
+  });
+  it('focus transition is 180ms (TV-window motion), applied on the inner box only', () => {
+    var m = SRC.match(/\.cherry-cat \.card\.focus \.card__view\{([^}]*)\}/);
+    expect(m[1]).toMatch(/transition:transform \.18s ease, box-shadow \.18s ease/);
   });
 });
 
@@ -2447,16 +2452,18 @@ describe('UI/UX v2: P3.2 error != empty + persistent fav hint', () => {
     expect(SRC).toMatch(/cherry_load_error:\s*\{\s*ru:\s*'Не удалось загрузить\. Проверьте соединение\.'/);
     expect(SRC).toMatch(/cherry_load_error:[\s\S]{0,120}en:\s*'Failed to load\. Check your connection\.'/);
   });
-  it('load failure branch calls empty(cherry_load_error)', () => {
-    expect(SRC).toMatch(/\.empty\(\s*Lampa\.Lang\.translate\(\s*'cherry_load_error'\s*\)\s*\)/);
+  it('load failure branch calls empty(cherry_load_error) with a focusable retry', () => {
+    // UX-batch-1: error now passes a retry callback (D-pad recovery) as a 2nd arg.
+    expect(SRC).toMatch(/\.empty\(\s*Lampa\.Lang\.translate\(\s*'cherry_load_error'\s*\)\s*,\s*function/);
+    expect(SRC).toMatch(/cherry_retry:\s*\{\s*ru:\s*'Повторить'/);
   });
   it('empty favorites calls empty(cherry_fav_empty_hint), not a toast', () => {
     expect(SRC).toMatch(/\.empty\(\s*Lampa\.Lang\.translate\(\s*'cherry_fav_empty_hint'\s*\)\s*\)/);
     // the old transient toast for empty favorites must be gone
     expect(SRC).not.toMatch(/cherry_fav_empty_hint'\),\s*\{\s*time:\s*10000/);
   });
-  it('custom comp.empty(msg) override honours a message arg via Lampa.Empty', () => {
-    expect(SRC).toMatch(/comp\.empty\s*=\s*function\s*\(\s*msg\s*\)/);
+  it('custom comp.empty(msg, onRetry) override honours a message arg via Lampa.Empty', () => {
+    expect(SRC).toMatch(/comp\.empty\s*=\s*function\s*\(\s*msg\s*,\s*onRetry\s*\)/);
     expect(SRC).toMatch(/new\s+Lampa\.Empty\(\{\s*descr:/);
   });
 });

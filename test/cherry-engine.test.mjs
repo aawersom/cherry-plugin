@@ -2124,7 +2124,7 @@ describe('REQ-1 xvideos video.preview (real data-pvv attribute)', function () {
 });
 
 // ============================================================
-// S2 toCard: HD/4K badge combined with duration in the quality slot
+// UX-batch-1: HD merged into the dur pill — toCard no longer uses quality slot
 // ============================================================
 // Verbatim from plugin.js secToTime (line ~293).
 function secToTime(s) {
@@ -2134,32 +2134,42 @@ function secToTime(s) {
   return m + ':' + (sec < 10 ? '0' : '') + sec;
 }
 
-// The quality-slot composition from toCard (CherryGrid). Pure extract — the
-// rest of toCard (img/poster/source) is irrelevant to the quality logic.
-function toCardQuality(v) {
-  if (v.hd) v.quality = v.hd;   // HD-only; duration is a separate bottom-right overlay
-  return v.quality;
+// toCard no longer routes HD through Lampa's native quality slot — HD is merged
+// into the bottom-right dur pill in cardRender. This pure extract reflects the
+// cardRender dur-pill composition: "HD · 12:34", "12:34", or "HD".
+function durPill(element) {
+  if (element.duration) {
+    return (element.hd ? element.hd + ' · ' : '') + secToTime(element.duration);
+  }
+  if (element.hd) return element.hd;
+  return '';
 }
 
-describe('S2 toCard — quality slot = HD/4K only (duration is a separate overlay)', function () {
-  it('hd present + duration → "HD" (duration NOT in quality slot)', function () {
-    expect(toCardQuality({ duration: 754, hd: 'HD' })).toBe('HD');
+describe('UX-batch-1 dur pill — HD merged into duration (no native quality slot)', function () {
+  var PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+
+  it('hd present + duration → "HD · 12:34"', function () {
+    expect(durPill({ duration: 754, hd: 'HD' })).toBe('HD · 12:34');
   });
 
-  it('4K present + duration → "4K"', function () {
-    expect(toCardQuality({ duration: 65, hd: '4K' })).toBe('4K');
+  it('4K present + duration → "4K · 1:05"', function () {
+    expect(durPill({ duration: 65, hd: '4K' })).toBe('4K · 1:05');
   });
 
-  it('no hd, duration only → quality undefined (duration shown bottom-right)', function () {
-    expect(toCardQuality({ duration: 754 })).toBe(undefined);
+  it('no hd, duration only → just the duration', function () {
+    expect(durPill({ duration: 754 })).toBe('12:34');
   });
 
-  it('hd present, no duration → "HD"', function () {
-    expect(toCardQuality({ hd: 'HD' })).toBe('HD');
+  it('hd present, no duration → just the hd badge', function () {
+    expect(durPill({ hd: 'HD' })).toBe('HD');
   });
 
-  it('neither hd nor duration → quality stays undefined', function () {
-    expect(toCardQuality({})).toBe(undefined);
+  it('neither hd nor duration → empty (no pill)', function () {
+    expect(durPill({})).toBe('');
+  });
+
+  it('toCard no longer assigns the native quality slot from hd', function () {
+    expect(/v\.quality\s*=\s*v\.hd/.test(PLUGIN)).toBe(false);
   });
 });
 
@@ -2251,11 +2261,11 @@ describe('S5/S2 plugin.js source assertions (anti-drift)', function () {
     expect(/\/class="i-hd"\/\.test\(block\)/.test(PLUGIN)).toBe(true);
   });
 
-  it('toCard puts ONLY the hd badge in the quality slot (duration is a separate overlay)', function () {
-    // HD-only quality slot.
-    expect(/if \(v\.hd\) v\.quality = v\.hd;/.test(PLUGIN)).toBe(true);
-    // The old "HD · duration" combine is gone.
-    expect(/v\.hd \+ ' · ' \+ _q/.test(PLUGIN)).toBe(false);
+  it('toCard no longer routes hd through the native quality slot (HD merged into dur pill)', function () {
+    // UX-batch-1: HD moved out of the quality slot into the .cherry-dur pill.
+    expect(/v\.quality\s*=\s*v\.hd/.test(PLUGIN)).toBe(false);
+    // The dur pill optionally prefixes the hd badge before the duration.
+    expect(/element\.hd \+ ' · '/.test(PLUGIN)).toBe(true);
   });
 });
 
@@ -2384,13 +2394,17 @@ describe('pornone — getStream regex selects real stream', function () {
 });
 
 // ============================================================
-// FIX 2 — duration overlay (.cherry-dur) + HD-only quality slot
+// FIX 2 — duration overlay (.cherry-dur) with merged HD prefix
 // ============================================================
 describe('FIX 2 — duration overlay anti-drift', function () {
   var PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
 
   it('cardRender injects a .cherry-dur overlay with secToTime(element.duration)', function () {
     expect(PLUGIN).toMatch(/element\.duration\)\s*\{[\s\S]*?cherry-dur[\s\S]*?secToTime\(element\.duration\)/);
+  });
+
+  it('dur pill optionally prefixes the HD badge (UX-batch-1 HD merge)', function () {
+    expect(PLUGIN).toMatch(/cherry-dur[\s\S]*?element\.hd \? element\.hd \+ ' · '/);
   });
 
   it('.cherry-dur CSS is present (bottom-right, z-index)', function () {
