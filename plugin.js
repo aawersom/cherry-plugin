@@ -196,6 +196,12 @@
   var _relatedSrc        = null;
   var _relatedVideo      = null; // the video whose related grid we push on close
 
+  // Watch-history state: the video currently in the player + its timeline hash.
+  // On player progress/destroy we snapshot the native timeline into Hist so the
+  // home «Продолжить» surface and on-card progress bars reflect the real position.
+  var _histVideo = null;
+  var _histHash  = null;
+
   // Fetches an HLS m3u8 through the proxy and rewrites all non-comment lines:
   //   - Sub-playlist lines (.m3u8) → recursively proxied → inner blob URL
   //   - Segment lines (.ts, etc.) → direct proxy URL
@@ -413,6 +419,109 @@
   };
 
   // ============================================================
+  // WATCH HISTORY  (Resume / «Продолжить» / progress bars)
+  // ============================================================
+  // Storage key `cherry_history` holds an array of RECORDS:
+  //   { id, source, title, thumb, url, duration, position, ts }
+  // Resume position itself is owned by Lampa's NATIVE timeline (see playVideo:
+  // it passes timeline:Lampa.Timeline.view(hash) so Lampa auto-persists and
+  // restores the scrubber). `Hist` is the SURFACE layer — it powers the home
+  // «Продолжить» tile + grid and the on-card progress bar. We snapshot the
+  // timeline's position/duration on player progress/destroy. Mirrors Fav's
+  // record/migration robustness (legacy entries lacking ts are tolerated).
+  var Hist = {
+    _key: 'cherry_history',
+    _cap: 100,
+
+    /** Stable per-video key shared with the native timeline hash. */
+    _hashKey: function (element) {
+      return (element.source || '') + ':' + (element.id != null ? element.id : (element.url || ''));
+    },
+
+    /**
+     * Raw record array. Tolerates legacy/partial shapes by defaulting fields;
+     * drops entries without an id (unusable as a key).
+     * @returns {Array}
+     */
+    _records: function () {
+      var list = Lampa.Storage.get(this._key, []);
+      if (!Array.isArray(list)) return [];
+      return list.filter(function (r) {
+        return r && r.id != null;
+      }).map(function (r) {
+        return {
+          id:       r.id,
+          source:   r.source   || '',
+          title:    r.title    || '',
+          thumb:    r.thumb    || '',
+          url:      r.url      || '',
+          duration: r.duration || 0,
+          position: r.position || 0,
+          ts:       r.ts       || 0
+        };
+      });
+    },
+
+    /**
+     * Upsert a watch record (by source+id), stamping ts = now. Capped to _cap
+     * most-recent entries so storage can't grow unbounded.
+     * @param {VideoCard} element
+     * @param {number} position  seconds watched
+     * @param {number} duration  total seconds
+     */
+    mark: function (element, position, duration) {
+      if (!element || element.id == null) return;
+      var list = this._records();
+      var key  = this._hashKey(element);
+      var self = this;
+      var rec  = null;
+      list.forEach(function (r) { if (self._hashKey(r) === key) rec = r; });
+      if (!rec) {
+        rec = { id: element.id, source: element.source || '' };
+        list.unshift(rec);
+      }
+      rec.title    = element.title || rec.title || '';
+      rec.thumb    = element.thumb || rec.thumb || '';
+      rec.url      = element.url   || rec.url   || '';
+      rec.position = position || 0;
+      if (duration) rec.duration = duration;
+      else rec.duration = rec.duration || 0;
+      rec.ts       = Date.now();
+      // Keep newest first; cap.
+      list.sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
+      if (list.length > this._cap) list = list.slice(0, this._cap);
+      Lampa.Storage.set(this._key, list);
+    },
+
+    /** @returns {VideoCard[]} records sorted by ts desc (newest first). */
+    all: function () {
+      return this._records()
+        .sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); })
+        .slice(0, this._cap);
+    },
+
+    /** @param {VideoCard} element @returns {Object|null} the matching record. */
+    get: function (element) {
+      if (!element || element.id == null) return null;
+      var key  = this._hashKey(element);
+      var self = this;
+      var hit  = null;
+      this._records().forEach(function (r) { if (self._hashKey(r) === key) hit = r; });
+      return hit;
+    },
+
+    /** @param {VideoCard} element @returns {number} 0..100 watched percent. */
+    percent: function (element) {
+      var r = this.get(element);
+      if (!r || !r.duration) return 0;
+      var p = Math.round((r.position / r.duration) * 100);
+      if (p < 0) p = 0;
+      if (p > 100) p = 100;
+      return p;
+    }
+  };
+
+  // ============================================================
   // SYNC  — PIN-based cross-device favorites sync via the CF Worker.
   // ============================================================
   // One POST to `${PROXY_URL}/favs?pin=<pin>&key=<proxyKey>` does pull+merge+push:
@@ -578,12 +687,36 @@
       var proxiedQuality = {};
       Object.keys(quality).forEach(function(k) { proxiedQuality[k] = px(quality[k]); });
 
+      // RESUME (native): a stable hash per video lets Lampa's timeline persist
+      // and restore the scrubber position automatically. We hash on source+id
+      // (falling back to url), mirror it as Hist's key, and hand the timeline
+      // VIEW object to the player so it resumes at the saved spot and auto-saves
+      // progress as the user watches — no hand-rolled timeupdate persistence.
+      var histHash = Hist._hashKey(video);
+      var hashId   = (Lampa.Utils && Lampa.Utils.hash)
+        ? Lampa.Utils.hash(histHash)
+        : histHash;
+      var timeline = (Lampa.Timeline && Lampa.Timeline.view)
+        ? Lampa.Timeline.view(hashId)
+        : undefined;
+
+      // Remember the active video so the player progress/destroy hook can snapshot
+      // the timeline position into Hist (the «Продолжить» + progress-bar surface).
+      _histVideo = video;
+      _histHash  = hashId;
+
       Lampa.Player.play({
-        title:   video.title,
-        url:     px(url),
-        poster:  video.thumb,
-        quality: proxiedQuality
+        title:    video.title,
+        url:      px(url),
+        poster:   video.thumb,
+        quality:  proxiedQuality,
+        id:       hashId,
+        timeline: timeline
       });
+
+      // Seed a history record immediately (position 0) so a video opened but
+      // closed before any progress event still surfaces under «Продолжить».
+      try { Hist.mark(video, (timeline && timeline.time) || 0, (timeline && timeline.duration) || video.duration || 0); } catch (e) {}
 
       // REQ-4: reset state and kick off background related fetch.
       _relatedGeneration++;
@@ -661,13 +794,14 @@
       return out;
     }
 
-    var source      = object.is_favorites ? null : sourceById(object.source_id);
+    var source      = (object.is_favorites || object.is_history) ? null : sourceById(object.source_id);
     var screenTitle = object.title || (source ? source.name : 'Cherry');
 
     // Right-edge action-menu applicability (Поиск → Сортировка → Категории).
     // model_url excluded: model browse is already filtered to a performer.
+    // is_history (like is_favorites) is a flat local list → no menu axes.
     var _source    = source;
-    var _canSearch = !object.is_favorites && !object.all_sources && !object.related_video && !object.model_url && !object.models_index && !object.studio_url && !object.studios_index;
+    var _canSearch = !object.is_favorites && !object.is_history && !object.all_sources && !object.related_video && !object.model_url && !object.models_index && !object.studio_url && !object.studios_index;
     // Server sort applies only to a single-source grid. In all-sources search the
     // resolved `source` is SOURCES[0] (which HAS cfg.sorts), so without this guard the
     // menu showed BOTH «Сортировка» (server) AND «Сортировка» (client) — a duplicate.
@@ -679,13 +813,13 @@
     // «Модели»: offered only when the adapter can list a model index, and only on a
     // normal browse grid (not inside model browse / search / favorites / all-sources).
     var _hasModels = !!(source && source.getModels &&
-                        !object.is_favorites && !object.all_sources &&
+                        !object.is_favorites && !object.is_history && !object.all_sources &&
                         !object.related_video && !object.model_url && !object.models_index &&
                         !object.studio_url && !object.studios_index);
     // «Студии»: offered when the adapter can list a studio/channel index, on a
     // normal browse grid only (mirrors _hasModels exclusions).
     var _hasStudios = !!(source && source.getStudios &&
-                        !object.is_favorites && !object.all_sources &&
+                        !object.is_favorites && !object.is_history && !object.all_sources &&
                         !object.related_video && !object.model_url && !object.models_index &&
                         !object.studio_url && !object.studios_index);
     // A2: all_sources search has no single source to honor a server sort, so offer
@@ -724,6 +858,13 @@
       if (object.is_favorites) {
         var favs = Fav.all().map(toCard);
         resolve(favs, 1);
+        return;
+      }
+
+      // History («Продолжить») — single page, newest-first, like favorites.
+      if (object.is_history) {
+        var hist = Hist.all().map(toCard);
+        resolve(hist, 1);
         return;
       }
 
@@ -1177,11 +1318,11 @@
     };
 
     comp.nextPageReuest = function (object, resolve, reject) {
-      // Favorites is the only genuinely single-page mode (a local list, no pages).
+      // Favorites + history are the single-page local-list modes (no pages).
       // «Похожие» (related_video) now paginates through _gridLoad like every other
       // grid — the dedup guard caps fixed-block adapters after page 1. all_sources
       // also falls through to _gridLoad.
-      if (object.is_favorites) {
+      if (object.is_favorites || object.is_history) {
         resolve({ title: screenTitle, results: [], total_pages: 1 });
         return;
       }
@@ -1297,6 +1438,17 @@
           if (vstr) {
             $v2.append('<div class="cherry-views">' + vstr + '</div>');
           }
+          // RESUME progress bar: if this video has a watch record, draw a thin
+          // bottom bar (width = watched %) over a faint track + dim the thumb so
+          // a glance reads "seen / 60%". Shown on every grid (browse + history).
+          try {
+            if (Hist.get(element)) {
+              var pct = Hist.percent(element);
+              $v2.addClass('cherry-watched');
+              $v2.append('<div class="cherry-progress-track"></div>');
+              $v2.append('<div class="cherry-progress" style="width:' + pct + '%"></div>');
+            }
+          } catch (_p) {}
         }
       } catch (e) {}
 
@@ -1447,6 +1599,11 @@
       var results = [];
       // 1) Search entry — opens keyboard, then all-sources search grid.
       results.push({ title: Lampa.Lang.translate('cherry_search'), img: '', _kind: 'search', _initial: '⌕', _action: true });
+      // 1b) «Продолжить» — resume watch history. Shown only when history exists,
+      // placed BEFORE the source tiles (keystone continue-watching surface).
+      if (Hist.all().length) {
+        results.push({ title: Lampa.Lang.translate('cherry_continue'), img: '', _kind: 'continue', _initial: '▶', _action: true });
+      }
       // 2) Favorites entry.
       results.push({ title: Lampa.Lang.translate('cherry_favorites'), img: '', _kind: 'favorites', _initial: '♥', _action: true });
       // 3) Sync entry — set the cross-device PIN; opening Cherry also auto-syncs.
@@ -1502,6 +1659,14 @@
               });
             });
           }
+        } else if (element._kind === 'continue') {
+          Lampa.Activity.push({
+            component:  'cherry_grid',
+            title:      Lampa.Lang.translate('cherry_continue'),
+            source_id:  (SOURCES[0] && SOURCES[0].id) || '',
+            is_history: true,
+            page:       1
+          });
         } else if (element._kind === 'favorites') {
           Lampa.Activity.push({
             component:    'cherry_grid',
@@ -1612,6 +1777,13 @@
       /* ---- P3.4 Cherry header filter button -------------------- */
       '.cherry-filter-btn{color:#fff;}',
       '.cherry-filter-btn.focus{color:#e75480;}',
+
+      /* ---- Resume progress bar (watch history) ----------------- */
+      /* Thin bottom bar over a faint full-width track; the brand-pink fill width */
+      /* is the watched %. .cherry-watched dims the thumb slightly ("seen"). */
+      '.cherry-cat .cherry-progress-track{position:absolute;left:0;right:0;bottom:0;height:.3em;background:rgba(255,255,255,.25);z-index:2;}',
+      '.cherry-cat .cherry-progress{position:absolute;left:0;bottom:0;height:.3em;background:#e75480;z-index:3;}',
+      '.cherry-cat .card__view.cherry-watched .card__img{opacity:.8;}',
     ];
 
     var style = document.createElement('style');
@@ -1629,6 +1801,7 @@
       cherry_search_hint: { ru: 'Введите запрос',      en: 'Enter a query'      },
       cherry_sources:     { ru: 'Источники',           en: 'Sources'            },
       cherry_favorites:   { ru: 'Избранное',           en: 'Favorites'          },
+      cherry_continue:    { ru: 'Продолжить',          en: 'Continue'           },
       cherry_sync:        { ru: 'Синхронизация',       en: 'Sync'               },
       cherry_sync_ok:     { ru: 'Избранное синхронизировано', en: 'Favorites synced' },
       cherry_sync_err:    { ru: 'Синхронизация не удалась — проверьте сеть', en: 'Sync failed — check connection' },
@@ -1793,7 +1966,25 @@
 
     // Revoke HLS blob URLs on player close; push related panel if available (REQ-4).
     Lampa.Listener.follow('player', function (e) {
+      // RESUME surface: snapshot the native timeline position into Hist as the
+      // user watches (timeupdate) and once more on close (destroy). Lampa OWNS
+      // the canonical position via the timeline VIEW it persists; we just mirror
+      // it so «Продолжить» + on-card progress bars stay accurate. Coexists with
+      // the related-panel destroy logic below (both run on the same destroy).
+      if ((e.type === 'timeupdate' || e.type === 'destroy') && _histVideo && _histHash) {
+        try {
+          var view = (Lampa.Timeline && Lampa.Timeline.view)
+            ? Lampa.Timeline.view(_histHash) : null;
+          if (view) {
+            var pos = view.time     || e.time     || 0;
+            var dur = view.duration || e.duration || _histVideo.duration || 0;
+            if (pos > 0 || dur > 0) Hist.mark(_histVideo, pos, dur);
+          }
+        } catch (_h) {}
+      }
       if (e.type === 'destroy') {
+        _histVideo = null;
+        _histHash  = null;
         if (_blobUrls.length) {
           _blobUrls.forEach(function (u) { try { URL.revokeObjectURL(u); } catch (_) {} });
           _blobUrls = [];
