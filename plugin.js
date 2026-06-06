@@ -640,6 +640,7 @@
     var currentCategory = object.category || '';
 
     var _currentPreviewEl = null;
+    var _previewTimer     = null;   // dwell-timer handle (gates preview start on D-pad scroll)
 
     // Cross-page dedup guard. Some sites don't return empty past the last page —
     // they CLAMP (always serve a full page, e.g. pornhub API), WRAP to page 1, or
@@ -697,9 +698,10 @@
     function toCard(v) {
       v.img    = v.thumb;
       v.poster = v.thumb;
-      // Quality slot carries ONLY the HD/4K badge. Duration rides along on
-      // v.duration and renders as a dedicated bottom-right overlay in cardRender.
-      if (v.hd) v.quality = v.hd;
+      // HD/4K no longer rides Lampa's native quality slot — it is merged into the
+      // bottom-right duration pill in cardRender (e.g. "HD · 12:34"). Keeping a card
+      // to at most 3 badges (source TL, views BL, dur/HD BR). v.hd stays on the
+      // element so the .cherry-dur overlay can prefix it.
       v.source = v.source || object.source_id;
       return v;
     }
@@ -898,6 +900,8 @@
     // ---- preview (best-effort, adapted to the base card's DOM node) -------
 
     function _stopCurrentPreview() {
+      // Cancel a pending dwell-timer so a card scrolled THROUGH never starts video.
+      if (_previewTimer) { clearTimeout(_previewTimer); _previewTimer = null; }
       if (_currentPreviewEl) {
         try {
           _currentPreviewEl.pause();
@@ -934,11 +938,19 @@
         videoEl.src = url;
         videoEl.load();
         videoEl.style.display = 'block';
+        videoEl.style.opacity = '0';   // fade-in: start transparent, ramp to 1 on play
         _currentPreviewEl = videoEl;
         var p = videoEl.play();
-        if (p && p.catch) p.catch(function () {
-          if (videoEl.parentNode) videoEl.style.display = 'none';
-        });
+        if (p && p.then) {
+          p.then(function () {
+            // .25s opacity transition is defined in addStyles(); flip after play starts.
+            videoEl.style.opacity = '1';
+          }).catch(function () {
+            if (videoEl.parentNode) videoEl.style.display = 'none';
+          });
+        } else {
+          videoEl.style.opacity = '1';
+        }
       } catch (e) {}
     }
 
@@ -1005,12 +1017,19 @@
       });
     }
 
+    // Index of the item whose id matches `id` (for Select.show active-state).
+    function _selectedIndex(items, id) {
+      for (var i = 0; i < items.length; i++) if (items[i].id === id) return i;
+      return -1;
+    }
+
     function _openSort() {
       if (!_source || !_source.cfg || !_source.cfg.sorts) return;
       var items = _source.cfg.sorts.map(function (s) { return { title: s.label, id: s.id }; });
       Lampa.Select.show({
         title: Lampa.Lang.translate('cherry_sort'),
         items: items,
+        selected: _selectedIndex(items, currentSort),   // mark the active sort on reopen
         onSelect: function (item) {
           _pushFiltered(item.id, currentCategory);
         },
@@ -1025,6 +1044,7 @@
       Lampa.Select.show({
         title: Lampa.Lang.translate('cherry_category'),
         items: items,
+        selected: _selectedIndex(items, currentCategory),   // mark the active category on reopen
         onSelect: function (item) {
           _pushFiltered(currentSort, item.id);
         },
@@ -1103,7 +1123,9 @@
       if (_hasStudios)    items.push({ title: Lampa.Lang.translate('cherry_studios'),  action: 'studios'    });
       if (!items.length) return false;
       Lampa.Select.show({
-        title: _source ? _source.name : 'Cherry',
+        // Title reflects the active filter (source · category · sort) so the menu
+        // header shows the current state, matching the grid header.
+        title: _source ? _filteredTitle(currentSort, currentCategory) : 'Cherry',
         items: items,
         onSelect: function (item) {
           if      (item.action === 'search')     _openSearch();
@@ -1145,9 +1167,12 @@
           root.find('.category-full').addClass('mapping--grid cols--5');
         } catch (e) {}
       }, function () {
-        // P3.2: a load failure is DISTINCT from "no results".
+        // P3.2: a load failure is DISTINCT from "no results". A focusable «Повторить»
+        // re-runs create() so a transient network failure is recoverable on the remote.
         _this.activity.loader(false);
-        _this.empty(Lampa.Lang.translate('cherry_load_error'));
+        _this.empty(Lampa.Lang.translate('cherry_load_error'), function () {
+          _this.create();
+        });
       });
     };
 
@@ -1178,17 +1203,31 @@
     // proven override (Lampa.Empty descr). The base InteractionCategory.empty
     // may ignore a message on this build, so we own it to guarantee a distinct
     // error vs no-results message and a persistent favorites hint.
-    comp.empty = function (msg) {
+    // onRetry (optional): when provided, a focusable «Повторить» button is added
+    // so the error state is recoverable with the D-pad (otherwise the only way out
+    // is Back). On Enter it re-runs the load via onRetry().
+    comp.empty = function (msg, onRetry) {
       var _this = this;
       var descr = typeof msg === 'string'
         ? msg
         : Lampa.Lang.translate('cherry_no_results');
       try {
         var box = new Lampa.Empty({ descr: descr });
+        var emptyEl = box.render(true);
+        // Append a focusable retry action into the empty box. class="selector" makes
+        // Lampa's controller collect it when start() focuses the empty area.
+        if (onRetry) {
+          try {
+            var $btn = $('<div class="selector cherry-retry-btn" style="display:inline-block;margin-top:1em;padding:.6em 1.4em;border-radius:.4em;background:#e75480;color:#fff;font-size:1.3em;font-weight:700;">'
+              + Lampa.Lang.translate('cherry_retry') + '</div>');
+            $btn.on('hover:enter', function () { onRetry(); });
+            $(emptyEl).append($btn);
+          } catch (e) {}
+        }
         Lampa.Activity.all().forEach(function (active) {
           if (_this.activity === active.activity) {
             var body = active.activity.render().find('.activity__body > div')[0];
-            if (body) body.appendChild(box.render(true));
+            if (body) body.appendChild(emptyEl);
           }
         });
         this.start = box.start.bind(box);
@@ -1243,13 +1282,16 @@
         } catch (e) {}
       }
 
-      // Metadata overlays on every card: duration (bottom-right) + views (bottom-left).
-      // Both ride along on element from toCard; HD stays in the quality slot.
+      // Metadata overlays on every card: dur/HD pill (bottom-right) + views (bottom-left).
+      // HD is merged INTO the duration pill ("HD · 12:34"), or shown alone if there is
+      // no duration — so a card carries at most 3 badges (source TL, views BL, dur/HD BR).
       try {
         var $v2 = card.render().find('.card__view');
         if ($v2.length) {
           if (element.duration) {
-            $v2.append('<div class="cherry-dur">' + secToTime(element.duration) + '</div>');
+            $v2.append('<div class="cherry-dur">' + (element.hd ? element.hd + ' · ' : '') + secToTime(element.duration) + '</div>');
+          } else if (element.hd) {
+            $v2.append('<div class="cherry-dur">' + element.hd + '</div>');
           }
           var vstr = formatViews(element.views);
           if (vstr) {
@@ -1347,8 +1389,13 @@
       card.onFocus = function (target, card_data) {
         if (f) f(target, card_data);
         _stopCurrentPreview();
+        // Dwell-timer: only start preview after the focus rests ~600ms on a card.
+        // D-pad scrolling through a row clears the timer (in _stopCurrentPreview)
+        // before it fires, so passing-through cards never trigger video.load()+play().
         if (element.preview && Lampa.Storage.get('cherry_preview_enabled', true) && !_isAndroid()) {
-          _startPreview(target, element.preview);
+          _previewTimer = setTimeout(function () {
+            _startPreview(target, element.preview);
+          }, 600);
         }
       };
     };
@@ -1379,7 +1426,7 @@
   function _tileColor(seed) {
     var h = 0, str = String(seed || '');
     for (var i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 360;
-    return 'hsl(' + h + ',55%,42%)';
+    return 'hsl(' + h + ',55%,38%)';
   }
 
   /**
@@ -1529,10 +1576,11 @@
       '  object-fit: cover;',
       '}',
 
-      /* ---- Focus: ONE frame — rely on Lampa's native focus, add only a zoom. */
-      /* (Custom pink ring removed: it stacked on top of the native frame = double.) */
+      /* ---- Focus: brand ring + zoom on the INNER box (.card__view), so it does */
+      /* NOT double up with Lampa's outer focus frame. Larger scale + pink ring + */
+      /* drop shadow make the focused card unmistakable at 10-foot distance. */
       '.cherry-cat .card{transform-origin:center;}',
-      '.cherry-cat .card.focus .card__view{transform:scale(1.04);transition:transform .12s ease;}',
+      '.cherry-cat .card.focus .card__view{transform:scale(1.07);box-shadow:0 0 0 .22em #e75480, 0 .6em 1.4em rgba(0,0,0,.6);border-radius:.4em;transition:transform .18s ease, box-shadow .18s ease;}',
 
       /* ---- Home picker: small SQUARE tiles, all sources visible -- */
       '.cherry-home .card__view{padding-bottom:100% !important;height:0 !important;position:relative;}',
@@ -1545,10 +1593,21 @@
       '.cherry-cat .cherry-tile span{font-size:2.6em;font-weight:800;color:#fff;text-shadow:0 .05em .2em rgba(0,0,0,.4);}',
       '.cherry-cat .cherry-tile--action{background:#e75480 !important;}',
 
-      /* ---- P3.3 Source attribution badge (all-sources search) -- */
-      '.cherry-cat .cherry-src-badge{position:absolute;top:.4em;left:.5em;z-index:2;background:rgba(0,0,0,.78);color:#fff;font-size:.72em;font-weight:600;padding:.12em .5em;border-radius:.25em;max-width:80%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
-      '.cherry-cat .cherry-dur{position:absolute;bottom:.4em;right:.5em;z-index:2;background:rgba(0,0,0,.8);color:#fff;font-size:.78em;font-weight:600;padding:.12em .45em;border-radius:.25em;}',
-      '.cherry-cat .cherry-views{position:absolute;bottom:.4em;left:.5em;z-index:2;background:rgba(0,0,0,.8);color:#fff;font-size:.78em;font-weight:600;padding:.12em .45em;border-radius:.25em;}',
+      /* ---- Bottom gradient scrim: lifts badge contrast over light thumbnails. */
+      /* Sits at z-index:1, BELOW the badges (z-index:2), pointer-events:none.   */
+      '.cherry-cat .card__view::after{content:\'\';position:absolute;left:0;right:0;bottom:0;height:42%;background:linear-gradient(transparent, rgba(0,0,0,.55));pointer-events:none;z-index:1;}',
+
+      /* ---- Preview <video> fade-in (motion: avoids a hard pop-in). ---------- */
+      '.cherry-cat .cherry-card__preview, .cherry-card__preview{transition:opacity .25s ease;}',
+
+      /* ---- P3.3 Source attribution badge + duration/views (3 corners max) --- */
+      /* Larger + bolder for 10-foot legibility; sit above the scrim (z-index:2). */
+      '.cherry-cat .cherry-src-badge{position:absolute;top:.4em;left:.5em;z-index:2;background:rgba(0,0,0,.85);color:#fff;font-size:.85em;font-weight:700;padding:.12em .5em;border-radius:.25em;max-width:80%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+      '.cherry-cat .cherry-dur{position:absolute;bottom:.4em;right:.5em;z-index:2;background:rgba(0,0,0,.8);color:#fff;font-size:1em;font-weight:700;padding:.18em .55em;border-radius:.25em;}',
+      '.cherry-cat .cherry-views{position:absolute;bottom:.4em;left:.5em;z-index:2;background:rgba(0,0,0,.8);color:#fff;font-size:1em;font-weight:700;padding:.18em .55em;border-radius:.25em;}',
+
+      /* ---- Larger empty/error text for 10-foot readability ----------------- */
+      '.activity .empty__descr{font-size:1.5em;line-height:1.4;}',
 
       /* ---- P3.4 Cherry header filter button -------------------- */
       '.cherry-filter-btn{color:#fff;}',
@@ -1578,6 +1637,7 @@
       cherry_loading:     { ru: 'Загрузка…',           en: 'Loading…'           },
       cherry_error:       { ru: 'Ошибка загрузки',     en: 'Load error'         },
       cherry_load_error:  { ru: 'Не удалось загрузить. Проверьте соединение.', en: 'Failed to load. Check your connection.' },
+      cherry_retry:       { ru: 'Повторить',           en: 'Retry'              },
       cherry_add_fav:        { ru: 'Добавлено в избранное',  en: 'Added to favorites'    },
       cherry_rem_fav:        { ru: 'Убрано из избранного',   en: 'Removed from favorites' },
       cherry_add_fav_action: { ru: 'Добавить в избранное',   en: 'Add to favorites'       },
