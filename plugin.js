@@ -2866,13 +2866,21 @@ SOURCES.push({
       var highUrl = highMatch ? highMatch[1] : '';
       var lowUrl = lowMatch ? lowMatch[1] : '';
 
+      // Android TV plays MP4 inline in the default player, but hands HLS/.m3u8 to
+      // the system → "choose player" dialog. So on Android prefer MP4 (highUrl);
+      // in the browser prefer HLS (hls.js plays it inline + carries 720p/1080p).
       var quality = {};
-      // HLS carries 720p/1080p variants; prefer it over single-bitrate SD MP4
-      if (hlsUrl) quality['HLS'] = hlsUrl;
-      if (highUrl) quality['High'] = highUrl;
-      if (lowUrl && lowUrl !== highUrl) quality['Low'] = lowUrl;
+      if (_isAndroid()) {
+        if (highUrl) quality['High'] = highUrl;
+        if (lowUrl && lowUrl !== highUrl) quality['Low'] = lowUrl;
+        if (hlsUrl) quality['HLS'] = hlsUrl;
+      } else {
+        if (hlsUrl) quality['HLS'] = hlsUrl;
+        if (highUrl) quality['High'] = highUrl;
+        if (lowUrl && lowUrl !== highUrl) quality['Low'] = lowUrl;
+      }
 
-      var url = hlsUrl || highUrl || lowUrl;
+      var url = _isAndroid() ? (highUrl || lowUrl || hlsUrl) : (hlsUrl || highUrl || lowUrl);
       return url ? { url: url, quality: quality } : { url: '', quality: {} };
     }).catch(function() { return { url: '', quality: {} }; });
   }
@@ -2994,12 +3002,20 @@ SOURCES.push({
       var highUrl = highMatch ? highMatch[1] : '';
       var lowUrl = lowMatch ? lowMatch[1] : '';
 
+      // Android TV plays MP4 inline but routes HLS/.m3u8 to the system "choose
+      // player" dialog → prefer MP4 on Android; HLS in the browser (hls.js inline).
       var quality = {};
-      if (hlsUrl) quality['HLS'] = hlsUrl;
-      if (highUrl) quality['MP4 High'] = highUrl;
-      if (lowUrl) quality['MP4 Low'] = lowUrl;
+      if (_isAndroid()) {
+        if (highUrl) quality['MP4 High'] = highUrl;
+        if (lowUrl) quality['MP4 Low'] = lowUrl;
+        if (hlsUrl) quality['HLS'] = hlsUrl;
+      } else {
+        if (hlsUrl) quality['HLS'] = hlsUrl;
+        if (highUrl) quality['MP4 High'] = highUrl;
+        if (lowUrl) quality['MP4 Low'] = lowUrl;
+      }
 
-      var url = hlsUrl || highUrl || lowUrl || '';
+      var url = _isAndroid() ? (highUrl || lowUrl || hlsUrl) : (hlsUrl || highUrl || lowUrl || '');
       return { url: url, quality: quality };
     }).catch(function() { return { url: '', quality: {} }; });
   }
