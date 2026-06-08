@@ -391,10 +391,10 @@ tunnels the outbound request through **rotating Dutch residential SOCKS5 proxies
 - `www.pornhub.com`, `rt.pornhub.com` — phncdn IP-bound tokens require consistent egress IP
 - Wildcard `/\.phncdn\.com$/` — covers all phncdn CDN subdomains (segments, thumbnails)
 
-> **Note (2026-06-04):** pornone is NOT on the residential/worker path. The plugin's
-> `buildProxyUrl` routes `pornone.com` + `*.pornone.com` to **Deno** (see Secondary proxy
-> below), and pornone is confirmed WORKING via Deno. Any leftover `pornone` entry in the
-> worker's `index.js` residential set is legacy/unused (pornone never reaches the worker).
+> **Note:** pornone is NOT on the residential/worker path. The plugin's `buildProxyUrl`
+> routes `pornone.com` + `*.pornone.com` to the **VPS** (see Secondary proxy below), and
+> pornone is confirmed WORKING. Any leftover `pornone` entry in the worker's `index.js`
+> residential set is legacy/unused (pornone never reaches the worker).
 
 **DJB2 domain-hash affinity:** SOCKS5 port is selected by DJB2 hash of the request's
 `referer` domain (or target hostname if no referer). Since all 5 ports exit from
@@ -547,13 +547,13 @@ Only safe for plain pass-through proxies that do NOT rewrite M3U8.
 |---|---|---|---|---|---|---|
 | 1 | `pornhub` | Pornhub | pornhub.com | CF SOCKS5 (RESIDENTIAL) | HLS via phncdn CDN; referer propagated in M3U8 rewrite for IP-affinity | ✅ Working |
 | 2 | `xvideos` | Xvideos | xvideos.com | CF datacenter | HLS from CDN | ✅ Working |
-| 3 | `xnxx` | Xnxx | xnxx.com | Deno | MP4/HLS from CDN | ✅ Working |
-| 4 | `eporner` | Eporner | eporner.com | Deno (video pages) | JSON API browse; video page via Deno | ✅ Working |
-| 5 | `spankbang` | Spankbang | ru.spankbang.com | Deno | Quality map regex + streamkey POST fallback; `ru.` subdomain bypasses bot-check | ✅ Working |
-| 6 | `hqporner` | HQPorner | hqporner.com | CF (page) → Deno (mydaddy.cc + bigcdn) | hqporner.com page via CF; embed `mydaddy.cc` + CDN `*.bigcdn.cc` both via Deno (same GCP IP for IP-bound token) | ✅ Working |
-| 7 | `youjizz` | YouJizz | youjizz.com | Deno | Direct MP4 | ✅ Working |
-| 8 | `pornone` | PornOne | pornone.com | Deno | KVS IP-bound tokens — page + CDN both via Deno GCP IP for token affinity | ✅ Working |
-| 9 | `porntrex` | Porntrex | porntrex.com | Deno | KVS IP-bound tokens — page + CDN both via Deno GCP IP; 410 on CF edge drift | ✅ Working |
+| 3 | `xnxx` | Xnxx | xnxx.com | VPS | MP4/HLS from CDN; Android prefers MP4 | ✅ Working |
+| 4 | `eporner` | Eporner | eporner.com | VPS (video pages) + Android force-proxy | JSON API browse; video page via VPS. getStream hash/xhr needs RE | ⚠ listing OK, stream RE |
+| 5 | `spankbang` | Spankbang | ru.spankbang.com | **Val.town** (+ Android force-proxy) | Val.town IP passes CF challenge; listing + signed-token mp4 (`sb-cd.com`) | ✅ Working |
+| 6 | `hqporner` | HQPorner | hqporner.com | VPS (page + bigcdn) + Android force-proxy | page via VPS; embed `mydaddy.cc` + CDN `*.bigcdn.cc` both VPS (IP-bound token). Player markup redesigned → stream RE | ⚠ cards OK, stream RE |
+| 7 | `youjizz` | YouJizz | youjizz.com | VPS (+ `*.youjizz.com` CDN) | Direct MP4 (Android: protocol-relative normalized → no chooser) | ✅ Working |
+| 8 | `pornone` | PornOne | pornone.com | VPS | KVS IP-bound tokens — page + CDN both via VPS IP for token affinity | ✅ Working |
+| 9 | `porntrex` | Porntrex | porntrex.com | VPS (+ `*.cdntrex.com`) | KVS IP-bound tokens — page + CDN both via VPS IP | ✅ Working |
 | 10 | `xozilla` | Xozilla | xozilla.com | CF datacenter | KVS `_kvsEngine` | ✅ Working |
 | 11 | `3movs` | 3Movs | 3movs.com | CF datacenter | KVS signed-token | ✅ Working (token may expire) |
 | 12 | `analdin` | Analdin | analdin.com | CF datacenter | KVS `_kvsEngine` | ✅ Working |
@@ -574,14 +574,15 @@ Only safe for plain pass-through proxies that do NOT rewrite M3U8.
 **Proxy tier legend:**
 - **CF datacenter** — CF Worker direct fetch; consistent within a CF PoP but may vary across PoPs
 - **CF SOCKS5** — CF Worker tunnels through Dutch residential proxies (45.91.209.155:11750–11756); use for domains where IP-bound tokens require consistent egress IP
-- **Deno** — Deno Deploy GCP proxy; use when CF ASN is blocked or when bigcdn/perfektdamen IP-bound tokens need consistent GCP IP
-- **Deno paired** — page fetch AND CDN fetch both via Deno to share the same GCP exit IP (critical for IP-bound CDN tokens)
+- **VPS** — self-hosted VPS proxy (`185-36-141-21.sslip.io`, stable IP); use when CF ASN is blocked or when KVS/bigcdn IP-bound tokens need one consistent egress IP (replaced Deno Deploy 2026-06-06)
+- **VPS paired** — page fetch AND CDN fetch both via the VPS to share the same exit IP (critical for IP-bound CDN tokens)
+- **Val.town** — free Val.town HTTP val; spankbang only (its IP passes the CF bot-challenge)
 
 **IP-bound token pairing rule (critical):**
 When a CDN generates tokens bound to the requesting IP, the page that generates the token and the CDN that validates it must use the SAME proxy tier. Violating this causes 404/403 on media requests. Current pairs:
-- `mydaddy.cc` + `*.bigcdn.cc` → both Deno
-- `www.pornhub.com` + `*.phncdn.com` → both CF SOCKS5 (+ referer propagation in M3U8 rewrite)
-- `pornone.com` + `*.pornone.com` → both **Deno** in the plugin's `buildProxyUrl`
+- `mydaddy.cc` + `*.bigcdn.cc` → both VPS
+- `www.pornhub.com` + `*.phncdn.com` → both CF SOCKS5 (browser) / both device-IP raw (Android, the working path)
+- `pornone.com` + `*.pornone.com`, `porntrex.com` + `*.cdntrex.com`, `youjizz.com` + `*.youjizz.com` → both **VPS**
   (the worker `index.js` may still list them as SOCKS5 — see the *buildProxyUrl* contradiction note)
 
 **UX extras** (see the dedicated UI / Search / Categories / Sorts / Related / Model / Metadata sections):
@@ -617,9 +618,9 @@ Results from `node test/cherry-lampa-e2e.mjs` — Playwright/Chromium with real 
 |---|---|---|
 | `pornhub` | 30 | getStream: `video.url` → CF Worker → `flashvars_\d+` JSON block → HLS/MP4. Browse: webmasters API JSON. `cfg.sorts`, `browseByModel`, `getRelated` implemented (Phase 3/4/5). |
 | `xvideos` | 42 | HLS via CDN, range test N/A for HLS |
-| `xnxx` | ~30 | **Via Deno Deploy proxy** (`cherry-proxy.aawersom.deno.net`); browse URL fixed to `/?k=new&p=N` |
-| `eporner` | ~30 | **Via Deno Deploy proxy** for video pages (`www.eporner.com` added to `PROXY_URL_2_HOSTS`); JSON search/browse API still uses direct fetch (CORS-open). URL format: `/video-{id}/{slug}/`. |
-| `spankbang` | ~30 | **Via Deno Deploy proxy** (`ru.spankbang.com`); `spankbang.com` and `www.spankbang.com` remain JS-challenge gated and removed from `PROXY_URL_2_HOSTS`. Quality map extraction primary, streamkey POST fallback. |
+| `xnxx` | ~30 | **Via VPS proxy** (`PROXY_URL_2`); browse URL fixed to `/?k=new&p=N`. Android prefers MP4 over HLS (no player-chooser). |
+| `eporner` | ~30 | **Via VPS proxy** for video pages (`www.eporner.com` in `PROXY_URL_2_HOSTS`; also `_ANDROID_FORCE_PROXY` — device IP gets a block page); JSON search/browse API direct (CORS-open). URL: `/video-{id}/{slug}/`. getStream hash/xhr chain needs RE. |
+| `spankbang` | ~30 | **Via Val.town** (`PROXY_URL_VT`, `ru.spankbang.com`) — VPS/CF datacenter IPs get CF "Just a moment" 403; Val.town's IP passes it. Also in `_ANDROID_FORCE_PROXY`. Listing + signed-token mp4 stream (`sb-cd.com`) both work. |
 | `youjizz` | 24 | Direct MP4 via proxy |
 | `xozilla` | 100 | KVS get_file, consistent |
 | `analdin` | 100 | KVS get_file, consistent |
@@ -653,11 +654,15 @@ edge IP rotation. In real Lampa usage (immediate playback after selection), they
 | id | cards | root cause |
 |---|---|---|
 | `hqporner` | 50 | **CDN routing bug** (not permanently broken — see Iteration 2): `s24.bigcdn.cc` not in `PROXY_URL_2_HOSTS` list, routes to CF Worker → 404. Fix: add `/\.bigcdn\.cc$/` regex. |
-| `pornone` | 49 | **IP-locked CDN tokens** on `gallery.vcmdiawe.com`. Strategy A implemented: CDN routes through Deno Deploy (same-POP delivery likely via Anycast). If Strategy A fails in E2E, escalate to Strategy B (`pornone.com` + CDN both through Deno). |
+| `pornone` | 49 | **IP-locked CDN tokens** — resolved: `pornone.com` + `*.pornone.com` CDN both route through the **VPS** (one stable egress IP → token affinity holds). |
 
 ### Previously unfixable — now repaired
 
-SpankBang previously failed with Cloudflare JS challenge on `spankbang.com` and `www.spankbang.com`. The Russian regional subdomain `ru.spankbang.com` does NOT trigger the JS challenge from Deno Deploy IPs and is used instead. `spankbang.com` and `www.spankbang.com` are removed from `PROXY_URL_2_HOSTS`.
+SpankBang sits behind a Cloudflare bot-challenge that **every datacenter IP** (CF worker, VPS)
+fails ("Just a moment" 403) — including the device's home IP on Android. Resolved 2026-06-08 by
+routing spankbang through a free **Val.town** HTTP val (`PROXY_URL_VT`), whose egress IP passes
+the challenge (as Deno Deploy's used to). Listing + the signed-token mp4 stream (`sb-cd.com`)
+both work. Val.town carries only the light listing (free tier, huge headroom).
 
 | id | status | notes |
 |---|---|---|
@@ -845,8 +850,8 @@ Live testing session. All originally-reported broken channels fixed.
 
 | id | limitation | notes |
 |---|---|---|
-| `spankbang` | Some video pages may 403 (Spankbang bot-protection varies per video) | `ru.spankbang.com` bypasses most checks; heavily-protected videos require Playwright |
-| `hqporner` | ~55–110 hours/month via Deno free tier (100 GiB bandwidth) | bigcdn MP4 files stream through Deno; upgrade to paid tier if limit reached |
+| `spankbang` | Behind CF bot-challenge — routed via Val.town (passes it) | listing via Val.town (light); video = signed-token mp4 on `sb-cd.com` fetched directly |
+| `hqporner` | bigcdn stream via VPS (unmetered) — but video-page player markup was redesigned | cards work (force-proxy); getStream embed extraction needs RE for the new markup |
 | All KVS sources | Tokens expire; E2E test may fail if > token TTL elapses between getStream and play | In live Lampa usage (immediate playback) reliable |
 
 ### Channels with no issues (not reported, confirmed working)
