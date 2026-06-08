@@ -20,8 +20,12 @@
   var PROXY_URL_2_HOSTS = {
     // xnxx: CF Worker IPs blocked at ASN level; Deno works
     'xnxx.com': 1, 'www.xnxx.com': 1,
-    // youjizz: rate-limits CF datacenter IPs
+    // youjizz: rate-limits CF datacenter IPs (page + all *.youjizz.com CDN via regex below)
     'www.youjizz.com': 1, 'youjizz.com': 1,
+    // hqporner: CF datacenter IPs are intermittently blocked (catalog drops to 0).
+    // Streams are on mydaddy.cc / *.bigcdn.cc (both already → VPS), so page+stream
+    // co-locate on the VPS egress IP.
+    'hqporner.com': 1, 'www.hqporner.com': 1,
     // tizam.org: rate-limits rapid sequential CF datacenter requests
     'tv4.tizam.org': 1,
     // pornone/porntrex: Deno — KVS IP-bound tokens require page+CDN on same fixed IP
@@ -67,7 +71,13 @@
       if (base === PROXY_URL && PROXY_URL_2) {
         try {
           var h = new URL(url).hostname;
-          if (PROXY_URL_2_HOSTS[h] || /\.bigcdn\.cc$/.test(h) || /(?:^|\.)pornone\.com$/.test(h)) base = PROXY_URL_2;
+          // Registered-domain regexes co-locate a site's page + its stream-CDN
+          // subdomains on the same VPS egress IP. KVS/CDN tokens are IP-bound: if the
+          // page is fetched from the VPS but the stream CDN goes via CF (different IP),
+          // the token mismatches → 410/buffering. youjizz streams on *.youjizz.com
+          // (e.g. cdne-mobile.youjizz.com); porntrex streams on *.cdntrex.com.
+          if (PROXY_URL_2_HOSTS[h] || /\.bigcdn\.cc$/.test(h) || /(?:^|\.)pornone\.com$/.test(h) ||
+              /(?:^|\.)youjizz\.com$/.test(h) || /\.cdntrex\.com$/.test(h)) base = PROXY_URL_2;
         } catch (e) {}
       }
     }
@@ -3790,16 +3800,21 @@ SOURCES.push({
 
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
-            // KVS get_file — collect all MP4 URLs from get_file paths
-            var kvsRx = /get_file\/[^\s"'<>]+\.mp4[^\s"'<>]*/g;
+            // KVS get_file — collect all MP4 URLs. Capture the FULL absolute URL
+            // (scheme+host) when present so a CDN host (e.g. *.cdntrex.com) is NOT
+            // dropped; only fall back to the page host for host-relative matches.
+            var kvsRx = /((?:https?:)?\/\/[^\s"'<>]+\/)?get_file\/[^\s"'<>]+\.mp4[^\s"'<>]*/g;
             var found = [];
             var m;
             while ((m = kvsRx.exec(html)) !== null) {
-                var candidate = m[0].replace(/['">\/\s]+$/, '');
-                // Reconstruct absolute URL if the match lacks scheme
-                var full = /^https?:\/\//i.test(candidate)
-                    ? candidate
-                    : 'https://www.porntrex.com/' + candidate.replace(/^\//, '');
+                var candidate = m[0].replace(/['">\s]+$/, '');
+                // Reconstruct absolute URL only if the match lacks scheme/host.
+                // Keep the captured host (e.g. *.cdntrex.com); normalize protocol-relative.
+                var full = /^\/\//.test(candidate)
+                    ? 'https:' + candidate
+                    : (/^https?:\/\//i.test(candidate)
+                        ? candidate
+                        : 'https://www.porntrex.com/' + candidate.replace(/^\//, ''));
                 if (found.indexOf(full) === -1) found.push(full);
             }
             if (found.length) {
@@ -4401,7 +4416,10 @@ SOURCES.push({
         var s = sort || (this.cfg.sorts[0] && this.cfg.sorts[0].id) || '';
         var url = category
             ? _buildCatUrl('https://pornve.com/categories/{slug}/{page}/', category, p, 1, true)
-            : (p > 1 ? 'https://pornve.com/latest-updates/?page=' + p
+            // Default feed paginates by PATH (/latest-updates/{N}/), NOT ?page=N
+            // (the query param is ignored → same 20 cards → no scroll). Path style
+            // serves fresh cards per page (curl-verified p1/p2/p3 all unique).
+            : (p > 1 ? 'https://pornve.com/latest-updates/' + p + '/'
                      : 'https://pornve.com/latest-updates/');
         if (s && url.indexOf('sort_by=') === -1) {
             url += (url.indexOf('?') >= 0 ? '&' : '?') + 'sort_by=' + s;
@@ -5624,8 +5642,12 @@ SOURCES.push({
 
     browse: function (category, page) {
         var p = page || 1;
+        // DLE category: page1 = /{slug}/ (NOT /{slug}/page/ — the bare /page/ segment
+        // is a malformed URL; _buildCatUrl's page1Omit leaves an orphan /page/). page>1
+        // = /{slug}/page/{N}/. No-category home is /{}/ then /page/{N}/.
         var url = category
-            ? _buildCatUrl('https://w2.huyalkino.com/{slug}/page/{page}/', category, p, 1, true)
+            ? (p > 1 ? 'https://w2.huyalkino.com/' + category + '/page/' + p + '/'
+                     : 'https://w2.huyalkino.com/' + category + '/')
             : (p > 1 ? 'https://w2.huyalkino.com/page/' + p + '/' : 'https://w2.huyalkino.com/');
         return cherryFetch(url).then(function (html) {
             var items = _rolikaCards(html);

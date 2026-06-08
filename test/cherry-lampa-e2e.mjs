@@ -30,6 +30,7 @@ const PROXY_BASE_2     = 'https://185-36-141-21.sslip.io';
 const PROXY_URL_2_HOSTS = {
   'xnxx.com': 1, 'www.xnxx.com': 1,
   'www.youjizz.com': 1, 'youjizz.com': 1,
+  'hqporner.com': 1, 'www.hqporner.com': 1,
   'tv4.tizam.org': 1,
   // pornone/porntrex: Deno — KVS IP-bound tokens require page+CDN on same fixed IP
   'pornone.com': 1, 'www.pornone.com': 1,
@@ -88,7 +89,12 @@ function wrapLikePxHelper(streamUrl) {
   const u = streamUrl.startsWith('//') ? 'https:' + streamUrl : streamUrl;
   try {
     const host = new URL(u).hostname;
-    const base = PROXY_URL_2_HOSTS[host] ? PROXY_BASE_2 : PROXY_BASE;
+    // Mirror plugin.js buildProxyUrl: host-list OR registered-domain regexes for
+    // CDN families (bigcdn/pornone/youjizz/cdntrex) co-locate page + stream on VPS.
+    const sec = PROXY_URL_2_HOSTS[host] || /\.bigcdn\.cc$/.test(host) ||
+      /(?:^|\.)pornone\.com$/.test(host) || /(?:^|\.)youjizz\.com$/.test(host) ||
+      /\.cdntrex\.com$/.test(host);
+    const base = sec ? PROXY_BASE_2 : PROXY_BASE;
     return `${base}/proxy?url=${encodeURIComponent(u)}&key=${PROXY_KEY}`;
   } catch { return `${PROXY_BASE}/proxy?url=${encodeURIComponent(u)}&key=${PROXY_KEY}`; }
 }

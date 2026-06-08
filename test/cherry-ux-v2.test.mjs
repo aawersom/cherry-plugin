@@ -2206,8 +2206,11 @@ describe('Batch 4 categories — plugin.js source assertions (anti-drift)', () =
 
 // ── Batch 5: DLE + misc categories (24rolika, jopaonline, ebun, lenporno, pornhub) ──
 describe('Batch 5 categories — plugin.js source assertions (anti-drift)', () => {
-  it('24rolika DLE /{slug}/page/{page}/ template', () => {
-    expect(SRC).toContain('https://w2.huyalkino.com/{slug}/page/{page}/');
+  it('24rolika DLE category: page1 = /{slug}/, page>1 = /{slug}/page/{N}/', () => {
+    // page1 must be the bare /{slug}/ — the old _buildCatUrl page1Omit produced a
+    // malformed /{slug}/page/ (orphan segment). Built directly in browse() now.
+    expect(SRC).toContain("'https://w2.huyalkino.com/' + category + '/page/' + p + '/'");
+    expect(SRC).toContain("'https://w2.huyalkino.com/' + category + '/'");
   });
   it('jopaonline /categories/{slug}/{sort}/{page} template (path-sort after slug)', () => {
     // Sort segment after the slug; default = popular (По популярности).

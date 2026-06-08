@@ -3466,12 +3466,15 @@ describe('device bug fixes (8)', function () {
     expect((phFull.match(/self\._mapVideo\(v\)/g) || []).length).toBeGreaterThanOrEqual(2);
   });
 
-  // #4/#6 hellporno + hqporner routed through the Deno proxy host set.
-  it('#4/#6: hellporno/hqporner NOT routed to Deno (Deno serves hellporno=0; hqporner needs residential); Deno→CF failover exists', function () {
+  // #4/#6 hellporno stays on CF (Deno serves 0). hqporner now routes to the VPS:
+  // curl-confirmed the VPS returns the full catalog (CF datacenter IPs intermittently
+  // blocked) and its streams (mydaddy/bigcdn) already → VPS, so page+stream co-locate.
+  it('#4/#6: hellporno NOT routed to secondary; hqporner routed to VPS; secondary→CF failover exists', function () {
     const set = /var PROXY_URL_2_HOSTS = \{[\s\S]*?\};/.exec(SRC)[0];
     expect(set).not.toContain("'hellporno.com': 1");
-    expect(set).not.toContain("'hqporner.com': 1");
-    // Failover so a dead secondary proxy (Deno over-quota) falls back to CF.
+    expect(set).toContain("'hqporner.com': 1");
+    expect(set).toContain("'www.hqporner.com': 1");
+    // Failover so a dead secondary proxy (over-quota/down) falls back to CF.
     expect(SRC).toContain('_hasProxyFailover');
     expect(SRC).toMatch(/buildProxyUrl\(url, referer, true\)/);
   });
