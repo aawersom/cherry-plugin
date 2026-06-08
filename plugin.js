@@ -8,8 +8,11 @@
   // CONFIG — user sets these after deploying their proxy
   // ============================================================
   var PROXY_URL = 'https://cherry-proxy.aawersom.workers.dev';
-  // Secondary proxy on Deno Deploy — used for sites that block Cloudflare datacenter IPs
-  var PROXY_URL_2 = 'https://cherry-proxy.aawersom.deno.net';
+  // Secondary proxy on a self-hosted VPS (stable IP, unmetered bandwidth) — replaces
+  // Deno Deploy (free egress quota kept dying on video streaming). Runs the Deno proxy
+  // script via systemd behind Caddy/TLS (sslip.io). Used for sites that block CF
+  // datacenter IPs + KVS sites whose CDN tokens are IP-bound (need one stable egress IP).
+  var PROXY_URL_2 = 'https://185-36-141-21.sslip.io';
   // Tertiary proxy — VPS with rotating residential IPs (set to '' if not deployed)
   // Deploy workers/cherry-proxy-vps/index.js on Beget VPS, then fill in your IP:PORT
   var PROXY_URL_3 = '';

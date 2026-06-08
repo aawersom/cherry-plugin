@@ -25,7 +25,7 @@ const LAMPA_URL        = 'http://lampa.mx/';
 const PLUGIN_URL       = 'https://aawersom.github.io/cherry-plugin/plugin.js';
 const PROXY_KEY        = '1206';
 const PROXY_BASE       = 'https://cherry-proxy.aawersom.workers.dev';
-const PROXY_BASE_2     = 'https://cherry-proxy.aawersom.deno.net';
+const PROXY_BASE_2     = 'https://185-36-141-21.sslip.io';
 // Mirror of plugin.js PROXY_URL_2_HOSTS — sync-check assertion in plugin-helpers.test.js enforces parity.
 const PROXY_URL_2_HOSTS = {
   'xnxx.com': 1, 'www.xnxx.com': 1,

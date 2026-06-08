@@ -12,7 +12,7 @@ import { describe, it, expect } from 'vitest';
 // Current proxy config — matches plugin.js post-Commit-A
 // ============================================================
 var PROXY_URL   = 'https://cherry-proxy.aawersom.workers.dev';
-var PROXY_URL_2 = 'https://cherry-proxy.aawersom.deno.net';
+var PROXY_URL_2 = 'https://185-36-141-21.sslip.io';
 var PROXY_URL_3 = '';
 
 var PROXY_URL_2_HOSTS = {

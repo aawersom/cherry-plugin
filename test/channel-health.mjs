@@ -9,7 +9,7 @@
 // this is a fast pre-check to spot a channel that suddenly stops returning cards.
 
 const CF = 'https://cherry-proxy.aawersom.workers.dev/proxy';
-const DENO = 'https://cherry-proxy.aawersom.deno.net/proxy';
+const DENO = 'https://185-36-141-21.sslip.io/proxy';
 const KEY = '1206';
 
 // id → { url, proxy, marker }  — marker mirrors the adapter's real parse key.
