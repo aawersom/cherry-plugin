@@ -93,6 +93,22 @@
     return buildProxyUrl(url, referer) !== buildProxyUrl(url, referer, true);
   }
 
+  // Hosts that block the device's home IP (so on Android the native device-IP fetch
+  // returns empty/challenge) AND whose stream co-locates with the page proxy — so we
+  // can safely force BOTH page and stream through the proxy on Android without an
+  // IP-affinity mismatch. hqporner → VPS (its bigcdn stream is already VPS-routed);
+  // hellporno → CF (page + get_file stream share the same host). NOT general: sites
+  // whose CDN lives on a separate unrouted domain (xnxx-cdn, youjizz CDN) must stay
+  // native device-IP for page+stream, so they are deliberately excluded.
+  var _ANDROID_FORCE_PROXY = {
+    'hqporner.com': 1, 'www.hqporner.com': 1,
+    'hellporno.com': 1, 'www.hellporno.com': 1
+  };
+  function _forceProxyAndroid(url) {
+    try { if (_ANDROID_FORCE_PROXY[new URL(url).hostname]) return true; } catch (e) {}
+    return false;
+  }
+
   function _isAndroid() {
     try {
       return !!(window.Lampa && window.Lampa.Platform &&
@@ -117,6 +133,9 @@
   /** @param {string} url @param {string=} referer @returns {Promise<string>} */
   function cherryFetch(url, referer) {
     if (_isAndroid()) {
+      // Sites that block the device home IP → fetch the page via the proxy (clean IP)
+      // instead of native, so it co-locates with the (also proxied) stream.
+      if (_forceProxyAndroid(url)) return _proxyText(url, referer);
       return _nativeFetch(url).catch(function() { return _proxyText(url, referer); });
     }
     return _proxyText(url, referer);
@@ -719,15 +738,16 @@
         // `//host/...` URL (shows the "choose player" dialog), so it must get a
         // proper `https://` URL too.
         if (u.indexOf('//') === 0) u = 'https:' + u;
-        // Android: native player loads the stream directly from the device's
-        // home (residential) IP. Since the page was also fetched natively from
-        // the same IP, IP-bound CDN tokens (phncdn, KVS get_file) stay valid
-        // with NO proxy. Hand the raw URL to the native player.
-        if (_isAndroid()) return u;
         if (u.indexOf('blob:') === 0) return u;
         if (PROXY_URL_3 && u.indexOf(PROXY_URL_3) === 0) return u; // skip VPS-proxied URLs
         if (PROXY_URL_2 && u.indexOf(PROXY_URL_2) === 0) return u; // skip Deno-proxied URLs
         if (u.indexOf(PROXY_URL) === 0) return u; // skip CF Worker-proxied URLs
+        // Android: native player loads the stream directly from the device's home
+        // (residential) IP. Since the page was also fetched natively from the same IP,
+        // IP-bound CDN tokens (KVS get_file) stay valid with NO proxy → hand raw URL.
+        // EXCEPT force-proxy hosts (device IP blocked): proxy the stream so it
+        // co-locates with the proxied page on the same egress IP.
+        if (_isAndroid()) return _forceProxyAndroid(u) ? buildProxyUrl(u) : u;
         return buildProxyUrl(u);
       }
       var proxiedQuality = {};
