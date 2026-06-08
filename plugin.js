@@ -16,6 +16,14 @@
   // Tertiary proxy — VPS with rotating residential IPs (set to '' if not deployed)
   // Deploy workers/cherry-proxy-vps/index.js on Beget VPS, then fill in your IP:PORT
   var PROXY_URL_3 = '';
+  // Val.town free HTTP val (workers/cherry-proxy-valtown/main.ts) — its egress IP passes
+  // Cloudflare's bot-challenge (like Deno did) where the VPS/CF datacenter IPs get a
+  // "Just a moment" 403. Used ONLY for spankbang's light LISTING (KB) — keeps usage far
+  // under the free tier; spankbang video stays off it (and is broken anyway / needs a browser).
+  var PROXY_URL_VT = 'https://aawersom--0d56e6a4635611f1a1321607ee4eb77e.web.val.run';
+  var PROXY_URL_VT_HOSTS = {
+    'ru.spankbang.com': 1, 'spankbang.com': 1, 'www.spankbang.com': 1
+  };
 
   var PROXY_URL_2_HOSTS = {
     // xnxx: CF Worker IPs blocked at ASN level; Deno works
@@ -33,8 +41,8 @@
     'porntrex.com': 1, 'www.porntrex.com': 1,
     // eporner: SOCKS5 instability — revert to Deno
     'www.eporner.com': 1,
-    // spankbang ru: Deno for browse (SOCKS5 blocks even browse); stream remains broken (needs Playwright)
-    'ru.spankbang.com': 1,
+    // spankbang: now routed to Val.town (PROXY_URL_VT) — the VPS datacenter IP gets
+    // Cloudflare's "Just a moment" 403; Val.town's IP passes it. (Was here on Deno.)
     // mydaddy.cc: bigcdn tokens IP-bound to mydaddy.cc fetch IP — must use same proxy as bigcdn
     'mydaddy.cc': 1,
     // bigcdn.cc all subdomains covered by /\.bigcdn\.cc$/ regex in buildProxyUrl
@@ -65,7 +73,10 @@
     var base = PROXY_URL;
     // forceCF: failover path — ignore secondary routing, go straight to the CF worker.
     if (!forceCF) {
-      if (PROXY_URL_3) {
+      if (PROXY_URL_VT) {
+        try { if (PROXY_URL_VT_HOSTS[new URL(url).hostname]) base = PROXY_URL_VT; } catch (e) {}
+      }
+      if (base === PROXY_URL && PROXY_URL_3) {
         try { if (PROXY_URL_3_HOSTS[new URL(url).hostname]) base = PROXY_URL_3; } catch (e) {}
       }
       if (base === PROXY_URL && PROXY_URL_2) {
@@ -109,7 +120,10 @@
     // (cdnv365 / eporner CDN) are on separate hosts → stay raw device-IP (signed-token,
     // not IP-bound) so playback still works.
     'www.lenporno.net': 1, 'lenporno.net': 1,
-    'www.eporner.com': 1, 'eporner.com': 1
+    'www.eporner.com': 1, 'eporner.com': 1,
+    // spankbang: Cloudflare challenges the device home IP too → force the page through
+    // the proxy (routes to Val.town via PROXY_URL_VT, which passes the challenge).
+    'ru.spankbang.com': 1, 'spankbang.com': 1, 'www.spankbang.com': 1
   };
   function _forceProxyAndroid(url) {
     try { if (_ANDROID_FORCE_PROXY[new URL(url).hostname]) return true; } catch (e) {}
