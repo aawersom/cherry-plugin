@@ -74,3 +74,12 @@ endpoint возвращает `[]`**. → pornhub защищает стрим с
 ставить НЕЛЬЗЯ — Chrome (~400-600МБ) рискует OOM-убить контейнер AmneziaWG (VPN трогать нельзя).
 **Нужно:** VPS 2-4ГБ под flaresolverr ИЛИ отдельный бокс → тогда маршрутизировать spankbang
 (и любой CF-challenge сайт) через него. Альтернатива: скрыть spankbang до появления солвера.
+
+## BL-SPANKBANG — РЕШЕНО (2026-06-08)
+spankbang снова работает: страница идёт через бесплатный **Val.town HTTP-val** (PROXY_URL_VT),
+чей egress-IP проходит Cloudflare-челлендж (VPS/CF датацентр-IP его не проходят → 403).
+Эмулятор: 72 карточки + стрим (sb-cd.com/...mp4?secure=, подписанный токен) извлекается.
+Конфиг: PROXY_URL_VT + PROXY_URL_VT_HOSTS{spankbang} в buildProxyUrl; spankbang убран из
+PROXY_URL_2_HOSTS; добавлен в _ANDROID_FORCE_PROXY (device-IP тоже челленджится → форс прокси).
+Деплой val: workers/cherry-proxy-valtown/main.ts; доступы в ACCESS-vault. Только листинг (КБ) —
+free tier 100k/день с огромным запасом, видео не через Val.town.
