@@ -1959,21 +1959,23 @@ describe('Android native stream — plugin.js source assertions (anti-drift)', (
     // "choose player" failure). The normalization line must precede the Android return.
     const open = SRC.indexOf('function px(u) {');
     expect(open).toBeGreaterThan(-1);
-    const body = SRC.slice(open, open + 900);
+    const body = SRC.slice(open, open + 1800);
     const normAt = body.indexOf("if (u.indexOf('//') === 0) u = 'https:' + u;");
-    const androidAt = body.indexOf('if (_isAndroid()) return u;');
+    const androidAt = body.indexOf('if (_isAndroid()) return _forceProxyAndroid(u)');
     expect(normAt).toBeGreaterThan(-1);
     expect(androidAt).toBeGreaterThan(-1);
-    expect(normAt).toBeLessThan(androidAt);          // normalize first, then Android raw
+    expect(normAt).toBeLessThan(androidAt);          // normalize first, then Android branch
   });
-  it('px() Android raw return stays ahead of the blob/proxy checks', () => {
+  it('px() Android branch force-proxies blocked hosts, raw otherwise', () => {
     const open = SRC.indexOf('function px(u) {');
-    const body = SRC.slice(open, open + 900);
-    const androidAt = body.indexOf('if (_isAndroid()) return u;');
+    const body = SRC.slice(open, open + 1800);
+    // Android: force-proxy hosts get buildProxyUrl, all others raw device-IP.
+    expect(body).toContain('if (_isAndroid()) return _forceProxyAndroid(u) ? buildProxyUrl(u) : u;');
+    // blob/already-proxied passthrough must precede the Android branch.
     const blobAt = body.indexOf("if (u.indexOf('blob:') === 0) return u;");
-    expect(androidAt).toBeGreaterThan(-1);
+    const androidAt = body.indexOf('if (_isAndroid()) return _forceProxyAndroid(u)');
     expect(blobAt).toBeGreaterThan(-1);
-    expect(androidAt).toBeLessThan(blobAt);
+    expect(blobAt).toBeLessThan(androidAt);
   });
   it('pornhub HLS fallback is raw on Android, proxied otherwise', () => {
     expect(SRC).toMatch(/_isAndroid\(\)\s*\?\s*hlsUrls\[lbl\]\s*:\s*buildProxyUrl\(hlsUrls\[lbl\]/);
