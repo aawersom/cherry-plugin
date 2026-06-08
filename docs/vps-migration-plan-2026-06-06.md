@@ -56,3 +56,12 @@ VPS: 185.36.141.21 · Ubuntu 24.04 · 1 vCPU / 1 GB / 20 GB. На нём под�
 ## Открытое (нужно от владельца)
 - ⚠ **Root-пароль со скриншота (`BlbU?5py!+ko`) НЕ подошёл** (OCR? l/I, o/0). Прислать точный текстом или сбросить в панели.
 - ASN-блок (xnxx/spankbang): IP VPS 185.36.141.21 — датацентровый; если xnxx его блокирует, эти 1-2 сайта оставить на residential (`PROXY_URL_3`) — проверим на Этапе 5.
+
+## ✅ ВЫПОЛНЕНО (2026-06-06)
+Прокси перенесён на VPS, Deno Deploy больше не используется.
+- cherry-proxy.service (deno, 127.0.0.1:8787) + Caddy TLS `185-36-141-21.sslip.io` — active.
+- `PROXY_URL_2 = https://185-36-141-21.sslip.io` (в проде, live==local). VPS→CF failover оставлен.
+- Проверено снаружи: xnxx 36, pornone/porntrex/tizam/youjizz/eporner — 200. **xnxx работает с VPS-IP** (CF был ASN-блокнут).
+- VPN AmneziaWG: контейнер Up, 20 пиров, handshake — **не пострадал**. swap 2ГБ добавлен. RAM 475/961.
+- Бэкап VPN-конфига скачан в backups/2026-06-06/vps/.
+- ⚠ TODO владельца: сменить root-пароль (засветился) + ротировать утёкшие SOCKS5.
