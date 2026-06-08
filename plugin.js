@@ -33,6 +33,9 @@
     // bigcdn.cc all subdomains covered by /\.bigcdn\.cc$/ regex in buildProxyUrl
     // perfektdamen KVS CDN — IP-bound tokens require consistent egress IP
     'www.perfektdamen.co': 1
+    // NB: hellporno stays on CF (Deno returns 0 cards for it even when up; CF gives 60).
+    // hqporner is blocked on CF datacenter IPs and Deno doesn't help — it needs a
+    // residential route (PROXY_URL_3). Neither is routed to Deno.
   };
 
   // Domains that need residential IP — routed via PROXY_URL_3 when available
@@ -50,22 +53,31 @@
   // ============================================================
 
   /** @param {string} url @param {string=} referer @returns {string} */
-  function buildProxyUrl(url, referer) {
+  function buildProxyUrl(url, referer, forceCF) {
     var key = getProxyKey();
     var base = PROXY_URL;
-    if (PROXY_URL_3) {
-      try { if (PROXY_URL_3_HOSTS[new URL(url).hostname]) base = PROXY_URL_3; } catch (e) {}
-    }
-    if (base === PROXY_URL && PROXY_URL_2) {
-      try {
-        var h = new URL(url).hostname;
-        if (PROXY_URL_2_HOSTS[h] || /\.bigcdn\.cc$/.test(h) || /(?:^|\.)pornone\.com$/.test(h)) base = PROXY_URL_2;
-      } catch (e) {}
+    // forceCF: failover path — ignore secondary routing, go straight to the CF worker.
+    if (!forceCF) {
+      if (PROXY_URL_3) {
+        try { if (PROXY_URL_3_HOSTS[new URL(url).hostname]) base = PROXY_URL_3; } catch (e) {}
+      }
+      if (base === PROXY_URL && PROXY_URL_2) {
+        try {
+          var h = new URL(url).hostname;
+          if (PROXY_URL_2_HOSTS[h] || /\.bigcdn\.cc$/.test(h) || /(?:^|\.)pornone\.com$/.test(h)) base = PROXY_URL_2;
+        } catch (e) {}
+      }
     }
     var p = base + '/proxy?url=' + encodeURIComponent(url);
     if (key)     p += '&key=' + encodeURIComponent(key);
     if (referer) p += '&referer=' + encodeURIComponent(referer);
     return p;
+  }
+
+  // True when this URL is routed to a SECONDARY proxy (Deno/VPS), so a failover to
+  // the primary CF worker is meaningful (e.g. when Deno is over-quota / 503).
+  function _hasProxyFailover(url, referer) {
+    return buildProxyUrl(url, referer) !== buildProxyUrl(url, referer, true);
   }
 
   function _isAndroid() {
@@ -92,16 +104,24 @@
   /** @param {string} url @param {string=} referer @returns {Promise<string>} */
   function cherryFetch(url, referer) {
     if (_isAndroid()) {
-      return _nativeFetch(url).catch(function() {
-        return fetch(buildProxyUrl(url, referer)).then(function(r) {
-          if (!r.ok) throw new Error('HTTP ' + r.status);
-          return r.text();
-        });
-      });
+      return _nativeFetch(url).catch(function() { return _proxyText(url, referer); });
     }
+    return _proxyText(url, referer);
+  }
+
+  // Proxy GET → text, with one Deno→CF failover. If the URL routes to a secondary
+  // proxy (Deno) and that fails (e.g. 503 over-quota), retry via the CF worker so a
+  // dead secondary proxy doesn't take down its channels.
+  function _proxyText(url, referer) {
     return fetch(buildProxyUrl(url, referer)).then(function(r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.text();
+    }).catch(function(err) {
+      if (!_hasProxyFailover(url, referer)) throw err;
+      return fetch(buildProxyUrl(url, referer, true)).then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.text();
+      });
     });
   }
 
@@ -113,11 +133,21 @@
    */
   function _fetchAny(url, referer) {
     if (_isAndroid()) {
-      return _nativeFetch(url).catch(function () {
-        return fetch(buildProxyUrl(url, referer)).then(function (r) { return r.text(); });
-      });
+      return _nativeFetch(url).catch(function () { return _proxyTextAny(url, referer); });
     }
-    return fetch(buildProxyUrl(url, referer)).then(function (r) { return r.text(); });
+    return _proxyTextAny(url, referer);
+  }
+
+  // Status-tolerant proxy GET with the same Deno→CF failover as _proxyText.
+  function _proxyTextAny(url, referer) {
+    return fetch(buildProxyUrl(url, referer)).then(function (r) {
+      if (r.ok) return r.text();
+      if (_hasProxyFailover(url, referer)) return fetch(buildProxyUrl(url, referer, true)).then(function (r2) { return r2.text(); });
+      return r.text();
+    }).catch(function (err) {
+      if (!_hasProxyFailover(url, referer)) throw err;
+      return fetch(buildProxyUrl(url, referer, true)).then(function (r) { return r.text(); });
+    });
   }
 
   /**
@@ -1762,8 +1792,9 @@
       /* Sits at z-index:1, BELOW the badges (z-index:2), pointer-events:none.   */
       '.cherry-cat .card__view::after{content:\'\';position:absolute;left:0;right:0;bottom:0;height:42%;background:linear-gradient(transparent, rgba(0,0,0,.55));pointer-events:none;z-index:1;}',
 
-      /* ---- Preview <video> fade-in (motion: avoids a hard pop-in). ---------- */
-      '.cherry-cat .cherry-card__preview, .cherry-card__preview{transition:opacity .25s ease;}',
+      /* ---- Preview <video> fade-in (motion) + object-fit so non-16:9 sources */
+      /* (e.g. eporner medium thumbs) cover the card box instead of stretching.  */
+      '.cherry-cat .cherry-card__preview, .cherry-card__preview{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;transition:opacity .25s ease;}',
 
       /* ---- P3.3 Source attribution badge + duration/views (3 corners max) --- */
       /* Larger + bolder for 10-foot legibility; sit above the scrim (z-index:2). */
@@ -3500,17 +3531,36 @@ SOURCES.push({
 
       if (!encodings || !encodings.length) return extractStreams(html);
 
+      // Encodings carries BOTH progressive MP4 (cdne-mobile…-h264.mp4) and HLS
+      // (abre-videos…/_hls/…/master.m3u8) entries under IDENTICAL quality labels
+      // (240p…1080p). Taking them indiscriminately let the later HLS entries clobber
+      // the MP4 ones in the quality map, so Lampa got handed an .m3u8 it can't play
+      // inline → external-player picker. Prefer the directly-playable MP4 set; the
+      // px() layer normalizes //protocol-relative and proxies it for inline playback.
       var quality = {};
       var firstUrl = '';
+
+      function isHls(u) { return /\.m3u8(\?|$)/i.test(u) || /\/_hls\//i.test(u); }
 
       encodings.forEach(function(enc) {
         // Each entry: { filename: 'url', quality: '720', ... }
         var u = enc.filename || enc.url || enc.file || '';
-        if (!u) return;
-        if (!firstUrl) firstUrl = u;
+        if (!u || isHls(u)) return;            // skip HLS — keep direct MP4 only
         var label = enc.quality ? enc.quality + 'p' : (enc.label || enc.format || 'mp4');
+        if (!firstUrl) firstUrl = u;
         quality[label] = u;
       });
+
+      // Fallback: if a video somehow exposes ONLY HLS, surface it rather than nothing.
+      if (!firstUrl) {
+        encodings.forEach(function(enc) {
+          var u = enc.filename || enc.url || enc.file || '';
+          if (!u) return;
+          var label = enc.quality ? enc.quality + 'p' : (enc.label || enc.format || 'mp4');
+          if (!firstUrl) firstUrl = u;
+          quality[label] = u;
+        });
+      }
 
       return { url: firstUrl, quality: quality };
     }).catch(function() { return { url: '', quality: {} }; });
@@ -4338,7 +4388,8 @@ SOURCES.push({
             ? 'https://pornve.com/search/' + q + '/page' + page + '/'
             : 'https://pornve.com/search/' + q + '/';
         return cherryFetch(url).then(function (html) {
-            return { items: _pornveCards(html), total_pages: _pornvePages(html) };
+            var items = _pornveCards(html);
+            return { items: items, total_pages: _pornvePages(items.length, page) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
@@ -4353,7 +4404,8 @@ SOURCES.push({
             url += (url.indexOf('?') >= 0 ? '&' : '?') + 'sort_by=' + s;
         }
         return cherryFetch(url).then(function (html) {
-            return { items: _pornveCards(html), total_pages: _pornvePages(html) };
+            var items = _pornveCards(html);
+            return { items: items, total_pages: _pornvePages(items.length, p) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
@@ -4381,7 +4433,8 @@ SOURCES.push({
         var u = modelUrl.replace(/\/+$/, '');
         var url = p > 1 ? u + '/' + p + '/' : u + '/';
         return cherryFetch(url).then(function (html) {
-            return { items: _pornveCards(html), total_pages: _pornvePages(html) };
+            var items = _pornveCards(html);
+            return { items: items, total_pages: _pornvePages(items.length, p) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
@@ -4444,10 +4497,13 @@ function _pornveCards(html) {
     return items;
 }
 
-function _pornvePages(html) {
-    var m = /page(\d+)\/?["'<][^>]*(?:last|next|>>)/i.exec(html) ||
-            /[?&]page=(\d+)["'][^>]*(?:last|>>)/i.exec(html);
-    return m ? (parseInt(m[1], 10) || 10) : 10;
+// PornVe paginates via KVS (category /categories/{slug}/{N}/, latest ?page=N) with no
+// reliable last-page link in the markup, so the old page=/N/-last regex never matched
+// and returned a hardcoded 10, capping infinite scroll at ~10 pages (same class of bug
+// as familyporn). Derive a generous window from page fill instead (24 cards/page) so
+// scroll keeps requesting while the site still serves a full page.
+function _pornvePages(itemsLen, page) {
+    return _derivePages(itemsLen, page || 1, 24);
 }
 
 // ---- 6. FamilyPorn ----
@@ -4605,7 +4661,24 @@ SOURCES.push({
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
-    getRelated: _relatedFrom(_porndigCards),
+    // «Похожие» IS paginated: the video page bootstraps related via a DLE AJAX
+    // loader (data-loader_first_url="/posts/load_related_posts/{page}/{id}") that
+    // returns {success,data:{content:"<escaped HTML grid>"}} — 35 distinct cards
+    // per page (curl-verified p1=236098, p2=254139… no overlap). Thread `page` into
+    // that endpoint and parse data.content with the listing parser so the related
+    // grid scrolls instead of stopping after the single bootstrapped block.
+    getRelated: function (video, page) {
+        if (!video || !video.id) return Promise.resolve([]);
+        var p = page || 1;
+        var url = 'https://porndig.com/posts/load_related_posts/' + p + '/' + video.id;
+        return cherryFetch(url).then(function (text) {
+            var content = '';
+            try { content = (JSON.parse(text).data || {}).content || ''; } catch (e) { content = text; }
+            return _porndigCards(content).filter(function (v) {
+                return v.url !== video.url;
+            });
+        }).catch(function () { return []; });
+    },
 
     // Models: /pornstars/ index (30/page, paginated /pornstars/page/{N}/). Model
     // links /pornstars/{id}/{slug}.html (relative); name in title=. Per-model page
@@ -4710,7 +4783,8 @@ SOURCES.push({
   id: 'tizam',
   name: 'Tizam',
   host: 'tv4.tizam.org',
-  // Category pages render one page in static HTML (pagination is JS-only) → total_pages 1.
+  // Category pages take the same zero-indexed ?p= pagination as the default feed
+  // (curl-verified ?p=0..2 return distinct cards) — see browse() for the wiring.
   cfg: { categories: _cats('all_sex:Фильмы xxx,s_russkim_perevodom:С Русским переводом,russkoe_porno:Русские порнофильмы,novinki:Новинки по выбору года,polnometrazhnye:Полнометражные с сюжетом,zrelye:Зрелые женщины,podrostki_18:Молодые девушки +18,anal_seks_bol_shie_popki:Анал и Большие попки,bol_shaya_grud:Большие сиськи,minet:Оральный секс,groupvideo:Групповой секс,incest:Семейное порно,svingery:Свингеры и Измена,dominirovanie:Доминирование,zhenskaya_masturbaciya:Соло девушки,pyshechki:Пышечки,aziatki:Азиатские порнофильмы,temnokozhie:Темнокожие,italyan_porn:Итальянские порнофильмы,nemeckie_pornofil_my:Немецкие порнофильмы,klassika:Классика и Ретро'), sorts: [] /* sort not URL-addressable (DLE/AJAX POST) */ },
 
   _parseCards: function(html) {
@@ -4774,10 +4848,14 @@ SOURCES.push({
     var self = this;
     var p = page || 1;
     if (category) {
-      // Category page is a single static page (pagination is JS-rendered) → total_pages 1.
-      var curl = 'https://tv4.tizam.org/fil_my_dlya_vzroslyh/' + category + '/';
+      // Category pages take the SAME zero-indexed ?p= pagination as the default feed
+      // (page 1 → ?p=0). Curl-verified: ?p=0 == base, ?p=1/?p=2 return distinct cards
+      // (32/page, ~8 overlap p1↔p2). The prior "JS-only, single page" note was wrong —
+      // the static ?p= URL exists, so thread it + derive a generous window for scroll.
+      var curl = 'https://tv4.tizam.org/fil_my_dlya_vzroslyh/' + category + '/?p=' + (p - 1);
       return cherryFetch(curl).then(function(html) {
-        return { items: self._parseCards(html), total_pages: 1 };
+        var items = self._parseCards(html);
+        return { items: items, total_pages: _derivePages(items.length, p, 12) };
       }).catch(function() { return { items: [], total_pages: 0 }; });
     }
     // Zero-indexed: page 1 → ?p=0. ?p= advances pages, so derive from batch fullness

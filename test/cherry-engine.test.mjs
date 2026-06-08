@@ -2571,7 +2571,7 @@ describe('S1 total_pages anti-drift', function () {
     var flaggedHelpers = [
       '_3movsPages', '_porndigPages', '_pornonePages',
       '_lenpornoPages', '_rolikaPages', '_jopaPages', '_perfektPages',
-      '_familypornPages'
+      '_familypornPages', '_pornvePages'
     ];
     flaggedHelpers.forEach(function (name) {
       var rx = new RegExp('function ' + name + '\\([^)]*\\)\\s*\\{[\\s\\S]*?\\n\\}');
@@ -2884,7 +2884,9 @@ describe('pornve getModels (/models/ index — cdn avatar)', function () {
   it('browseByModel reuses the canonical _pornveCards + _pornvePages parser', function () {
     var body = browseByModelBody('pornve');
     expect(body).toContain('_pornveCards(html)');
-    expect(body).toContain('_pornvePages(html)');
+    // _pornvePages now derives from page fill (itemsLen, page) like familyporn — the
+    // old hardcoded "|| 10) : 10" capped infinite scroll at ~10 pages (bug #5).
+    expect(body).toContain('_pornvePages(items.length, p)');
   });
   it('anti-drift: shipped pornve getModels carries models hrefRx + thumbRx', function () {
     var body = getModelsBody('pornve');
@@ -3407,5 +3409,89 @@ describe('xvideos search filters (sort + duration/quality/date facets)', functio
     expect(seg).toContain('rating~quality=hd');
     expect(seg).toContain('relevance~durf=10min_more');
     expect(seg).toContain('uploaddate~datef=week');
+  });
+});
+
+// ============================================================
+// DEVICE BUG FIXES (8) — source-read assertions against plugin.js
+// Each anchors on the exact code path changed so a regression that reverts
+// the fix fails here. CURL evidence is recorded in the fix report.
+// ============================================================
+describe('device bug fixes (8)', function () {
+  const SRC = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+
+  // #5 pornve — infinite scroll restored via _derivePages (was hardcoded || 10).
+  it('#5 pornve: _pornvePages(itemsLen, page) derives via _derivePages(…,24)', function () {
+    const m = /function _pornvePages\(itemsLen, page\)\s*\{[\s\S]*?\}/.exec(SRC);
+    expect(m, '_pornvePages must take (itemsLen, page)').toBeTruthy();
+    expect(m[0]).toContain('_derivePages(itemsLen, page || 1, 24)');
+    expect(m[0]).not.toContain('|| 10');
+  });
+  it('#5 pornve: browse/search/byModel callers pass item count + page', function () {
+    const pv = SRC.slice(SRC.indexOf("id: 'pornve'"), SRC.indexOf("function _pornveCards"));
+    // No caller may still pass the raw html (the old signature).
+    expect(/_pornvePages\(html\)/.test(pv)).toBe(false);
+    expect((pv.match(/_pornvePages\(items\.length, p\)/g) || []).length).toBeGreaterThanOrEqual(2);
+    expect(pv).toContain('_pornvePages(items.length, page)'); // search uses `page`
+  });
+
+  // #3 eporner — preview <video> gets object-fit:cover so non-16:9 sources don't stretch.
+  it('#3 eporner: .cherry-card__preview CSS sets object-fit:cover', function () {
+    const rule = /\.cherry-card__preview\{[^}]*\}/.exec(SRC);
+    expect(rule, 'preview CSS rule must exist').toBeTruthy();
+    expect(rule[0]).toContain('object-fit:cover');
+    expect(rule[0]).toContain('width:100%');
+    expect(rule[0]).toContain('height:100%');
+  });
+  it('#3 eporner: .cherry-cat .card__img keeps object-fit:cover (thumb cover)', function () {
+    expect(/\.cherry-cat \.card__img \{[\s\S]*?object-fit: cover;[\s\S]*?\}/.test(SRC)).toBe(true);
+  });
+
+  // #1 youjizz — getStream prefers direct MP4 over HLS so Lampa plays inline.
+  it('#1 youjizz: getStream skips HLS encodings (prefers direct MP4)', function () {
+    const gs = SRC.slice(SRC.indexOf("id: 'youjizz'"), SRC.indexOf("id: 'pornone'"));
+    expect(gs).toContain('function isHls(u)');
+    expect(gs).toContain('if (!u || isHls(u)) return;');
+    // HLS detection covers both the _hls path segment and the m3u8 extension.
+    expect(gs).toContain('_hls');
+    expect(gs).toContain('m3u8');
+  });
+
+  // #8 pornhub — search & browse use the SAME _mapVideo (identical playable cards).
+  it('#8 pornhub: _mapVideo stamps source:pornhub and a view_video url', function () {
+    const ph = SRC.slice(SRC.indexOf("id: 'pornhub'"), SRC.indexOf("_parseHtmlCards"));
+    expect(ph).toContain("source: 'pornhub'");
+    // Both search() and browse() map through the same _mapVideo (no divergent url build).
+    const phFull = SRC.slice(SRC.indexOf("id: 'pornhub'"), SRC.indexOf("// xvideos/xnxx"));
+    expect((phFull.match(/self\._mapVideo\(v\)/g) || []).length).toBeGreaterThanOrEqual(2);
+  });
+
+  // #4/#6 hellporno + hqporner routed through the Deno proxy host set.
+  it('#4/#6: hellporno/hqporner NOT routed to Deno (Deno serves hellporno=0; hqporner needs residential); Deno→CF failover exists', function () {
+    const set = /var PROXY_URL_2_HOSTS = \{[\s\S]*?\};/.exec(SRC)[0];
+    expect(set).not.toContain("'hellporno.com': 1");
+    expect(set).not.toContain("'hqporner.com': 1");
+    // Failover so a dead secondary proxy (Deno over-quota) falls back to CF.
+    expect(SRC).toContain('_hasProxyFailover');
+    expect(SRC).toMatch(/buildProxyUrl\(url, referer, true\)/);
+  });
+
+  // #7 porndig — «похожие» paginates via the load_related_posts AJAX endpoint.
+  it('#7 porndig: getRelated(video, page) hits /posts/load_related_posts/{page}/{id}', function () {
+    const pd = SRC.slice(SRC.indexOf("id: 'porndig'"), SRC.indexOf("function _porndigCards"));
+    expect(pd).toContain('getRelated: function (video, page)');
+    expect(pd).toContain("'https://porndig.com/posts/load_related_posts/' + p + '/' + video.id");
+    expect(pd).toContain('JSON.parse(text).data');
+    expect(pd).toContain('_porndigCards(content)');
+  });
+
+  // #2 tizam — category browse threads zero-indexed ?p= pagination + _derivePages.
+  it('#2 tizam: category browse uses ?p=(p-1) + _derivePages (not total_pages:1)', function () {
+    const tz = SRC.slice(SRC.indexOf("id: 'tizam'"), SRC.indexOf("id: 'perfektdamen'"));
+    expect(tz).toContain("/fil_my_dlya_vzroslyh/' + category + '/?p=' + (p - 1)");
+    // category branch no longer caps at a single page.
+    const catBranch = tz.slice(tz.indexOf('if (category)'), tz.indexOf('Zero-indexed'));
+    expect(catBranch).toContain('_derivePages(items.length, p, 12)');
+    expect(/total_pages: 1/.test(catBranch)).toBe(false);
   });
 });
