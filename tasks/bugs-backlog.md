@@ -59,3 +59,18 @@ endpoint возвращает `[]`**. → pornhub защищает стрим с
 (get_media с cookies/referer с того же IP, что и страница) — крупно; (2) Playwright-извлечение;
 (3) принять pornhub-стрим нестабильным. На устройстве плеер шлёт иные заголовки/cookies — возможно
 ведёт себя иначе, чем curl; нужен device-console для подтверждения.
+
+## BL-PORNHUB-STREAM — РЕШЕНО (2026-06-08)
+На Android воспроизводится: getStream отдаёт m3u8 RAW → нативный плеер тянет страницу+m3u8+
+сегменты с ОДНОГО домашнего residential-IP устройства → IP-bound токен phncdn сходится.
+(Browser/proxy путь остаётся нестабильным — ротация SOCKS5 рвёт affinity; VPS датацентр → phncdn 410.
+Но целевая платформа Android — работает. Подтверждено владельцем.)
+
+## BL-SPANKBANG — нужен flaresolverr (2026-06-08, обновлено)
+Все домены (ru/www/.com/.party/m.) отдают **Cloudflare «Just a moment» 403** (managed challenge,
+требует JS/Turnstile). spankbang.mobi мёртв (502). Простой прокси (CF/VPS) и нативный fetch с
+устройства не проходят. Зеркала без челленджа нет.
+**Единственный фикс:** headless-солвер (flaresolverr / Playwright-Chrome). На текущем 1ГБ-VPS
+ставить НЕЛЬЗЯ — Chrome (~400-600МБ) рискует OOM-убить контейнер AmneziaWG (VPN трогать нельзя).
+**Нужно:** VPS 2-4ГБ под flaresolverr ИЛИ отдельный бокс → тогда маршрутизировать spankbang
+(и любой CF-challenge сайт) через него. Альтернатива: скрыть spankbang до появления солвера.
