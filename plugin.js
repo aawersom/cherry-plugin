@@ -3621,6 +3621,12 @@ SOURCES.push({
         // Each entry: { filename: 'url', quality: '720', ... }
         var u = enc.filename || enc.url || enc.file || '';
         if (!u || isHls(u)) return;            // skip HLS — keep direct MP4 only
+        // youjizz's cdne-mobile CDN PACES each progressive MP4 to ~1.5× its own bitrate,
+        // so 1080p (≈3.6 Mbps, served at only ~5.5 Mbps) starts/buffers slowly on a TV.
+        // On Android the player defaults to the highest quality → cap at ≤720p (≈1.35 Mbps,
+        // ~1.6× headroom = smooth). Browser keeps all qualities. If a video somehow has
+        // only >720p, the fallback block below still surfaces it.
+        if (_isAndroid() && parseInt(enc.quality, 10) > 720) return;
         var label = enc.quality ? enc.quality + 'p' : (enc.label || enc.format || 'mp4');
         if (!firstUrl) firstUrl = u;
         quality[label] = u;
