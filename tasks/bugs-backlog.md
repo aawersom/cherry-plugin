@@ -48,3 +48,14 @@ Out-of-scope bugs spotted during tasks. Critical/high → fix in flight. Medium/
 (hard-reload); (2) device-specific прокси/CORS; (3) превью с tbi.sb-cd.com (hotlink/referer) →
 карточки пустые на вид; (4) это СТРИМ spankbang (давно сломан, нужен Playwright), а не листинг.
 **Действие:** получить console-лог spankbang с устройства (как для синка) → точечно добить.
+
+## BL-PORNHUB-STREAM — pornhub видео не играет (2026-06-08)
+**Не VPS-проблема и не роутинг.** pornhub корректно идёт на CF→residential (НЕ в PROXY_URL_2_HOSTS).
+Проверено: лист webmasters работает (30 карточек VPS/CF/direct); flashvars парсятся; hls master.m3u8
+и variant-плейлисты отдают 200; НО **.ts-сегменты = 404 с ЛЮБОГО IP** (CF и напрямую), а **get_media
+endpoint возвращает `[]`**. → pornhub защищает стрим сессией (cookies + тот же IP + свежие токены),
+которую текущий прокси не реплицирует. Inline-hls токен протухает → сегменты 404.
+**Нет уверенного фикса** простым изменением. Опции на будущее: (1) воспроизвести сессию pornhub
+(get_media с cookies/referer с того же IP, что и страница) — крупно; (2) Playwright-извлечение;
+(3) принять pornhub-стрим нестабильным. На устройстве плеер шлёт иные заголовки/cookies — возможно
+ведёт себя иначе, чем curl; нужен device-console для подтверждения.
