@@ -1,19 +1,27 @@
 # Cherry Plugin — Инструкция по деплою
 
-## Архитектура: три компонента
+## Архитектура: 4 прокси-тира
 
 ```
 plugin.js  →  GitHub Pages (cherry-plugin)  →  пользователь в Lampa
                     ↓
-           PROXY_URL = https://cherry-proxy.aawersom.workers.dev   (основной)
-           PROXY_URL_2 = https://cherry-proxy.aawersom.deno.net    (для xnxx/spankbang)
+   PROXY_URL    = https://cherry-proxy.aawersom.workers.dev   (CF Worker — основной; pornhub через SOCKS5)
+   PROXY_URL_2  = https://185-36-141-21.sslip.io              (self-hosted VPS — стабильный IP; KVS/ASN-блок сайты)
+   PROXY_URL_3  = ''                                          (резерв под residential VPS — не задействован)
+   PROXY_URL_VT = https://aawersom--0d56e6a4….web.val.run     (бесплатный Val.town HTTP-val — ТОЛЬКО spankbang)
                     ↓
-           Cloudflare Worker (cherry-proxy) / Deno Deploy (cherry-proxy)
-                    ↓
-           целевые сайты (Pornhub, HellPorno, Xnxx, ...)
+           целевые сайты (Pornhub, HellPorno, Xnxx, Spankbang, ...)
 ```
 
-`buildProxyUrl()` автоматически роутит запросы к хостам из `PROXY_URL_2_HOSTS` (xnxx, youjizz, tizam, eporner, ru.spankbang, pornone, porntrex, mydaddy, perfektdamen) и к `*.bigcdn.cc` / `*.pornone.com` через Deno Deploy, все остальные — через CF Worker.
+`buildProxyUrl()` роутит по hostname (приоритет: Val.town → PROXY_URL_3 → VPS → CF):
+- **Val.town** — spankbang (CF-челлендж проходит только чистый IP Val.town; VPS/CF датацентр → 403).
+- **VPS** (`PROXY_URL_2_HOSTS` + регексы `*.bigcdn.cc` / `*.pornone.com` / `*.youjizz.com` / `*.cdntrex.com`) —
+  xnxx, youjizz, tizam, eporner, hqporner, pornone, porntrex, mydaddy, perfektdamen.
+- **CF Worker** — всё остальное (pornhub идёт через CF + residential SOCKS5).
+
+> **Изменения:** Deno Deploy (бывший PROXY_URL_2) выведен 2026-06-06 → VPS (квота Deno умирала на видео).
+> spankbang переведён с VPS на Val.town 2026-06-08 (датацентр-IP ловит CF «Just a moment»).
+> На Android есть доп. слой `_ANDROID_FORCE_PROXY` (см. docs/CHERRY.md → Android fetch model).
 
 ---
 
@@ -100,41 +108,54 @@ npx wrangler dev
 
 ---
 
-## 3. Deno Deploy (`cherry-proxy`) — резервный прокси
+## 3. VPS-прокси (`PROXY_URL_2`) — вторичный прокси (заменил Deno Deploy)
 
-**Репо:** `d:\Works\Lampa\workers\cherry-proxy\deno.js` → GitHub: `aawersom/cherry-proxy` (файл `deno.js`)  
-**URL прокси:** `https://cherry-proxy.aawersom.deno.net`  
-**Console:** `console.deno.com/aawersom` → Apps → cherry-proxy
+**Сервер:** `185.36.141.21` (Ubuntu, стабильный IP, безлимит) · **URL:** `https://185-36-141-21.sslip.io`  
+**Код:** `workers/cherry-proxy-deno/main.js` (Deno-скрипт) → на VPS `/opt/cherry-proxy/main.js`  
+**Стек:** systemd `cherry-proxy.service` (Deno, `127.0.0.1:8787`) за Caddy/TLS (sslip.io). Доступы — в локальном vault.
 
-> Deno Deploy деплоится автоматически при каждом пуше в `aawersom/cherry-proxy` (GitHub Integration).
-> Отдельная команда `wrangler deploy` не нужна.
+> На VPS также крутится VPN (AmneziaWG, Docker) — **не трогать**. Прокси добавлен на свободных
+> портах (80/443 Caddy, 8787 localhost). VPS→CF failover встроен в плагин (`_hasProxyFailover`).
 
-### Деплой (автоматический через GitHub)
+### Передеплой VPS-скрипта (через SSH/paramiko)
 
 ```powershell
-# Изменить deno.js в репо воркера
-cd d:\Works\Lampa\workers\cherry-proxy
-git add deno.js
-git commit -m "fix: <описание>"
-git push origin main
-# Deno Deploy задеплоится автоматически через ~30 секунд
+# Изменить workers/cherry-proxy-deno/main.js, затем по SSH:
+#   scp на /opt/cherry-proxy/main.js → systemctl restart cherry-proxy.service
+# (детали и креды — в ACCESS-vault.md; см. также docs/vps-migration-plan-2026-06-06.md)
 ```
-
-### Ручной передеплой (если нужно)
-
-`console.deno.com/aawersom` → Apps → cherry-proxy → Overview → **Deploy Default Branch**
-
-### Настройки (один раз)
-
-- **Entrypoint:** `deno.js`
-- **Env variable:** `PROXY_KEY = 1206` (тот же что у CF Worker)
-- **Region:** All Regions (free tier: ord, ams)
 
 ### Проверка
 
 ```powershell
-curl "https://cherry-proxy.aawersom.deno.net/proxy?url=https://example.com&key=1206"
-# Ожидаем: HTML example.com (200)
+curl "https://185-36-141-21.sslip.io/proxy?url=https://example.com&key=1206"   # → 200 HTML
+```
+
+---
+
+## 3b. Val.town (`PROXY_URL_VT`) — бесплатный прокси для spankbang
+
+**Назначение:** spankbang сидит за Cloudflare-челленджем, который проходит только «чистый» IP
+(как был у Deno). Бесплатный Val.town HTTP-val его проходит. **Только лёгкий листинг** (видео — мимо).
+
+**Код:** `workers/cherry-proxy-valtown/main.ts` · **val:** `cherryproxy` (public, файл main.tsx type=http)  
+**Endpoint:** `https://aawersom--0d56e6a4635611f1a1321607ee4eb77e.web.val.run` (= `PROXY_URL_VT`)  
+**Лимиты:** free tier 100k запусков/день (листинг = десятки/день → запас в тысячи раз).
+
+### Передеплой через Val.town API (токен в vault)
+
+```powershell
+# Обновить файл main.tsx у val'а cherryproxy через v2 API:
+#   PUT https://api.val.town/v2/vals/{valId}/files?path=main.tsx  { content, type:"http" }
+#   (Authorization: Bearer <write-токен из ACCESS-vault.md>)
+# v1 API закрыт (read-only); создание/правка — только v2. Приватных val'ов лимит → создавать public.
+```
+
+### Проверка
+
+```powershell
+curl "https://aawersom--0d56e6a4635611f1a1321607ee4eb77e.web.val.run/proxy?url=https://ru.spankbang.com/s/milf/1/&key=1206"
+# Ожидаем: 200, есть class="video-item" (НЕ "Just a moment")
 ```
 
 ---

@@ -23,7 +23,7 @@ Entry file: `plugin.js` (single-file, ~4350 lines)
 ```
 plugin.js
 ├── IIFE guard            plugin.js:4      — window.plugin_cherry_ready idempotency flag
-├── CONFIG                plugin.js:10     — PROXY_URL / _2 / _3, PROXY_URL_2_HOSTS, getProxyKey()
+├── CONFIG                plugin.js:10     — PROXY_URL / _2 / _3 / _VT, *_HOSTS, _ANDROID_FORCE_PROXY, getProxyKey()
 ├── PROXY HELPERS         plugin.js:52     — buildProxyUrl, cherryFetch, _fetchAny, cherryPost, proxyM3u8
 ├── SOURCES registry      plugin.js:199    — SOURCES[] array + JSDoc typedefs
 ├── FAV                   plugin.js:240    — Fav object (localStorage-backed favorites, 7-field)
@@ -364,7 +364,21 @@ so it is left dead.
 
 ## Proxy Layer
 
-Adapters route requests through one of three proxies depending on the target hostname.
+Adapters route requests through one of **four proxy tiers** depending on the target
+hostname. Routing lives in `buildProxyUrl` (`plugin.js:63`); on Android there is an
+extra force-proxy rule (see **Android fetch model** below).
+
+| Tier | Var | Endpoint | Used for |
+|------|-----|----------|----------|
+| Primary | `PROXY_URL` | `cherry-proxy.aawersom.workers.dev` (CF Worker + SOCKS5) | default; pornhub via residential SOCKS5 |
+| Secondary | `PROXY_URL_2` | `185-36-141-21.sslip.io` (self-hosted **VPS**, stable IP) | CF-ASN-blocked + KVS IP-bound sites |
+| Tertiary | `PROXY_URL_3` | `''` (unused) | reserved for residential VPS |
+| Val.town | `PROXY_URL_VT` | `aawersom--0d56e6a4…web.val.run` (free HTTP val) | **spankbang** only (passes CF challenge) |
+
+> **History:** the secondary tier was **Deno Deploy** until 2026-06-06, when it was migrated
+> to the VPS (Deno free egress quota kept dying on video streaming). `PROXY_URL_2` is now the
+> VPS. spankbang moved off the VPS to **Val.town** on 2026-06-08 (the VPS datacenter IP gets
+> Cloudflare's "Just a moment" 403; Val.town's IP passes it — see Val.town tier below).
 
 ### Primary proxy — Cloudflare Worker + SOCKS5
 `PROXY_URL = https://cherry-proxy.aawersom.workers.dev`
@@ -395,33 +409,52 @@ same SOCKS5 port for M3U8 and segments — previously, different domain hashes
 (`www.pornhub.com` vs `ev-h.phncdn.com`) selected different ports (different exit
 IPs), causing `ipa=1` token failures on segments.
 
-### Secondary proxy — Deno Deploy
-`PROXY_URL_2 = https://cherry-proxy.aawersom.deno.net`
+### Secondary proxy — VPS (self-hosted, stable IP)
+`PROXY_URL_2 = https://185-36-141-21.sslip.io`
 
-Used for hostnames in `PROXY_URL_2_HOSTS` or matching `/\.bigcdn\.cc$/`:
+A self-hosted VPS (Ubuntu, stable datacenter IP, unmetered bandwidth) running the Deno
+proxy script (`workers/cherry-proxy-deno/main.js`) via systemd behind Caddy/TLS (sslip.io).
+Replaced Deno Deploy (whose free egress quota died on video streaming). The VPS also hosts
+an AmneziaWG VPN — the proxy only adds services on free ports, never touches the VPN.
+VPS→CF failover is built in (`_hasProxyFailover`) so a dead VPS falls back to the CF worker.
+
+Used for hostnames in `PROXY_URL_2_HOSTS` or matching the CDN regexes:
 
 | Hostname | Reason |
 |----------|--------|
-| `xnxx.com`, `www.xnxx.com` | CF datacenter ASN-blocked |
-| `www.youjizz.com`, `youjizz.com` | CF rate-limited |
+| `xnxx.com`, `www.xnxx.com` | CF datacenter ASN-blocked; VPS IP works |
+| `www.youjizz.com`, `youjizz.com` (+ `/\.youjizz\.com$/`) | CF rate-limited; stream CDN co-located |
 | `tv4.tizam.org` | CF rate-limited |
-| `www.eporner.com` | SOCKS5 instability — Deno stable |
-| `ru.spankbang.com` | Deno bypasses Spankbang bot-check for listing+video pages |
-| `mydaddy.cc` | bigcdn IP-bound token — must use same IP as bigcdn CDN fetch |
-| `www.perfektdamen.co` | KVS IP-bound tokens — consistent Deno GCP IP |
-| `pornone.com`, `www.pornone.com` | KVS IP-bound tokens — CF edge drift causes 403/410; Deno GCP fixed IP |
-| `porntrex.com`, `www.porntrex.com` | KVS IP-bound tokens — CF edge drift causes 410; Deno GCP fixed IP |
+| `www.eporner.com` | SOCKS5 instability — VPS stable |
+| `hqporner.com`, `www.hqporner.com` | CF datacenter intermittently blocked |
+| `mydaddy.cc` | bigcdn IP-bound token — same IP as bigcdn CDN fetch |
+| `www.perfektdamen.co` | KVS IP-bound tokens — consistent VPS IP |
+| `pornone.com`, `www.pornone.com` (+ regex) | KVS IP-bound tokens — fixed VPS IP |
+| `porntrex.com`, `www.porntrex.com` (+ `/\.cdntrex\.com$/`) | KVS IP-bound tokens — fixed VPS IP |
 | `/\.bigcdn\.cc$/` (regex) | All bigcdn subdomains; IP-bound to mydaddy.cc fetch IP |
 
 **Critical pairing rule:** domains whose CDN uses IP-bound tokens must be in the
-SAME proxy tier as the page that generates those tokens.
-- `mydaddy.cc` (embed page) and `*.bigcdn.cc` (CDN) — both via Deno ✓
+SAME proxy tier as the page that generates those tokens (the `buildProxyUrl` regexes
+co-locate page + stream-CDN subdomains on one egress IP).
+- `mydaddy.cc` (embed page) and `*.bigcdn.cc` (CDN) — both via VPS ✓
 - `www.pornhub.com` (page) and `*.phncdn.com` (CDN) — both via CF SOCKS5 ✓
-- `pornone.com` (page) and `*.pornone.com` (CDN) — both via Deno ✓ (confirmed working 2026-06-04)
+- `pornone.com` / `porntrex.com` and their CDNs — both via VPS ✓
 
-### Tertiary proxy — VPS (optional)
-`PROXY_URL_3 = ''` (empty by default; fill with Beget VPS IP:PORT after deploying
-`workers/cherry-proxy-vps/index.js`). Currently unused.
+### Tertiary proxy — residential VPS (unused)
+`PROXY_URL_3 = ''` (empty). Reserved for a rotating-residential VPS; `PROXY_URL_3_HOSTS`
+still lists pornhub but, with `PROXY_URL_3` empty, those fall through to the CF worker.
+
+### Val.town tier — spankbang (free, CF-challenge bypass)
+`PROXY_URL_VT = https://aawersom--0d56e6a4…web.val.run` · hosts in `PROXY_URL_VT_HOSTS`
+(`ru.spankbang.com`, `spankbang.com`, `www.spankbang.com`).
+
+A free **Val.town HTTP val** (`workers/cherry-proxy-valtown/main.ts`). spankbang sits behind
+a Cloudflare bot-challenge ("Just a moment" 403) that the CF worker **and** the VPS datacenter
+IP both fail; Val.town's egress IP **passes** it (as Deno Deploy used to). Routed FIRST in
+`buildProxyUrl`, before the VPS/CF tiers. **Only the light listing (KB) goes through Val.town**
+— the spankbang video stream is a signed-token mp4 on `sb-cd.com` (not IP-bound) fetched
+directly, so Val.town free-tier usage stays far under the 100k-runs/day limit. Deploy/manage
+via the Val.town API (token + endpoint recorded in the local access vault).
 
 ### buildProxyUrl(url, referer?) — `plugin.js:53`
 ```
@@ -429,20 +462,50 @@ GET {base}/proxy?url={encoded}&key={getProxyKey()}[&referer={encoded}]
 ```
 The proxy key is read per-request via **`getProxyKey()`** (`plugin.js:44`,
 `Lampa.Storage.get('cherry_proxy_key', '1206')`) — there is no module-level `PROXY_KEY`
-constant anymore. Routing priority:
-1. `PROXY_URL_3` (if set + hostname in `PROXY_URL_3_HOSTS`) — VPS, currently empty.
-2. `PROXY_URL_2` (Deno) if hostname in `PROXY_URL_2_HOSTS` **or** matches `/\.bigcdn\.cc$/`
-   **or** matches `/(?:^|\.)pornone\.com$/`.
-3. `PROXY_URL` (default, CF Worker).
+constant anymore. Routing priority (`forceCF=true` skips secondary routing → straight to CF):
+1. `PROXY_URL_VT` if hostname in `PROXY_URL_VT_HOSTS` (spankbang) — Val.town.
+2. `PROXY_URL_3` (if set + hostname in `PROXY_URL_3_HOSTS`) — residential VPS, currently empty.
+3. `PROXY_URL_2` (VPS) if hostname in `PROXY_URL_2_HOSTS` **or** matches
+   `/\.bigcdn\.cc$/` / `/(?:^|\.)pornone\.com$/` / `/(?:^|\.)youjizz\.com$/` / `/\.cdntrex\.com$/`.
+4. `PROXY_URL` (default, CF Worker).
 
-> **Resolved (2026-06-04).** pornone is served via **Deno** by the plugin's `buildProxyUrl`
-> (`pornone.com`, `www.pornone.com` in `PROXY_URL_2_HOSTS`, plus the `/(?:^|\.)pornone\.com$/`
-> rule) and is confirmed WORKING. Any pornone entry in the worker's `index.js` residential set
-> is legacy — pornone never reaches the worker, so the SOCKS5 path is moot for it.
+### Android fetch model — `_isAndroid()`, `_forceProxyAndroid()`, `px()`
+On Android TV the device has its own **home residential IP** (cleaner than any datacenter IP
+for most sites), so the default Android path is **native + raw**:
+- **Pages:** `cherryFetch` uses `Lampa.Reguest.native()` (fetches from the device IP), falling
+  back to the proxy only on error.
+- **Streams:** `px()` (in `playVideo`) hands the player the **raw** URL — the native player
+  fetches the stream from the SAME device IP, so KVS/phncdn IP-bound tokens stay valid with no
+  proxy. `px()` normalizes `//protocol-relative` → `https:` **before** the Android return (else
+  the native player shows a "choose player" dialog — youjizz fix).
+- **Quality:** getStream prefers **MP4 over HLS on Android** (Android routes `.m3u8` to the
+  system "choose player" dialog; MP4 plays inline).
 
-### cherryFetch(url, referer?) — `plugin.js:93`
-Wrapper around `fetch(buildProxyUrl(...))`. Returns `Promise<string>`; throws on non-2xx.
-On Android: tries `Lampa.Reguest.native()` first, falls back to fetch+proxy.
+**Exception — `_ANDROID_FORCE_PROXY`:** sites that block/redirect the device home IP
+(Cloudflare challenge, mirror redirect, empty body). For those BOTH page and stream go through
+the proxy (`_forceProxyAndroid()`). Listed only when the stream co-locates with the page proxy
+(else IP-affinity breaks — that's why xnxx/youjizz, whose CDN is a separate unrouted domain,
+are NOT here):
+- `hqporner` (→VPS; bigcdn stream VPS-routed) · `hellporno` (→CF; same-host stream)
+- `lenporno`, `eporner` (→their tier; page only — stream CDN on a separate host stays raw)
+- `spankbang` (→Val.town; CF-challenged on the device IP too)
+
+> **pornhub (resolved 2026-06-08):** plays on Android — `getStream` returns the HLS m3u8 **raw**
+> on Android, so the native player fetches page + m3u8 + segments from the one device residential
+> IP → phncdn IP-bound tokens hold. The browser/proxy path stays flaky (CF SOCKS5 pool rotates
+> exit IPs; VPS datacenter IP gets phncdn 410).
+
+### cherryFetch(url, referer?)
+Wrapper around `fetch(buildProxyUrl(...))` with VPS→CF failover. Returns `Promise<string>`.
+On Android: `_forceProxyAndroid(url)` hosts go straight to the proxy; everything else tries
+`Lampa.Reguest.native()` first, falling back to fetch+proxy on error.
+
+### Android self-test harness — `test/android-emu.cjs`
+Loads the real `plugin.js` with a Lampa mock (`Platform.is('android')===true`,
+`Reguest.native` = direct fetch, `Lampa.Player.play` **intercepted**) → prints the exact
+stream URL the Android player would get per channel + browse card count, without a device.
+Run: `node test/android-emu.cjs [ids…]`. Verifies URL-shaping/routing logic (not device-IP
+token validity — egress is this host, not the device's home IP).
 
 ### _fetchAny(url, referer?) — `plugin.js:114`
 Status-tolerant fetch: returns the body text regardless of HTTP status. Needed for sites
