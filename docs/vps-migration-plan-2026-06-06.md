@@ -8,7 +8,16 @@ VPS: 185.36.141.21 · Ubuntu 24.04 · 1 vCPU / 1 GB / 20 GB. На нём под�
 Только ДОБАВЛЯЕМ сервисы на свободных портах. НЕ трогаем конфиг/маршруты/интерфейс VPN.
 Перед любыми изменениями — бэкап /etc/wireguard и /etc/openvpn и проверка egress-IP.
 
-## Этап 0 — Pre-checks (read-only по SSH)
+## ✅ Этап 0 — Pre-checks ВЫПОЛНЕНЫ (read-only, 2026-06-06)
+- **VPN = AmneziaVPN (AmneziaWG)** в Docker-контейнере `amnezia-awg`, слушает **UDP 35367**, интерфейс `amn0` (172.29.172.1/24), конфиг в `/opt/amnezia`. Это VPN-СЕРВЕР (клиенты подключаются к нему) → **свой исходящий трафик VPS наружу НЕ заворачивает**.
+- **Egress-IP = собственный IP VPS** (default via 185.36.141.1 src 185.36.141.21; ifconfig.me вернул IPv6 2a10:c943:100::528). → **IP-affinity для KVS будет работать** ✓.
+- **TCP 80 и 443 СВОБОДНЫ** (заняты только 22/ssh, 35367/udp VPN, docker-internal, resolve). → Caddy ставим без конфликта ✓.
+- **Ресурсы:** 961 МБ RAM (~438 МБ свободно), **swap НЕТ** → добавить 1-2 ГБ swap. Диск 13 ГБ свободно ✓. 1 CPU (прокси I/O-bound — ок).
+- **Docker есть** (крутит amnezia), **Deno/Node/Caddy/nginx — нет**. ufw inactive.
+- **Вывод: миграция безопасна для VPN** — добавляем сервисы на TCP 80/443 + 127.0.0.1:8787, VPN (UDP 35367/Docker) не трогаем.
+- ⚠ Проверить firewall ПРОВАЙДЕРА (панель) — открыть входящие 80/443 (для Let's Encrypt + клиентов).
+
+## Этап 0(orig) — Pre-checks (выполнено выше)
 1. Тип VPN: `wg show` / `ls /etc/wireguard /etc/openvpn` / `systemctl --type=service --state=running`.
 2. **Egress-IP:** `curl -s https://ifconfig.me` → должно быть **185.36.141.21**. Если другой — VPS гонит свой трафик через ВНЕШНИЙ VPN (policy-routing) → нужно исключить трафик прокси из тоннеля (иначе сломается IP-affinity и/или egress). Решается через `ip rule`/fwmark для процесса прокси.
 3. Свободны ли TCP **80/443** (для Caddy/TLS): `ss -tlnp`. VPN обычно UDP (51820/1194) — конфликта нет, подтвердить.
