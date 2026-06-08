@@ -102,7 +102,14 @@
   // native device-IP for page+stream, so they are deliberately excluded.
   var _ANDROID_FORCE_PROXY = {
     'hqporner.com': 1, 'www.hqporner.com': 1,
-    'hellporno.com': 1, 'www.hellporno.com': 1
+    'hellporno.com': 1, 'www.hellporno.com': 1,
+    // lenporno + eporner: the device-IP native fetch of the PAGE gets redirected/blocked
+    // (lenporno → mirror redirect, 0 cards; eporner → 369-byte block, no stream hash), but
+    // the page loads via the proxy. Only the page host is forced — their stream CDNs
+    // (cdnv365 / eporner CDN) are on separate hosts → stay raw device-IP (signed-token,
+    // not IP-bound) so playback still works.
+    'www.lenporno.net': 1, 'lenporno.net': 1,
+    'www.eporner.com': 1, 'eporner.com': 1
   };
   function _forceProxyAndroid(url) {
     try { if (_ANDROID_FORCE_PROXY[new URL(url).hostname]) return true; } catch (e) {}

@@ -92,7 +92,14 @@ async function test(id) {
   if (vurl) {
     try {
       C.playVideo({ url: vurl, title: 't', id: 'x', source: id }, s);
-      await new Promise(function (res) { setTimeout(res, 9000); });
+      // Poll up to ~14s; resolve as soon as the player.play call fires.
+      await new Promise(function (res) {
+        var t0 = Date.now();
+        (function poll() {
+          if (captured.lastPlay || Date.now() - t0 > 14000) return res();
+          setTimeout(poll, 300);
+        })();
+      });
     } catch (e) { console.log(id, 'play ERR', e.message); }
   }
   const p = captured.lastPlay;
