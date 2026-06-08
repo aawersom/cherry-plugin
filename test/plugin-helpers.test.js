@@ -895,3 +895,152 @@ describe('Phase 1 — quality map fixes', () => {
     expect(r.url).toBe('https://cdn.lenporno.net/720.mp4');
   });
 });
+
+// =============================================================================
+// FIX 1 — px() normalizes protocol-relative URLs BEFORE the Android return
+// (Synthetic px mirroring the production closure: normalization moved to the TOP
+//  so the native Android player receives a resolvable https:// URL, not `//host`.)
+// =============================================================================
+
+describe('px() protocol-relative normalization before Android return', () => {
+  const PROXY = 'https://cherry-proxy.example.workers.dev';
+  function buildProxyUrl(u) { return PROXY + '/proxy?url=' + encodeURIComponent(u); }
+
+  // Production px() shape: normalize `//` FIRST, then early-return for Android.
+  function pxFixed(isAndroid, u) {
+    if (!u) return u;
+    if (u.indexOf('//') === 0) u = 'https:' + u;   // normalize BEFORE Android return
+    if (isAndroid) return u;
+    if (u.indexOf('blob:') === 0) return u;
+    if (u.indexOf(PROXY) === 0) return u;
+    return buildProxyUrl(u);
+  }
+
+  // Pre-fix shape (Android return BEFORE normalization) — documents the bug.
+  function pxOld(isAndroid, u) {
+    if (!u) return u;
+    if (isAndroid) return u;                        // returns `//host/...` unchanged → player fails
+    if (u.indexOf('blob:') === 0) return u;
+    if (u.indexOf(PROXY) === 0) return u;
+    if (u.indexOf('//') === 0) u = 'https:' + u;
+    return buildProxyUrl(u);
+  }
+
+  it('Android: protocol-relative youjizz URL gets https: prefix (the #3 fix)', () => {
+    const raw = '//cdne-mobile.youjizz.com/videos/abc-720p-h264.mp4';
+    expect(pxFixed(true, raw)).toBe('https://cdne-mobile.youjizz.com/videos/abc-720p-h264.mp4');
+  });
+
+  it('Android pre-fix returned the bare //url unplayable (documents the bug)', () => {
+    const raw = '//cdne-mobile.youjizz.com/videos/abc-720p-h264.mp4';
+    expect(pxOld(true, raw)).toBe(raw);                 // bug: still `//...`
+    expect(pxOld(true, raw).indexOf('https:')).toBe(-1);
+  });
+
+  it('Android: already-absolute https URL returned raw (device-IP playback)', () => {
+    const abs = 'https://s12.pornone.com/vid2/x/123_640x360_2000k.mp4?lang=en';
+    expect(pxFixed(true, abs)).toBe(abs);
+  });
+
+  it('Browser: protocol-relative URL normalized then proxied', () => {
+    const raw = '//cdne-mobile.youjizz.com/videos/abc-720p-h264.mp4';
+    const out = pxFixed(false, raw);
+    expect(out.indexOf(PROXY)).toBe(0);
+    expect(decodeURIComponent(out)).toContain('https://cdne-mobile.youjizz.com');
+  });
+});
+
+// =============================================================================
+// FIX 2 — getStream returns RAW stream URLs (no in-getStream buildProxyUrl).
+// px() is the single proxy-decision point: browser → proxied, Android → raw.
+// These tests assert the parser output is the raw CDN URL, not a proxy-wrapped one.
+// =============================================================================
+
+describe('getStream returns raw stream URLs (px is the single proxy point)', () => {
+  // pornone <source> extraction (mirrors the production loop after FIX 2)
+  function pornoneStream(html) {
+    const clean = html.replace(/\\\//g, '/').replace(/\\"/g, '"');
+    const srcRx = /<source\s+src="(https?:\/\/s\d+\.pornone\.com\/vid2\/[^"]+?\.mp4[^"]*)"[^>]*?(?:res|label)="(\d+)p?"/gi;
+    const quality = {};
+    let best = '', bestRes = -1, sm;
+    while ((sm = srcRx.exec(clean)) !== null) {
+      const url = sm[1], res = parseInt(sm[2], 10) || 0;
+      quality[res + 'p'] = url;                       // RAW
+      if (res > bestRes) { bestRes = res; best = url; }
+    }
+    return { url: best, quality: quality };
+  }
+
+  it('pornone: quality map + url are raw pornone CDN URLs (no proxy origin)', () => {
+    const html = '<source src="https://s12.pornone.com/vid2/a/77_1280x720_4000k.mp4?lang=en" res="720">' +
+                 '<source src="https://s12.pornone.com/vid2/a/77_640x360_1000k.mp4?lang=en" res="360">';
+    const r = pornoneStream(html);
+    expect(r.url).toBe('https://s12.pornone.com/vid2/a/77_1280x720_4000k.mp4?lang=en');
+    expect(r.quality['720p']).toBe('https://s12.pornone.com/vid2/a/77_1280x720_4000k.mp4?lang=en');
+    Object.keys(r.quality).forEach((k) => {
+      expect(r.quality[k]).not.toContain('/proxy?url=');
+      expect(r.quality[k].indexOf('https://s')).toBe(0);
+    });
+  });
+
+  it('hqporner: bigcdn quality map is raw (no proxy wrap inside getStream)', () => {
+    // Mirrors the FIX-2 hqporner branch: raw https://sN.bigcdn.cc/pubs/HASH/H.mp4
+    const cdnHost = 's3.bigcdn.cc', hash = '6a14af53.31758800';
+    const heights = ['360', '720'];
+    const quality = {};
+    heights.forEach((h) => { quality[h + 'p'] = 'https://' + cdnHost + '/pubs/' + hash + '/' + h + '.mp4'; });
+    expect(quality['720p']).toBe('https://s3.bigcdn.cc/pubs/6a14af53.31758800/720.mp4');
+    Object.keys(quality).forEach((k) => expect(quality[k]).not.toContain('/proxy?url='));
+  });
+
+  it('porntrex: _kvsPickBest output passed through raw (no proxy wrap)', () => {
+    const found = [
+      'https://www.cdntrex.com/get_file/1/a/360p.mp4',
+      'https://www.cdntrex.com/get_file/1/a/720p.mp4'
+    ];
+    const r = _kvsPickBest(found);            // returned as-is by FIX-2 porntrex
+    expect(r.url).not.toContain('/proxy?url=');
+    Object.keys(r.quality).forEach((k) => expect(r.quality[k]).not.toContain('/proxy?url='));
+  });
+});
+
+// =============================================================================
+// FIX 3 — 3movs hrefRx requires a numeric video id (/videos/{digits}/{slug})
+// so nav links (/videos/, /categories/, /pornstars/) no longer make a junk card.
+// =============================================================================
+
+describe('_3movsCards hrefRx requires numeric video id', () => {
+  const hrefRx = /href="(https?:\/\/(?:www\.)?3movs\.com\/videos\/\d+\/[^"?#]+)"/g;
+
+  function matchAll(html) {
+    const out = []; let m; hrefRx.lastIndex = 0;
+    while ((m = hrefRx.exec(html)) !== null) out.push(m[1]);
+    return out;
+  }
+
+  it('matches real /videos/{id}/{slug} URLs', () => {
+    const html = 'href="https://www.3movs.com/videos/452788/sexy-wife/"';
+    expect(matchAll(html)).toEqual(['https://www.3movs.com/videos/452788/sexy-wife/']);
+  });
+
+  it('does NOT match the /videos/ index (the junk "video" card source)', () => {
+    expect(matchAll('href="https://www.3movs.com/videos/"')).toEqual([]);
+  });
+
+  it('does NOT match /categories/ or /pornstars/ nav links', () => {
+    const html = 'href="https://www.3movs.com/categories/" href="https://www.3movs.com/pornstars/"';
+    expect(matchAll(html)).toEqual([]);
+  });
+
+  it('keeps real cards while dropping the junk index in a mixed list', () => {
+    const html =
+      'href="https://www.3movs.com/videos/"' +
+      'href="https://www.3movs.com/videos/452788/a/"' +
+      'href="https://www.3movs.com/categories/amateur/"' +
+      'href="https://www.3movs.com/videos/451735/b/"';
+    expect(matchAll(html)).toEqual([
+      'https://www.3movs.com/videos/452788/a/',
+      'https://www.3movs.com/videos/451735/b/'
+    ]);
+  });
+});

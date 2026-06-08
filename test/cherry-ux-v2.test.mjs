@@ -1953,9 +1953,27 @@ describe('Phase 3 A3(b): per-source title filter — POST behaviour', () => {
 // no proxy. px() must short-circuit to raw on Android, and pornhub must not
 // pre-proxy its HLS fallback on Android.
 describe('Android native stream — plugin.js source assertions (anti-drift)', () => {
-  it('px() returns the raw url on Android before any proxy wrapping', () => {
-    // The Android short-circuit must appear inside px(), ahead of the blob/proxy checks.
-    expect(SRC).toMatch(/function px\(u\)\s*\{[\s\S]{0,500}?if \(_isAndroid\(\)\) return u;/);
+  it('px() normalizes protocol-relative // BEFORE the Android raw return', () => {
+    // FIX 1: a bare //host stream URL must be turned into https://host BEFORE the
+    // Android short-circuit, else the native player can't resolve it (the youjizz
+    // "choose player" failure). The normalization line must precede the Android return.
+    const open = SRC.indexOf('function px(u) {');
+    expect(open).toBeGreaterThan(-1);
+    const body = SRC.slice(open, open + 900);
+    const normAt = body.indexOf("if (u.indexOf('//') === 0) u = 'https:' + u;");
+    const androidAt = body.indexOf('if (_isAndroid()) return u;');
+    expect(normAt).toBeGreaterThan(-1);
+    expect(androidAt).toBeGreaterThan(-1);
+    expect(normAt).toBeLessThan(androidAt);          // normalize first, then Android raw
+  });
+  it('px() Android raw return stays ahead of the blob/proxy checks', () => {
+    const open = SRC.indexOf('function px(u) {');
+    const body = SRC.slice(open, open + 900);
+    const androidAt = body.indexOf('if (_isAndroid()) return u;');
+    const blobAt = body.indexOf("if (u.indexOf('blob:') === 0) return u;");
+    expect(androidAt).toBeGreaterThan(-1);
+    expect(blobAt).toBeGreaterThan(-1);
+    expect(androidAt).toBeLessThan(blobAt);
   });
   it('pornhub HLS fallback is raw on Android, proxied otherwise', () => {
     expect(SRC).toMatch(/_isAndroid\(\)\s*\?\s*hlsUrls\[lbl\]\s*:\s*buildProxyUrl\(hlsUrls\[lbl\]/);

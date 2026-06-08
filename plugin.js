@@ -714,6 +714,11 @@
       // Proxy non-blob stream URLs so that tokens bound to the proxy IP stay valid.
       function px(u) {
         if (!u) return u;
+        // Normalize protocol-relative URLs (e.g. YouJizz returns //cdne-mobile.youjizz.com/...)
+        // BEFORE any early return — the native Android player can't resolve a bare
+        // `//host/...` URL (shows the "choose player" dialog), so it must get a
+        // proper `https://` URL too.
+        if (u.indexOf('//') === 0) u = 'https:' + u;
         // Android: native player loads the stream directly from the device's
         // home (residential) IP. Since the page was also fetched natively from
         // the same IP, IP-bound CDN tokens (phncdn, KVS get_file) stay valid
@@ -723,8 +728,6 @@
         if (PROXY_URL_3 && u.indexOf(PROXY_URL_3) === 0) return u; // skip VPS-proxied URLs
         if (PROXY_URL_2 && u.indexOf(PROXY_URL_2) === 0) return u; // skip Deno-proxied URLs
         if (u.indexOf(PROXY_URL) === 0) return u; // skip CF Worker-proxied URLs
-        // Normalize protocol-relative URLs (e.g. YouJizz returns //cdne-mobile.youjizz.com/...)
-        if (u.indexOf('//') === 0) u = 'https:' + u;
         return buildProxyUrl(u);
       }
       var proxiedQuality = {};
@@ -3413,9 +3416,11 @@ SOURCES.push({
             }
             var heights = Object.keys(seenHeights).length ? Object.keys(seenHeights) : [hashM[3]];
             heights.sort(function(a, b) { return parseInt(a, 10) - parseInt(b, 10); });
+            // Return RAW stream URLs — px() in playVideo is the single proxy-decision
+            // point (browser → proxied via buildProxyUrl, Android → raw device-IP fetch).
             var quality = {};
             heights.forEach(function(h) {
-              quality[h + 'p'] = buildProxyUrl('https://' + cdnHost + '/pubs/' + hash + '/' + h + '.mp4', 'https://mydaddy.cc/');
+              quality[h + 'p'] = 'https://' + cdnHost + '/pubs/' + hash + '/' + h + '.mp4';
             });
             var best = quality[heights[heights.length - 1] + 'p'];
             return { url: best, quality: quality };
@@ -3689,20 +3694,23 @@ SOURCES.push({
             // Anchor strictly on the pornone CDN host so we never pick up the
             // gallery.vcmdiawe.com livecam ad clips (the "short video that closes fast" bug).
             var srcRx = /<source\s+src="(https?:\/\/s\d+\.pornone\.com\/vid2\/[^"]+?\.mp4[^"]*)"[^>]*?(?:res|label)="(\d+)p?"/gi;
+            // Return RAW stream URLs — px() in playVideo is the single proxy-decision
+            // point (browser → proxied, Android → raw device-IP fetch so IP-bound
+            // KVS tokens match the natively-fetched page).
             var quality = {};
             var best = '', bestRes = -1, sm;
             while ((sm = srcRx.exec(clean)) !== null) {
                 var url = sm[1], res = parseInt(sm[2], 10) || 0;
-                quality[res + 'p'] = buildProxyUrl(url, 'https://pornone.com/');
+                quality[res + 'p'] = url;
                 if (res > bestRes) { bestRes = res; best = url; }
             }
             if (best) {
-                return { url: buildProxyUrl(best, 'https://pornone.com/'), quality: quality };
+                return { url: best, quality: quality };
             }
             // Fallback: JSON-LD contentUrl (always the real pornone CDN, never the ad clip).
             var ld = clean.match(/"contentUrl"\s*:\s*"(https?:\/\/s\d+\.pornone\.com\/vid2\/[^"]+?\.mp4[^"]*)"/i) ||
                      clean.match(/(https?:\/\/s\d+\.pornone\.com\/vid2\/[^"'\s]+?\.mp4[^"'\s]*)/i);
-            if (ld) return { url: buildProxyUrl(ld[1], 'https://pornone.com/'), quality: {} };
+            if (ld) return { url: ld[1], quality: {} };
             return { url: '', quality: {} };
         }).catch(function () { return { url: '', quality: {} }; });
     }
@@ -3834,10 +3842,11 @@ SOURCES.push({
                 if (found.indexOf(full) === -1) found.push(full);
             }
             if (found.length) {
+                // Return RAW stream URLs — px() in playVideo is the single proxy-decision
+                // point (browser → proxied, Android → raw device-IP so IP-bound KVS
+                // get_file tokens match the natively-fetched page).
                 var r1 = _kvsPickBest(found);
-                var q1 = {};
-                Object.keys(r1.quality).forEach(function(k) { q1[k] = buildProxyUrl(r1.quality[k], 'https://www.porntrex.com/'); });
-                return { url: buildProxyUrl(r1.url, 'https://www.porntrex.com/'), quality: q1 };
+                return { url: r1.url, quality: r1.quality };
             }
 
             // Fallback: JS variable assignment
@@ -3848,9 +3857,7 @@ SOURCES.push({
             }
             if (varUrls.length) {
                 var r2 = _kvsPickBest(varUrls);
-                var q2 = {};
-                Object.keys(r2.quality).forEach(function(k) { q2[k] = buildProxyUrl(r2.quality[k], 'https://www.porntrex.com/'); });
-                return { url: buildProxyUrl(r2.url, 'https://www.porntrex.com/'), quality: q2 };
+                return { url: r2.url, quality: r2.quality };
             }
 
             return extractStreams(html);
@@ -4308,13 +4315,14 @@ SOURCES.push({
 
 function _3movsCards(html) {
     var items = [];
-    var hrefRx = /href="(https?:\/\/(?:www\.)?3movs\.com\/[^"?#]+)"/g;
+    // Only real video URLs — /videos/{digits}/{slug}. The old broad rx matched nav
+    // links like /videos/ (the index), /categories/ and /pornstars/, producing an
+    // empty leading card titled "video". Requiring the numeric id drops them.
+    var hrefRx = /href="(https?:\/\/(?:www\.)?3movs\.com\/videos\/\d+\/[^"?#]+)"/g;
     var seen = {};
     var m;
     while ((m = hrefRx.exec(html)) !== null) {
         var videoUrl = m[1];
-        // Skip category/index pages — video URLs typically contain a numeric ID or 'videos'
-        if (/\/$/.test(videoUrl) && !/\/videos\//.test(videoUrl) && !/\/\d+/.test(videoUrl)) continue;
         var id = videoUrl.replace(/^https?:\/\/[^/]+\//, '').replace(/[^a-z0-9]/gi, '_');
         if (!id || seen[id]) continue;
         seen[id] = true;
@@ -5705,12 +5713,14 @@ SOURCES.push({
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
             var m;
+            // Return RAW stream URLs — px() in playVideo is the single proxy-decision
+            // point (browser → proxied, Android → raw device-IP fetch).
             // Playerjs (DLE plugin): new Playerjs({file:"url"})
             m = /Playerjs\s*\(\s*\{[^{}]*['"]?file['"]?\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))['"]/i.exec(html);
-            if (m) return { url: buildProxyUrl(m[1], 'https://w2.huyalkino.com/'), quality: {} };
+            if (m) return { url: m[1], quality: {} };
             // JWPlayer fallback
             m = /jwplayer\s*\([^)]*\)\s*\.setup\s*\(\s*\{[\s\S]{0,500}?['"]?file['"]?\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))['"]/i.exec(html);
-            if (m) return { url: buildProxyUrl(m[1], 'https://w2.huyalkino.com/'), quality: {} };
+            if (m) return { url: m[1], quality: {} };
             return extractStreams(html);
         }).catch(function () { return { url: '', quality: {} }; });
     }
