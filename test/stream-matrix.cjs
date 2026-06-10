@@ -159,8 +159,14 @@ async function catsSweep(id) {
   const sort = (s.cfg.sorts && s.cfg.sorts[0] && s.cfg.sorts[0].id) || '';
   const out = [];
   for (const c of s.cfg.categories) {
-    let n = 0;
-    try { const r = await s.browse(c.id, 1, sort); n = (r && r.items && r.items.length) || 0; } catch (e) {}
+    let n = -1;  // -1 = timed out / errored (distinct from 0 = real empty)
+    try {
+      const r = await Promise.race([
+        s.browse(c.id, 1, sort),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 20000)),
+      ]);
+      n = (r && r.items && r.items.length) || 0;
+    } catch (e) { n = -1; }
     out.push({ id: c.id, label: c.label, n });
   }
   return { id, cats: out };
@@ -174,11 +180,13 @@ async function runCats(ids) {
     const r = await catsSweep(id);
     const dead = r.cats.filter(c => c.n === 0);
     const sparse = r.cats.filter(c => c.n > 0 && c.n < 5);
-    console.log(`${pad(id, 13)} cats=${pad(r.cats.length, 4)} dead=${pad(dead.length, 4)} sparse=${pad(sparse.length, 4)}${dead.length ? ' DEAD: ' + dead.map(c => c.id).slice(0, 8).join(',') : ''}`);
-    md += `## ${id} — ${r.cats.length} cats, ${dead.length} dead, ${sparse.length} sparse\n`;
+    const timeout = r.cats.filter(c => c.n === -1);
+    console.log(`${pad(id, 13)} cats=${pad(r.cats.length, 4)} dead=${pad(dead.length, 4)} sparse=${pad(sparse.length, 4)} t/o=${pad(timeout.length, 3)}${dead.length ? ' DEAD: ' + dead.map(c => c.id).slice(0, 8).join(',') : ''}`);
+    md += `## ${id} — ${r.cats.length} cats, ${dead.length} dead, ${sparse.length} sparse, ${timeout.length} timeout\n`;
     if (dead.length) md += `- **DEAD (0 cards):** ${dead.map(c => `\`${c.id}\``).join(', ')}\n`;
     if (sparse.length) md += `- sparse (<5): ${sparse.map(c => `${c.id}(${c.n})`).join(', ')}\n`;
-    if (!dead.length && !sparse.length) md += `- all OK\n`;
+    if (timeout.length) md += `- timeout (inconclusive): ${timeout.map(c => c.id).join(', ')}\n`;
+    if (!dead.length && !sparse.length && !timeout.length) md += `- all OK\n`;
     dead.forEach(c => deadAll.push(`${id}:${c.id}`));
   }
   md = md.replace('# Cherry — category sweep (Phase 2)\n', `# Cherry — category sweep (Phase 2)\n\n**Total dead category slugs: ${deadAll.length}** — candidates for removal.\n`);

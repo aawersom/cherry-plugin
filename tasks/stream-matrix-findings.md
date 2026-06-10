@@ -45,7 +45,25 @@ tizam 1.78, hellporno 0.25, pornobolt 0.47, crocotube 0.96, ebun 2.12, lenporno 
 
 **Улучшение harness:** `fetchRange` теперь шлёт `Referer` (страница) — убрало ложный 403 (24rolika).
 
+## Фаза 2 — свип категорий (`--cats`) — выполнено (частично 15/23)
+Прогон `node test/stream-matrix.cjs --cats` по каналам, browse каждой категории, флаг dead(0)/sparse(<5)/timeout(-1).
+
+**Подтверждённый мёртвый слаг (удалён):** `pornone:casting` (`pornone.com/casting/` → 404, проверен дважды). Убран из cfg.
+
+**ЛОЖНЫЕ deads (Val.town-троттл, НЕ удалять):** spankbang `anal/milf/teen` показались dead в bulk-свипе
+(44 категории подряд через Val.town → часть запросов отвалилась), но при изолированной проверке
+`/s/anal|milf|teen/1/` → **72 video-item каждая, HTTP 200**. → spankbang категории рабочие.
+
+**sparse (не мёртвые):** familyporn `sisters`(1) и ещё одна — малые категории, оставлены.
+
+**Уроки харнеса (внесены):**
+- **Per-browse таймаут 20s** (`Promise.race`) — свип зависал на perfektdamen без него; `n=-1` = timeout, отделён от `0`=real dead.
+- **Val.town-каналы (spankbang) нельзя свипать в bulk** — троттлится, даёт ложные deads. Свипать gently
+  или re-verify каждый dead изолированно (что и сделано). Свип точен для VPS/CF-каналов.
+- Свип НЕ запускать на pornhub (webmasters блокирует IP этого хоста → все категории ложно-dead).
+
 ## Следующее
-- `--platform=browser` прогон — affinity-проверка станет содержательной (xnxx/tizam co-location).
-- Фаза 2: перебор всех категорий/сортов (мёртвые слаги: pornhub `ai-straight`, familyporn `sisters`).
+- Фаза 3 — Playwright UI (D-pad, фокус, меню, история) — крупнейший непокрытый пласт.
+- `--platform=browser` прогон — affinity (xnxx/tizam co-location).
 - Фаза 4 (device): perfektdamen 1KB, pornhub-буфер — подтвердить на residential-IP.
+- pornhub категории: свип через VPS отдельно (на этом хосте блок) — проверить `ai-straight` и пр.
