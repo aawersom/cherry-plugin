@@ -16,6 +16,7 @@ const fs = require('fs');
 const ARGS = process.argv.slice(2);
 const PLATFORM = (ARGS.find(a => a.startsWith('--platform=')) || '--platform=android').split('=')[1];
 const REACH = ARGS.includes('--reach');
+const CATS = ARGS.includes('--cats');
 const IDS = ARGS.filter(a => !a.startsWith('--'));
 const IS_ANDROID = PLATFORM === 'android';
 
@@ -151,8 +152,44 @@ async function run(id) {
   return { id, cat, sort, cards, kind: kindOf(purl), affinity, reach, streamHost: host(purl) };
 }
 
+// Phase 2: sweep EVERY category of a channel → flag dead (0) / sparse (<5).
+async function catsSweep(id) {
+  const s = C.SOURCES.find(x => x.id === id);
+  if (!s || !s.cfg || !s.cfg.categories) return { id, cats: [] };
+  const sort = (s.cfg.sorts && s.cfg.sorts[0] && s.cfg.sorts[0].id) || '';
+  const out = [];
+  for (const c of s.cfg.categories) {
+    let n = 0;
+    try { const r = await s.browse(c.id, 1, sort); n = (r && r.items && r.items.length) || 0; } catch (e) {}
+    out.push({ id: c.id, label: c.label, n });
+  }
+  return { id, cats: out };
+}
+
+async function runCats(ids) {
+  console.log(`CATEGORY SWEEP · platform=${PLATFORM} · channels=${ids.length}\n`);
+  let md = `# Cherry — category sweep (Phase 2)\n\nplatform=${PLATFORM} · ${new Date ? '' : ''}channels=${ids.length}\n\n`;
+  const deadAll = [];
+  for (const id of ids) {
+    const r = await catsSweep(id);
+    const dead = r.cats.filter(c => c.n === 0);
+    const sparse = r.cats.filter(c => c.n > 0 && c.n < 5);
+    console.log(`${pad(id, 13)} cats=${pad(r.cats.length, 4)} dead=${pad(dead.length, 4)} sparse=${pad(sparse.length, 4)}${dead.length ? ' DEAD: ' + dead.map(c => c.id).slice(0, 8).join(',') : ''}`);
+    md += `## ${id} — ${r.cats.length} cats, ${dead.length} dead, ${sparse.length} sparse\n`;
+    if (dead.length) md += `- **DEAD (0 cards):** ${dead.map(c => `\`${c.id}\``).join(', ')}\n`;
+    if (sparse.length) md += `- sparse (<5): ${sparse.map(c => `${c.id}(${c.n})`).join(', ')}\n`;
+    if (!dead.length && !sparse.length) md += `- all OK\n`;
+    dead.forEach(c => deadAll.push(`${id}:${c.id}`));
+  }
+  md = md.replace('# Cherry — category sweep (Phase 2)\n', `# Cherry — category sweep (Phase 2)\n\n**Total dead category slugs: ${deadAll.length}** — candidates for removal.\n`);
+  fs.writeFileSync('D:/Works/Lampa/tasks/category-sweep-report.md', md);
+  console.log(`\nTotal dead slugs: ${deadAll.length} | report → tasks/category-sweep-report.md`);
+  process.exit(0);
+}
+
 (async function () {
   const ids = IDS.length ? IDS : C.SOURCES.map(s => s.id);
+  if (CATS) return runCats(ids);
   console.log(`platform=${PLATFORM} reach=${REACH} | channels=${ids.length}\n`);
   const head = `${pad('channel', 13)}${pad('cards', 6)}${pad('url-kind', 13)}${pad('affinity', 16)}reach`;
   console.log(head); console.log('-'.repeat(head.length + 20));
