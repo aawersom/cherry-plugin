@@ -1686,11 +1686,6 @@
       var results = [];
       // 1) Search entry — opens keyboard, then all-sources search grid.
       results.push({ title: Lampa.Lang.translate('cherry_search'), img: '', _kind: 'search', _initial: '⌕', _action: true });
-      // 1b) «Продолжить» — resume watch history. Shown only when history exists,
-      // placed BEFORE the source tiles (keystone continue-watching surface).
-      if (Hist.all().length) {
-        results.push({ title: Lampa.Lang.translate('cherry_continue'), img: '', _kind: 'continue', _initial: '▶', _action: true });
-      }
       // 2) Favorites entry.
       results.push({ title: Lampa.Lang.translate('cherry_favorites'), img: '', _kind: 'favorites', _initial: '♥', _action: true });
       // 3) Sync entry — set the cross-device PIN; opening Cherry also auto-syncs.
@@ -1706,6 +1701,11 @@
           _color:     _tileColor(src.id)
         });
       });
+      // 5) Watch history («РП») — resume surface, placed LAST (after all sources).
+      // Shown only when history exists.
+      if (Hist.all().length) {
+        results.push({ title: Lampa.Lang.translate('cherry_continue'), img: '', _kind: 'continue', _initial: '▶', _action: true });
+      }
 
       this.build({ title: 'Cherry', results: results, total_pages: 1 });
       this.activity.loader(false);
@@ -1889,7 +1889,7 @@
       cherry_search_hint: { ru: 'Введите запрос',      en: 'Enter a query'      },
       cherry_sources:     { ru: 'Источники',           en: 'Sources'            },
       cherry_favorites:   { ru: 'Избранное',           en: 'Favorites'          },
-      cherry_continue:    { ru: 'Продолжить',          en: 'Continue'           },
+      cherry_continue:    { ru: 'РП',                  en: 'Continue'           },
       cherry_sync:        { ru: 'Синхронизация',       en: 'Sync'               },
       cherry_sync_ok:     { ru: 'Избранное синхронизировано', en: 'Favorites synced' },
       cherry_sync_err:    { ru: 'Синхронизация не удалась — проверьте сеть', en: 'Sync failed — check connection' },
