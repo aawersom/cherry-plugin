@@ -1,1 +1,5 @@
 backups/
+
+# stream-matrix transient outputs
+tasks/stream-matrix-report.md
+tasks/stream-matrix-android-reach.log
