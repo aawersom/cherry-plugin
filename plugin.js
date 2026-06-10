@@ -123,7 +123,13 @@
     'www.eporner.com': 1, 'eporner.com': 1,
     // spankbang: Cloudflare challenges the device home IP too → force the page through
     // the proxy (routes to Val.town via PROXY_URL_VT, which passes the challenge).
-    'ru.spankbang.com': 1, 'spankbang.com': 1, 'www.spankbang.com': 1
+    'ru.spankbang.com': 1, 'spankbang.com': 1, 'www.spankbang.com': 1,
+    // porntrex: the device native fetch returns a degraded page (empty card titles → Lampa
+    // shows the "add to favorites" fallback) and the KVS get_file stream token is bound to
+    // that device IP → no playback. Browser (proxy→VPS) works. porntrex's get_file stream is
+    // on the SAME host (www.porntrex.com), so forcing the page → VPS co-locates page+stream
+    // on one IP, matching the working browser path.
+    'www.porntrex.com': 1, 'porntrex.com': 1
   };
   function _forceProxyAndroid(url) {
     try { if (_ANDROID_FORCE_PROXY[new URL(url).hostname]) return true; } catch (e) {}
