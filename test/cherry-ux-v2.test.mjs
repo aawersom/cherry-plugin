@@ -1525,7 +1525,9 @@ describe('Step 2: query-param / API sorts (popular first, Russian labels)', () =
     var at = SRC.indexOf("id: '" + id + "'");
     expect(at).toBeGreaterThan(-1);
     var body = SRC.slice(at, at + 4000);
-    var m = body.match(/sorts: _cats\('([^']*)'\)/);
+    // Tolerate both `sorts: _cats('…')` and `sorts: [{…}].concat(_cats('…'))` (pornhub
+    // prepends a default literal before the _cats base list).
+    var m = body.match(/sorts:[\s\S]*?_cats\('([^']*)'\)/);
     expect(m).toBeTruthy();
     return m[1].split(',').map(function (p) {
       var i = p.indexOf(':');
@@ -1600,10 +1602,10 @@ describe('Step 2: query-param / API sorts (popular first, Russian labels)', () =
     var base = sortsFor('pornhub');
     expect(base.map(function (x) { return x.id; }))
       .toEqual(['mostviewed', 'rating', 'mostrecent']);
-    expect(base[0].label).toBe('По популярности');
+    expect(base[0].label).toBe('По популярности (всё время)');
     expect(base.map(function (x) { return x.id; })).not.toContain('longest');
-    // Composite period windows appended via .concat([...]) with ordering:period ids.
-    expect(SRC).toContain("{ id: 'mostviewed:weekly',  label: 'Популярное за неделю' }");
+    // Default (sorts[0]) is "popular THIS WEEK", prepended before the _cats base list.
+    expect(SRC).toContain("[{ id: 'mostviewed:weekly', label: 'Популярное за неделю' }].concat(");
     expect(SRC).toContain("{ id: 'mostviewed:monthly', label: 'Популярное за месяц' }");
   });
 
@@ -1644,7 +1646,9 @@ describe('Step 3: PATH-segment sorts (popular first, Russian labels, segment in 
     var at = SRC.indexOf("id: '" + id + "'");
     expect(at).toBeGreaterThan(-1);
     var body = SRC.slice(at, at + 4000);
-    var m = body.match(/sorts: _cats\('([^']*)'\)/);
+    // Tolerate both `sorts: _cats('…')` and `sorts: [{…}].concat(_cats('…'))` (pornhub
+    // prepends a default literal before the _cats base list).
+    var m = body.match(/sorts:[\s\S]*?_cats\('([^']*)'\)/);
     expect(m).toBeTruthy();
     return m[1].split(',').map(function (p) {
       var i = p.indexOf(':');
@@ -2286,19 +2290,19 @@ describe('Pornhub adapter — webmasters slugs/orderings/pagination', () => {
   });
 
   it('sorts: 3 valid base orderings (no dead longest) + composite period windows', () => {
-    const sortsMatch = PH.match(/sorts:\s*_cats\('([^']*)'\)/);
+    const sortsMatch = PH.match(/sorts:[\s\S]*?_cats\('([^']*)'\)/);
     expect(sortsMatch).toBeTruthy();
     const ids = sortsMatch[1].split(',').map(p => p.slice(0, p.indexOf(':')));
     // `longest` removed — the webmasters API silently ignored it (no-op = mostrecent).
     expect(ids).toEqual(['mostviewed', 'rating', 'mostrecent']);
     expect(ids).not.toContain('longest');
-    // Time-window composites appended as literal objects (ids carry a ':').
-    expect(PH).toContain("{ id: 'mostviewed:weekly',  label: 'Популярное за неделю' }");
+    // Default (sorts[0]) = "popular this week", prepended before the _cats base list.
+    expect(PH).toContain("[{ id: 'mostviewed:weekly', label: 'Популярное за неделю' }].concat(");
     expect(PH).toContain("{ id: 'mostviewed:monthly', label: 'Популярное за месяц' }");
   });
 
   it('sorts contain NO legacy fake ids (mv/tr/mr)', () => {
-    const sortsMatch = PH.match(/sorts:\s*_cats\('([^']*)'\)/);
+    const sortsMatch = PH.match(/sorts:[\s\S]*?_cats\('([^']*)'\)/);
     const ids = sortsMatch[1].split(',').map(p => p.slice(0, p.indexOf(':')));
     expect(ids).not.toContain('mv');
     expect(ids).not.toContain('tr');

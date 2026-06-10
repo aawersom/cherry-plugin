@@ -2464,8 +2464,10 @@ SOURCES.push({
     // Time-window sorts are COMPOSITE ids `ordering:period` (id itself carries a ':' so they
     // are appended as literal objects, NOT via _cats which splits on the first ':'). browse()/
     // search() split the id on ':' → &ordering= + &period= (no ':' = all-time, no period param).
-    sorts: _cats('mostviewed:По популярности,rating:По рейтингу,mostrecent:Свежее').concat([
-      { id: 'mostviewed:weekly',  label: 'Популярное за неделю' },
+    // Default (sorts[0]) = "popular THIS WEEK" so the listing refreshes weekly instead of
+    // showing the same all-time top videos every time. All-time + rating + recent stay available.
+    sorts: [{ id: 'mostviewed:weekly', label: 'Популярное за неделю' }].concat(
+      _cats('mostviewed:По популярности (всё время),rating:По рейтингу,mostrecent:Свежее')).concat([
       { id: 'mostviewed:monthly', label: 'Популярное за месяц' }
     ]),
     // Pornhub categories are SLUGS passed to the webmasters API (&category=), not numeric ids.
@@ -2910,21 +2912,17 @@ SOURCES.push({
       var highUrl = highMatch ? highMatch[1] : '';
       var lowUrl = lowMatch ? lowMatch[1] : '';
 
-      // Android TV plays MP4 inline in the default player, but hands HLS/.m3u8 to
-      // the system → "choose player" dialog. So on Android prefer MP4 (highUrl);
-      // in the browser prefer HLS (hls.js plays it inline + carries 720p/1080p).
+      // Prefer HLS everywhere: its adaptive ladder carries 1080p/4K, while xvideos'
+      // progressive `setVideoUrlHigh` MP4 caps at ~720p → looked "low quality" on a 4K TV.
+      // Modern Android players (Google TV / ExoPlayer) play the HLS master inline. The MP4
+      // High/Low entries stay in the quality map as a manual fallback for any player that
+      // can't do HLS (so they're never stranded), but the default is HLS.
       var quality = {};
-      if (_isAndroid()) {
-        if (highUrl) quality['High'] = highUrl;
-        if (lowUrl && lowUrl !== highUrl) quality['Low'] = lowUrl;
-        if (hlsUrl) quality['HLS'] = hlsUrl;
-      } else {
-        if (hlsUrl) quality['HLS'] = hlsUrl;
-        if (highUrl) quality['High'] = highUrl;
-        if (lowUrl && lowUrl !== highUrl) quality['Low'] = lowUrl;
-      }
+      if (hlsUrl) quality['HLS'] = hlsUrl;
+      if (highUrl) quality['High'] = highUrl;
+      if (lowUrl && lowUrl !== highUrl) quality['Low'] = lowUrl;
 
-      var url = _isAndroid() ? (highUrl || lowUrl || hlsUrl) : (hlsUrl || highUrl || lowUrl);
+      var url = hlsUrl || highUrl || lowUrl;
       return url ? { url: url, quality: quality } : { url: '', quality: {} };
     }).catch(function() { return { url: '', quality: {} }; });
   }
@@ -3046,20 +3044,15 @@ SOURCES.push({
       var highUrl = highMatch ? highMatch[1] : '';
       var lowUrl = lowMatch ? lowMatch[1] : '';
 
-      // Android TV plays MP4 inline but routes HLS/.m3u8 to the system "choose
-      // player" dialog → prefer MP4 on Android; HLS in the browser (hls.js inline).
+      // Prefer HLS everywhere: its adaptive ladder carries 1080p/4K, while the progressive
+      // `setVideoUrlHigh` MP4 caps at ~720p → "low quality" on a 4K TV. Google TV / ExoPlayer
+      // plays the HLS master inline; MP4 High/Low stay in the map as a manual fallback.
       var quality = {};
-      if (_isAndroid()) {
-        if (highUrl) quality['MP4 High'] = highUrl;
-        if (lowUrl) quality['MP4 Low'] = lowUrl;
-        if (hlsUrl) quality['HLS'] = hlsUrl;
-      } else {
-        if (hlsUrl) quality['HLS'] = hlsUrl;
-        if (highUrl) quality['MP4 High'] = highUrl;
-        if (lowUrl) quality['MP4 Low'] = lowUrl;
-      }
+      if (hlsUrl) quality['HLS'] = hlsUrl;
+      if (highUrl) quality['MP4 High'] = highUrl;
+      if (lowUrl) quality['MP4 Low'] = lowUrl;
 
-      var url = _isAndroid() ? (highUrl || lowUrl || hlsUrl) : (hlsUrl || highUrl || lowUrl || '');
+      var url = hlsUrl || highUrl || lowUrl || '';
       return { url: url, quality: quality };
     }).catch(function() { return { url: '', quality: {} }; });
   }
