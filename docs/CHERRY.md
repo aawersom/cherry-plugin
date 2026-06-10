@@ -188,8 +188,8 @@ A single-page **source PICKER** of coloured letter-tiles. Overrides:
 
 | Hook | Cherry implementation |
 |---|---|
-| `create()` `plugin.js:976` | Builds `results`: `[Поиск ⌕]` + `[Избранное ♥]` (action tiles) + one tile per registered source; `build(...)`; `render().addClass('cherry-cat cherry-home')` + `.category-full.addClass('mapping--grid cols--8')` |
-| `cardRender(object, element, card)` `plugin.js:1007` | `card.onEnter` routes by `element._kind`: `search` (→ `Lampa.Input.edit` → all_sources grid), `favorites` (→ favorites grid), `source` (→ single-source browse grid). Paints a `.cherry-tile` coloured initial into `.card__view` (`_tileColor(seed)` gives a stable per-source hue; action tiles get the brand tint) |
+| `create()` `plugin.js:976` | Builds `results` in order: `[Поиск ⌕]` + `[Случайные ♥]` + `[Синхронизация ⟲]` (action tiles) + one tile per registered source + `[РП ▶]` **LAST** (watch-history resume tile, shown only when `Hist.all()` is non-empty); `build(...)`; `render().addClass('cherry-cat cherry-home')` + `cols--8` |
+| `cardRender(object, element, card)` `plugin.js:1007` | `card.onEnter` routes by `element._kind`: `search` (→ `Lampa.Input.edit` → all_sources grid), `favorites` (→ favorites grid, tile labeled «Случайные»), `sync`, `continue` (→ is_history grid, tile labeled «РП»), `source` (→ single-source browse grid). Paints a `.cherry-tile` coloured initial into `.card__view` (`_tileColor(seed)` stable per-source hue; action tiles get the brand tint) |
 
 ---
 
@@ -203,7 +203,7 @@ custom card/grid/spinner CSS and templates were deleted (see Module Structure no
 |---|---|
 | **Grid cards** | `.cherry-cat` scope: 16:9 landscape via `.card__view{padding-bottom:56.25%}`, image `object-fit:cover`; grid `cols--5` (5 per row) |
 | **Home picker** | `.cherry-home` square tiles (`.card__view{padding-bottom:100%}`), grid `cols--8`; `.cherry-tile` paints a coloured first-letter initial (no thumbnails) |
-| **Home content** | A source picker: `[Поиск ⌕]` + `[Избранное ♥]` rendered as action tiles (brand pink `--action`) + one tile per source (stable per-source hue from `_tileColor`) |
+| **Home content** | A source picker: action tiles `[Поиск ⌕]` + `[Случайные ♥]` + `[Синхронизация ⟲]` (brand pink `--action`) + one tile per source (stable per-source hue from `_tileColor`) + `[РП ▶]` last (watch history, only when history exists). Tile labels: `cherry_favorites`='Случайные', `cherry_continue`='РП'. |
 | **Focus** | Single native Lampa frame + a subtle `transform:scale(1.04)` on `.card.focus .card__view` (no custom ring — a custom ring stacked on the native frame = double frame) |
 | **Card title** | 2-line white clamp (`-webkit-line-clamp:2`, `color:#fff`), `.card__title` font `.9em` |
 | **Source-origin badge** | `.cherry-src-badge` (z-index 2, above any preview) appended in `cardRender` on all_sources search AND favorites grids — those mix sources, so each card is tagged with its origin name |
@@ -270,7 +270,7 @@ the explicit named default. The category list adds an «Все категори�
 |---|---|---|
 | Query `?sort_by=` | KVS engine default (`sortParam`) | xozilla, analdin, hellporno, familyporn, perfektdamen, pornve |
 | Query `?sort=` | `sortParam:'sort'` (KVS) / custom | pornobolt, lenporno |
-| API `&ordering=` | webmasters API order | pornhub (`mostviewed`/`rating`/`mostrecent`/`longest`) |
+| API `&ordering=` | webmasters API order | pornhub (`mostviewed`/`rating`/`mostrecent` + composite `mostviewed:weekly`/`:monthly`). **Default sort (`sorts[0]`) = `mostviewed:weekly` («Популярное за неделю»)** so the listing refreshes weekly instead of showing the same all-time top videos. |
 | API `&order=` | API order | eporner |
 | PATH segment | sort injected into the URL path | xvideos `/c/s:views/{slug}`, xnxx `/tags/{slug}/{sort}/`, porntrex, 3movs, crocotube, ebun, jopaonline, pornone |
 | GLOBAL feed only | no per-category sort; sort swaps the no-category listing **root** | youjizz, hqporner, spankbang |
@@ -478,8 +478,14 @@ for most sites), so the default Android path is **native + raw**:
   fetches the stream from the SAME device IP, so KVS/phncdn IP-bound tokens stay valid with no
   proxy. `px()` normalizes `//protocol-relative` → `https:` **before** the Android return (else
   the native player shows a "choose player" dialog — youjizz fix).
-- **Quality:** getStream prefers **MP4 over HLS on Android** (Android routes `.m3u8` to the
-  system "choose player" dialog; MP4 plays inline).
+- **Quality (per-channel, not blanket):**
+  - **xvideos / xnxx** prefer **HLS** everywhere (adaptive 1080p/4K ladder); their progressive
+    `setVideoUrlHigh` MP4 caps at ~720p → looked low-quality on a 4K TV. MP4 High/Low stay in the
+    quality map as a manual fallback. (Google TV / ExoPlayer plays the HLS master inline.)
+  - **youjizz** prefers MP4 (its HLS triggers the Android player-chooser) **and caps the Android
+    default at ≤720p** — its cdne-mobile CDN paces each progressive MP4 to ~1.5× its bitrate, so
+    1080p (~3.6 Mbps) starts/buffers slowly; 720p (~1.35 Mbps) is smooth.
+  - General: protocol-relative `//` URLs are normalized to `https:` (else Android shows the chooser).
 
 **Exception — `_ANDROID_FORCE_PROXY`:** sites that block/redirect the device home IP
 (Cloudflare challenge, mirror redirect, empty body). For those BOTH page and stream go through
@@ -547,7 +553,7 @@ Only safe for plain pass-through proxies that do NOT rewrite M3U8.
 |---|---|---|---|---|---|---|
 | 1 | `pornhub` | Pornhub | pornhub.com | CF SOCKS5 (RESIDENTIAL) | HLS via phncdn CDN; referer propagated in M3U8 rewrite for IP-affinity | ✅ Working |
 | 2 | `xvideos` | Xvideos | xvideos.com | CF datacenter | HLS from CDN | ✅ Working |
-| 3 | `xnxx` | Xnxx | xnxx.com | VPS | MP4/HLS from CDN; Android prefers MP4 | ✅ Working |
+| 3 | `xnxx` | Xnxx | xnxx.com | VPS | HLS-first (adaptive 1080p+); MP4 fallback in quality map | ✅ Working |
 | 4 | `eporner` | Eporner | eporner.com | VPS (video pages) + Android force-proxy | JSON API browse; video page via VPS. getStream hash/xhr needs RE | ⚠ listing OK, stream RE |
 | 5 | `spankbang` | Spankbang | ru.spankbang.com | **Val.town** (+ Android force-proxy) | Val.town IP passes CF challenge; listing + signed-token mp4 (`sb-cd.com`) | ✅ Working |
 | 6 | `hqporner` | HQPorner | hqporner.com | VPS (page + bigcdn) + Android force-proxy | page via VPS; embed `mydaddy.cc` + CDN `*.bigcdn.cc` both VPS (IP-bound token). Player markup redesigned → stream RE | ⚠ cards OK, stream RE |
@@ -618,7 +624,7 @@ Results from `node test/cherry-lampa-e2e.mjs` — Playwright/Chromium with real 
 |---|---|---|
 | `pornhub` | 30 | getStream: `video.url` → CF Worker → `flashvars_\d+` JSON block → HLS/MP4. Browse: webmasters API JSON. `cfg.sorts`, `browseByModel`, `getRelated` implemented (Phase 3/4/5). |
 | `xvideos` | 42 | HLS via CDN, range test N/A for HLS |
-| `xnxx` | ~30 | **Via VPS proxy** (`PROXY_URL_2`); browse URL fixed to `/?k=new&p=N`. Android prefers MP4 over HLS (no player-chooser). |
+| `xnxx` | ~30 | **Via VPS proxy** (`PROXY_URL_2`); browse URL fixed to `/?k=new&p=N`. **HLS-first** everywhere (adaptive 1080p/4K); MP4 High/Low kept as manual fallback. |
 | `eporner` | ~30 | **Via VPS proxy** for video pages (`www.eporner.com` in `PROXY_URL_2_HOSTS`; also `_ANDROID_FORCE_PROXY` — device IP gets a block page); JSON search/browse API direct (CORS-open). URL: `/video-{id}/{slug}/`. getStream hash/xhr chain needs RE. |
 | `spankbang` | ~30 | **Via Val.town** (`PROXY_URL_VT`, `ru.spankbang.com`) — VPS/CF datacenter IPs get CF "Just a moment" 403; Val.town's IP passes it. Also in `_ANDROID_FORCE_PROXY`. Listing + signed-token mp4 stream (`sb-cd.com`) both work. |
 | `youjizz` | 24 | Direct MP4 via proxy |

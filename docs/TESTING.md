@@ -3,12 +3,31 @@
 ## Текущая архитектура тестов
 
 ```
-npx vitest run                      → ~463 unit-тестов (5 файлов, mock-based)
-node test/cherry-lampa-e2e.mjs     → источники в реальном lampa.mx (~10-15 min)
+npx vitest run                       → ~698 unit-тестов (mock-based, без сети, на пуш)
+npm run test:ui  (node ui-e2e.mjs)   → UI/UX E2E в реальной Lampa (Playwright) — Фаза 3
+node test/stream-matrix.cjs          → матрица стриминга (browse+getStream+reach+affinity) — Фаза 1
+node test/stream-matrix.cjs --cats   → свип всех категорий (мёртвые/разреженные слаги) — Фаза 2
+node test/android-emu.cjs            → эмуляция Android-пути (Player.play перехват, URL плеера)
+node test/cherry-lampa-e2e.mjs       → источники в реальном lampa.mx (~10-15 min)
 ```
 
-> Навигация компонентов теперь на `Lampa.InteractionCategory` — unit-тесты покрывают
-> чистые helpers (парсеры/URL-билдеры/KVS-движок/UX-логику), а не DOM-навигацию.
+> Навигация компонентов на `Lampa.InteractionCategory` — vitest покрывает чистые helpers
+> (парсеры/URL/KVS/UX-логику). Реальный UI/стриминг/Android-путь — отдельные харнесы (ниже).
+
+## Харнесы верификации (план: `tasks/comprehensive-verification.plan.md`)
+
+| Харнес | Уровень | Что проверяет | Стоимость |
+|---|---|---|---|
+| `test/android-emu.cjs` | Android-логика | грузит реальный plugin.js с `Platform.is(android)=true`, перехватывает `Player.play` → точный URL плеера (mp4/m3u8/raw/proxied/protocol-relative) + карточки. Без устройства. | бесплатно/локально |
+| `test/stream-matrix.cjs` | стриминг | матрица по 24 каналам × платформа: browse→getStream→классификация URL→IP-affinity→`--reach` (Range/m3u8-цепочка + throughput, шлёт Referer). `--cats` = свип категорий (dead/sparse/timeout). Отчёты в `tasks/`. | бесплатно/локально (сетевой) |
+| `test/ui-e2e.mjs` | **UI/UX** | **Playwright/Chromium** — грузит настоящую Lampa (`lampa.stream`), проходит онбординг, инжектит локальный plugin.js, водит Cherry **пультом** (D-pad): рендер, фокус-рамка, навигация, Enter→грид. Скриншоты в `tasks/ui-screenshots/`. | **бесплатно/локально** (Playwright, без квот) |
+| `test/cherry-browser-test.mjs` | стриминг (CORS) | plugin.js в реальном Chromium с мок-Lampa: browse/getStream/CORS/`<video>` playback. | бесплатно/локально |
+
+**Ограничения харнесов:**
+- Egress-IP = дев-машина, НЕ домашний IP ТВ → IP-bound токены к device-IP не воспроизводятся (Фаза 4, device-чек-лист).
+- `ui-e2e` тестирует **браузерный** UI (тот же код Cherry), НЕ нативный Android-плеер/чузер.
+- Val.town-каналы (spankbang) нельзя свипать в bulk (`--cats`) — троттлится, даёт ложные deads; re-verify изолированно.
+- pornhub не свипать с дев-хоста (webmasters блокирует его IP → ложные deads).
 
 ### Что делает E2E-тест сейчас
 
@@ -155,18 +174,20 @@ KVS-источники (Tier B) выдают токены, привязанны�
 
 | Файл | Тестируемые функции | ~it()/test() |
 |---|---|---|
-| `test/plugin-helpers.test.js` | `parseDur`, `parseViews`, `bestQualityUrl`, `extractStreams`, `_kvsPickBest`, `_titleFromUrl`, `_derivePages` | ~68 |
-| `test/worker-utils.test.js` | `isPrivateHostname`, `timingSafeEqual` | 22 |
-| `test/cherry-engine.test.mjs` | `_attr`, `_decodeHtml`, `_kvsPages`, `_kvsParseCards`, `_kvsEngine`, `_buildCatUrl`, `_cats` | ~124 |
-| `test/cherry-stream-fix.test.mjs` | stream extraction fixes (porndig srcSet, KVS get_file strip, Playerjs, FluidPlayer) | ~32 |
-| `test/cherry-ux-v2.test.mjs` | UX logic (toCard HD/quality, all_sources filter/paginate, action-menu gating, related/model menu) | ~239 |
+| `test/plugin-helpers.test.js` | `parseDur`, `parseViews`, `bestQualityUrl`, `extractStreams`, `_kvsPickBest`, `_titleFromUrl`, `_derivePages`, PROXY-host sets | 79 |
+| `test/worker-utils.test.js` | `isPrivateHostname`, `timingSafeEqual` (падает в Node: импортит `cloudflare:sockets` — это проверка воркера, не плагина) | 22 |
+| `test/cherry-engine.test.mjs` | `_attr`, `_decodeHtml`, `_kvsPages`, `_kvsParseCards`, `_kvsEngine`, `_buildCatUrl`, `_cats` | 220 |
+| `test/cherry-stream-fix.test.mjs` | stream extraction fixes (porndig srcSet, KVS get_file strip, Playerjs, FluidPlayer) | 32 |
+| `test/cherry-history.test.mjs` | watch history / resume («РП» tile last, is_history grid, progress bar) | 26 |
+| `test/cherry-ux-v2.test.mjs` | UX + anti-drift (sorts/categories, px Android branch, force-proxy hosts, pornhub weekly default, HLS-first xvideos/xnxx) | 280 |
 
-> `test/cherry-lampa-e2e.mjs` и `test/cherry-browser-test.mjs` запускаются через `node`
-> (Playwright), а не vitest — это live-проверки, не часть `npx vitest run`.
+> `test/cherry-lampa-e2e.mjs`, `test/cherry-browser-test.mjs`, `test/ui-e2e.mjs`,
+> `test/stream-matrix.cjs`, `test/android-emu.cjs` запускаются через `node` (live/Playwright),
+> а не vitest — это сетевые/UI-проверки, не часть `npx vitest run`.
 
 ```
 npx vitest run
-# Ожидаем: ~463 passed
+# Ожидаем: 698 passed (worker-utils.test.js — отдельный fail: cloudflare:sockets недоступен в Node)
 ```
 
 ---
