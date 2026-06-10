@@ -82,22 +82,24 @@ function kindOf(u) {
   return fmt + (proxied ? '/proxied' : '/raw');
 }
 
-async function fetchRange(url, bytes) {
+async function fetchRange(url, bytes, referer) {
   const u = url.startsWith('//') ? 'https:' + url : url;
   const t0 = Date.now();
   try {
-    const r = await fetch(u, { headers: { 'User-Agent': UA, Range: 'bytes=0-' + bytes }, signal: AbortSignal.timeout(25000) });
+    const h = { 'User-Agent': UA, Range: 'bytes=0-' + bytes };
+    if (referer) h.Referer = referer;  // native player sends the page URL as Referer
+    const r = await fetch(u, { headers: h, signal: AbortSignal.timeout(25000) });
     const buf = Buffer.from(await r.arrayBuffer());
     return { status: r.status, bytes: buf.length, ms: Date.now() - t0, ct: r.headers.get('content-type') || '', text: buf };
   } catch (e) { return { status: 'ERR', bytes: 0, ms: Date.now() - t0, err: String(e).slice(0, 40) }; }
 }
 
-async function reachability(url) {
+async function reachability(url, referer) {
   if (!url) return 'no-url';
   const u = url.startsWith('//') ? 'https:' + url : url;
   const isM3u8 = /\.m3u8/.test(u) || (url.indexOf('/proxy?url=') !== -1 && /m3u8/.test(decodeURIComponent(url)));
   if (!isM3u8) {
-    const r = await fetchRange(u, 2000000);
+    const r = await fetchRange(u, 2000000, referer);
     const sp = (r.bytes && r.ms) ? (r.bytes / 1024 / 1024 / (r.ms / 1000)).toFixed(2) + 'MB/s' : '-';
     return `${r.status} ${Math.round(r.bytes / 1024)}KB ${sp}`;
   }
@@ -144,7 +146,8 @@ async function run(id) {
   const pageTier = vurl ? proxyBase(vurl) : '?';
   const streamTier = purl ? proxyBase(purl) : '?';
   const affinity = (!purl) ? '-' : (pageTier === streamTier ? 'same' : 'DIFF⚠(' + pageTier.split('.')[0] + '/' + streamTier.split('.')[0] + ')');
-  const reach = REACH ? await reachability(purl) : '(skip)';
+  const ref = vurl || ('https://' + host(purl) + '/');
+  const reach = REACH ? await reachability(purl, ref) : '(skip)';
   return { id, cat, sort, cards, kind: kindOf(purl), affinity, reach, streamHost: host(purl) };
 }
 

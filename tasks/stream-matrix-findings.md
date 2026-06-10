@@ -28,7 +28,24 @@ all-time). pornhub=0 в матрице — из-за CF-блока/IP хоста
   android-affinity нужно сверять с `_forceProxyAndroid`/px-логикой. → улучшение харнеса (TODO).
 - Egress-IP = этот хост → IP-bound токены к device-IP не воспроизводятся (Фаза 4, device-чек-лист).
 
+## Прогон с достижимостью (`--reach`) — выполнено
+**Стримы играют (206 + throughput):** xvideos и xnxx — **m3u8-цепочка master✓ variant✓ seg=206✓**
+(HLS-фикс работает, полное качество); spankbang 2.07, youjizz 0.26 (throttle, но ≤720 кап = играет),
+pornone 0.80, porntrex 0.74, xozilla 1.09, 3movs 1.02, analdin 1.09, pornve 1.39, porndig 3.03,
+tizam 1.78, hellporno 0.25, pornobolt 0.47, crocotube 0.96, ebun 2.12, lenporno 1.55, jopaonline 1.71,
+24rolika 1.44 МБ/с. → **20 каналов воспроизводятся.**
+
+**Reach-флаги и диагноз:**
+| Канал | reach | Диагноз |
+|---|---|---|
+| **24rolika** | 403 → **206 с Referer** | Артефакт harness (нативный плеер шлёт Referer; добавил Referer в `fetchRange` → 206 ✓). Канал рабочий. |
+| **familyporn** | 403, host `images.nubiles-porn.com` | Категория `sisters` отдаёт 1 битую карточку, «стрим» = картинка. Категория-баг (Фаза 2). |
+| **perfektdamen** | 200 **1KB** (и с Referer) | Вместо видео — 1KB. Вероятно KVS IP-bound токен отвергнут с датацентр-IP этого хоста; на device residential-IP должен играть → device-чек-лист (Фаза 4). |
+| pornhub/eporner/hqporner | no-url | стрим не извлечён (pornhub=CF-блок/IP; eporner/hqporner=RE getStream) |
+
+**Улучшение harness:** `fetchRange` теперь шлёт `Referer` (страница) — убрало ложный 403 (24rolika).
+
 ## Следующее
-- Прогон `--reach` (достижимость стримов: Range/m3u8-цепочка + throughput) — в работе.
-- `--platform=browser` прогон — affinity-проверка станет содержательной.
+- `--platform=browser` прогон — affinity-проверка станет содержательной (xnxx/tizam co-location).
 - Фаза 2: перебор всех категорий/сортов (мёртвые слаги: pornhub `ai-straight`, familyporn `sisters`).
+- Фаза 4 (device): perfektdamen 1KB, pornhub-буфер — подтвердить на residential-IP.
