@@ -1839,6 +1839,9 @@
       /* drop shadow make the focused card unmistakable at 10-foot distance. */
       '.cherry-cat .card{transform-origin:center;}',
       '.cherry-cat .card.focus .card__view{transform:scale(1.07);box-shadow:0 0 0 .22em #e75480, 0 .6em 1.4em rgba(0,0,0,.6);border-radius:.4em;transition:transform .18s ease, box-shadow .18s ease;}',
+      /* Suppress Lampa\'s native white focus frame (.card.focus .card__view::after = 0.3em solid #fff) */
+      /* so ONLY our pink ring shows — kills the double-highlight. */
+      '.cherry-cat .card.focus .card__view::after, .cherry-cat .card.hover .card__view::after{display:none !important;}',
 
       /* ---- Home picker: small SQUARE tiles, all sources visible -- */
       '.cherry-home .card__view{padding-bottom:100% !important;height:0 !important;position:relative;}',
