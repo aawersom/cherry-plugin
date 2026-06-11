@@ -1503,10 +1503,10 @@
         else Lampa.Noty.show(Lampa.Lang.translate('cherry_error'), { style: 'warn' });
       };
 
-      // P3.3 + E: in all-sources search AND favorites the grid blends sources —
-      // tag each card with its origin. Visual overlay using existing element.source;
-      // no data shape change. Skipped in single-source browse (origin is obvious).
-      if ((object.all_sources || object.is_favorites) && element.source) {
+      // Tag EVERY card with its origin channel (owner requirement: source must be
+      // visible in all scenarios without exception — search, favorites, history,
+      // related, and single-source grids alike). Visual overlay via element.source.
+      if (element.source) {
         try {
           var os = sourceById(element.source);
           if (os) {
@@ -2134,13 +2134,29 @@ function parseDur(str) {
   if (!str) return 0;
   str = ('' + str).trim();
   if (/^\d+$/.test(str)) return parseInt(str, 10);
-  var mms = str.match(/(\d+)m\s*(\d+)s/i);
-  if (mms) return parseInt(mms[1], 10) * 60 + parseInt(mms[2], 10);
-  var mm = str.match(/(\d+)m/i);
-  if (mm) return parseInt(mm[1], 10) * 60;
-  var p = str.split(':').map(Number);
-  if (p.length === 2) return p[0] * 60 + p[1];
-  if (p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
+  // ISO-8601 duration (schema.org itemprop="duration" content="PT13M10S" / "PT790S").
+  var iso = str.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/i);
+  if (iso && (iso[1] || iso[2] || iso[3])) {
+    return (iso[1] ? parseInt(iso[1], 10) * 3600 : 0) +
+           (iso[2] ? parseInt(iso[2], 10) * 60 : 0) +
+           (iso[3] ? parseInt(iso[3], 10) : 0);
+  }
+  // Colon form (12:34 / 1:02:03) — handle before the h/m/s scan so it isn't shadowed.
+  if (str.indexOf(':') !== -1) {
+    var p = str.split(':').map(Number);
+    if (p.length === 2) return p[0] * 60 + p[1];
+    if (p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
+  }
+  // Unit form: any of h / m(in) / s, in any combination, spaces tolerated.
+  // Examples handled: "7min", "7 min", "1h2min", "1h 2m", "1h", "12m34s".
+  var h = str.match(/(\d+)\s*h/i);
+  var m = str.match(/(\d+)\s*m(?:in)?(?![a-z])/i);
+  var s = str.match(/(\d+)\s*s(?![a-z])/i);
+  if (h || m || s) {
+    return (h ? parseInt(h[1], 10) * 3600 : 0) +
+           (m ? parseInt(m[1], 10) * 60 : 0) +
+           (s ? parseInt(s[1], 10) : 0);
+  }
   return 0;
 }
 
@@ -2983,10 +2999,14 @@ SOURCES.push({
       var title = titleMatch ? stripTags(titleMatch[1]) : '';
       if (!title) title = _titleFromUrl(videoUrl);
 
-      // Duration often in a metadata span
-      var durMatch = block.match(/<span[^>]*class="[^"]*metadata[^"]*"[^>]*>([\d:]+)/) ||
-                     block.match(/<span[^>]+>([\d:]+)<\/span>/);
-      var duration = durMatch ? parseDur(durMatch[1].trim()) : 0;
+      // Duration is BARE text inside <p class="metadata"> (after the views <span>,
+      // before the <span class="video-hd">): e.g. `…</span>\n5min\n<span class="video-hd">`.
+      // It is NOT wrapped in its own span, so grab the first bare HH:MM / Nmin / NhNm
+      // token within this card's metadata paragraph (anchored to the block chunk).
+      var metaMatch = block.match(/class="metadata"[^>]*>([\s\S]*?)<\/p>/);
+      var metaTxt = metaMatch ? metaMatch[1] : block;
+      var durMatch = metaTxt.match(/(\d+h\s*)?\d+\s*min\b|\d+:\d+/i);
+      var duration = durMatch ? parseDur(durMatch[0].trim()) : 0;
 
       items.push({
         id: 'xnxx-' + rawId,
@@ -3520,7 +3540,10 @@ SOURCES.push({
       if (title) title = _decodeHtml(title);
       if (!title) title = _titleFromUrl(videoUrl);
 
-      var durMatch = block.match(/<div[^>]*class="[^"]*duration[^"]*"[^>]*>([^<]+)/);
+      // Duration: real markup is <span class="time"><i class="fa fa-clock-o"></i>&nbsp;11:23</span>
+      // (NOT class="duration"). Capture the bare HH:MM / Nmin token after the icon+&nbsp;.
+      var durMatch = block.match(/class="time"[^>]*>(?:\s*<[^>]+>)*\s*(?:&nbsp;)?\s*([\d:]+(?:\s*min)?)/i) ||
+                     block.match(/<div[^>]*class="[^"]*duration[^"]*"[^>]*>([^<]+)/);
       var duration = durMatch ? parseDur(durMatch[1].trim()) : 0;
 
       // HD badge: real per-card marker <span class="i-hd" ...>HD</span>.
@@ -4072,7 +4095,12 @@ function _porntrexPages(html, page, itemsLen) {
       var title = _decodeHtml(titleRaw);
       if (!title) title = _titleFromUrl(videoUrl);
 
-      var durStr   = _attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</);
+      // Prefer the schema.org itemprop="duration" content="PT…S" attr (precise, locale-
+      // free) over the visible text — some KVS skins render the text localized
+      // (e.g. pornobolt "13 мин", which parseDur can't read). Fall back to the
+      // class="duration|time" text for skins that omit the itemprop.
+      var durStr   = _attr(chunk, /itemprop="duration"[^>]*content="([^"]+)"/i) ||
+                     _attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</);
       var duration = parseDur(durStr);
 
       var viewsStr = _attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</);
@@ -4414,8 +4442,13 @@ function _3movsCards(html) {
         );
         if (!title) title = _titleFromUrl(videoUrl);
 
-        var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
-        var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
+        // Duration (<div class="time">6:36</div>) sits ~945 chars past the href —
+        // inside THIS card's <a class="wrap_image"> but beyond the 600-char title
+        // window. Use a wider forward window (bounded by the NEXT card href, min
+        // inter-card gap ~1600) so it stays card-anchored and never grabs a neighbour.
+        var durChunk = html.slice(m.index, m.index + 1500);
+        var duration = parseDur(_attr(durChunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
+        var views    = parseViews(_attr(durChunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
 
         // Hover-preview mp4 — every 3movs card carries data-preview="…_preview.mp4/".
         var preview = _attr(chunk, /data-preview="([^"]+\.mp4[^"]*)"/i);
@@ -4600,12 +4633,15 @@ function _pornveCards(html) {
         );
         if (!title) title = _titleFromUrl(videoUrl);
 
-        var duration = parseDur(
-            _attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</) ||
-            _attr(chunk, /(\d+:\d+)/)
-        );
+        // Duration (<div class="time">11:10</div>) sits ~768 chars past the href —
+        // beyond the 600-char forward window. Use a wider forward-only window (min
+        // inter-card gap ~2700) so it stays this card's value. Match the duration
+        // class explicitly (the bare \d+:\d+ fallback is dropped: it could otherwise
+        // catch an unrelated timestamp in the wider span).
+        var durChunk = html.slice(m.index, m.index + 1200);
+        var duration = parseDur(_attr(durChunk, /class="[^"]*(?:duration|time)"[^>]*>([^<]+)</));
 
-        var views = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
+        var views = parseViews(_attr(durChunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
 
         // Hover-preview mp4 — every pornve card carries data-preview="…_preview.mp4/".
         var preview = _attr(chunk, /data-preview="([^"]+\.mp4[^"]*)"/i);
@@ -4862,15 +4898,23 @@ SOURCES.push({
 function _porndigCards(html) {
     var items = [];
     var hrefRx = /href="((?:https?:\/\/porndig\.com)?\/videos\/(\d+)\/[^"]+\.html)"/g;
+    // Collect card start offsets FIRST so each card's chunk can extend to the NEXT
+    // card boundary. porndig renders the duration bubble ~2-3k chars past the href
+    // (well beyond a fixed window), so a card-bounded chunk is the only safe reach.
+    var cards = [];
     var seen = {};
     var m;
     while ((m = hrefRx.exec(html)) !== null) {
-        var videoUrl = m[1].charAt(0) === '/' ? 'https://porndig.com' + m[1] : m[1];
-        var id = m[2];
-        if (seen[id]) continue;
-        seen[id] = true;
-
-        var chunk = html.slice(m.index, m.index + 900);
+        if (seen[m[2]]) continue;
+        seen[m[2]] = true;
+        cards.push({ index: m.index, url: m[1], id: m[2] });
+    }
+    for (var c = 0; c < cards.length; c++) {
+        var videoUrl = cards[c].url.charAt(0) === '/' ? 'https://porndig.com' + cards[c].url : cards[c].url;
+        var id = cards[c].id;
+        var end = (c + 1 < cards.length) ? cards[c + 1].index : cards[c].index + 3500;
+        var chunk = html.slice(cards[c].index, Math.min(cards[c].index + 900, end));
+        var durChunk = html.slice(cards[c].index, end);
 
         // image-cdn.porndig.com/thumbs/YYYY/MM/ID/...
         var thumb = _attr(chunk, /(?:data-original|data-src|src)="(https?:\/\/image-cdn\.porndig\.com\/thumbs\/[^"?#]+)/i) ||
@@ -4883,8 +4927,10 @@ function _porndigCards(html) {
         );
         if (!title) title = _titleFromUrl(videoUrl);
 
-        var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
-        var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
+        // Duration: <div class="bubble bubble_duration"><span>08:00</span></div> —
+        // the value is in an inner <span>, so step past the leading inner tags.
+        var duration = parseDur(_attr(durChunk, /class="[^"]*duration[^"]*"[^>]*>(?:\s*<[^>]+>)*\s*([\d:]+(?:\s*min)?)/i));
+        var views    = parseViews(_attr(durChunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
 
         if (title || thumb) {
             items.push({ id: id, source: 'porndig', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
@@ -4942,13 +4988,21 @@ SOURCES.push({
 
       if (!title && !thumb) continue;
 
+      // Duration: <li ... umi:field-name="prodolzhitelnost"><meta itemprop="duration"
+      // content="1:42:49">1:42:49</li> inside <ul class="item__meta">. Prefer the
+      // clean itemprop content attr; the bare H:MM:SS text is the fallback.
+      var duration = parseDur(
+        _attr(chunk, /itemprop="duration"[^>]*content="([^"]+)"/i) ||
+        _attr(chunk, /umi:field-name="prodolzhitelnost"[^>]*>(?:\s*<[^>]+>)*\s*([\d:]+)/i)
+      );
+
       items.push({
         id: 'tizam-' + id,
         source: 'tizam',
         title: title,
         thumb: thumb,
         url: cardUrl,
-        duration: 0,
+        duration: duration,
         views: 0
       });
     }
@@ -5124,16 +5178,25 @@ SOURCES.push({
 function _perfektCards(html) {
     var items = [];
     var hrefRx = /href="((?:https?:\/\/(?:www\.)?perfektdamen\.co)?\/video\/(\d+)\/)"/g;
+    // Collect card start offsets FIRST so each card's duration chunk can extend to the
+    // NEXT card boundary: the <ul class="video-meta"> duration <span> renders ~2.3k
+    // chars past the href (beyond a fixed window), so a card-bounded chunk is required.
+    var cards = [];
     var seen = {};
     var m;
     while ((m = hrefRx.exec(html)) !== null) {
-        var videoUrl = m[1].charAt(0) === '/' ? 'https://www.perfektdamen.co' + m[1] : m[1];
-        var id = m[2];
-        if (seen[id]) continue;
-        seen[id] = true;
+        if (seen[m[2]]) continue;
+        seen[m[2]] = true;
+        cards.push({ index: m.index, url: m[1], id: m[2] });
+    }
+    for (var c = 0; c < cards.length; c++) {
+        var videoUrl = cards[c].url.charAt(0) === '/' ? 'https://www.perfektdamen.co' + cards[c].url : cards[c].url;
+        var id = cards[c].id;
+        var end = (c + 1 < cards.length) ? cards[c + 1].index : cards[c].index + 3000;
 
         // Forward-only: PerfektDamen uses data-original="//static.perfektdamen.co/...jpg"
-        var chunk = html.slice(m.index, m.index + 1000);
+        var chunk = html.slice(cards[c].index, Math.min(cards[c].index + 1000, end));
+        var durChunk = html.slice(cards[c].index, end);
 
         var thumb = _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.jpe?g)/i) ||
                     _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.(?:webp|png))/i);
@@ -5145,8 +5208,14 @@ function _perfektCards(html) {
         );
         if (!title) title = _titleFromUrl(videoUrl);
 
-        var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
-        var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
+        // Duration: <ul class="video-meta"><li><i class="fa fa-clock-o"></i> <span>24:14</span>…
+        // No duration/time class — anchor to the clock icon, then the H:MM(:SS) <span>.
+        // class="...duration..." kept as a fallback for any future markup variant.
+        var duration = parseDur(
+            _attr(durChunk, /fa-clock-o[^>]*>(?:\s*<[^>]*>)*\s*<span[^>]*>\s*([\d:]+)/i) ||
+            _attr(durChunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</)
+        );
+        var views    = parseViews(_attr(durChunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
 
         if (title || thumb) {
             items.push({ id: id, source: 'perfektdamen', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
@@ -5333,7 +5402,10 @@ SOURCES.push(_kvsEngine({
             return p > 1 ? u + '/' + p : u;
         }
     },
-    chunkWindow: { before: 800, after: 600 },
+    // after:900 (was 600) so the per-card duration block — <span class="vid-info
+    // duration" itemprop="duration" content="PT…S">…</span> sits ~590-660 chars past
+    // the href and was being truncated — is fully inside the chunk (min inter-card gap ~1174).
+    chunkWindow: { before: 800, after: 900 },
     thumbRx: [
         /(?:data-src|src)="(https?:\/\/pbcdn\.tv\/pornobolt-kartinki\/huge-[^"]+\.jpe?g)"/i
     ],
@@ -5872,7 +5944,9 @@ function _rolikaCards(html) {
         );
         if (!title) title = _titleFromUrl(videoUrl);
 
-        var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time|th-time)[^"]*"[^>]*>([^<]+)</));
+        // Duration: <div class="th-time icon-l"><span class="fa fa-clock-o"></span>39:20</div>
+        // — the time follows an inner <span> icon, so step past any leading inner tags.
+        var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time|th-time)[^"]*"[^>]*>(?:\s*<[^>]+>)*\s*([\d:]+(?:\s*min)?)/i));
         var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
 
         if (title || thumb) {
