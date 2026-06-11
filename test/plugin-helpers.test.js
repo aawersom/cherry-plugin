@@ -15,9 +15,25 @@ function parseDur(str) {
   if (!str) return 0;
   str = ('' + str).trim();
   if (/^\d+$/.test(str)) return parseInt(str, 10);
-  var p = str.split(':').map(Number);
-  if (p.length === 2) return p[0] * 60 + p[1];
-  if (p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
+  var iso = str.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/i);
+  if (iso && (iso[1] || iso[2] || iso[3])) {
+    return (iso[1] ? parseInt(iso[1], 10) * 3600 : 0) +
+           (iso[2] ? parseInt(iso[2], 10) * 60 : 0) +
+           (iso[3] ? parseInt(iso[3], 10) : 0);
+  }
+  if (str.indexOf(':') !== -1) {
+    var p = str.split(':').map(Number);
+    if (p.length === 2) return p[0] * 60 + p[1];
+    if (p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
+  }
+  var h = str.match(/(\d+)\s*h/i);
+  var m = str.match(/(\d+)\s*m(?:in)?(?![a-z])/i);
+  var s = str.match(/(\d+)\s*s(?![a-z])/i);
+  if (h || m || s) {
+    return (h ? parseInt(h[1], 10) * 3600 : 0) +
+           (m ? parseInt(m[1], 10) * 60 : 0) +
+           (s ? parseInt(s[1], 10) : 0);
+  }
   return 0;
 }
 
@@ -160,6 +176,28 @@ describe('parseDur', () => {
 
   it('handles leading zeros', () => {
     expect(parseDur('01:05')).toBe(65);
+  });
+
+  it('parses unit forms (min/h/s, spaces tolerated)', () => {
+    expect(parseDur('5min')).toBe(300);
+    expect(parseDur('7 min')).toBe(420);
+    expect(parseDur('42min')).toBe(2520);
+    expect(parseDur('1h')).toBe(3600);
+    expect(parseDur('1h2min')).toBe(3720);
+    expect(parseDur('1h 2m')).toBe(3720);
+    expect(parseDur('12m34s')).toBe(754);
+  });
+
+  it('parses ISO-8601 duration (schema.org itemprop content)', () => {
+    expect(parseDur('PT790S')).toBe(790);
+    expect(parseDur('PT13M10S')).toBe(790);
+    expect(parseDur('PT1H2M3S')).toBe(3723);
+    expect(parseDur('PT15M')).toBe(900);
+    expect(parseDur('PT0S')).toBe(0);
+  });
+
+  it('returns 0 for unparseable / localized text', () => {
+    expect(parseDur('13 мин')).toBe(0); // Cyrillic — must NOT be misread as minutes
   });
 });
 

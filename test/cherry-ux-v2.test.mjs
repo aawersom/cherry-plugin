@@ -2497,8 +2497,10 @@ describe('UI/UX v2: P3.2 error != empty + persistent fav hint', () => {
 });
 
 describe('UI/UX v2: P3.3 source attribution badge', () => {
-  it('cardRender injects a .cherry-src-badge in all_sources AND favorites modes', () => {
-    expect(SRC).toMatch(/\(object\.all_sources\s*\|\|\s*object\.is_favorites\)\s*&&\s*element\.source/);
+  it('cardRender injects a .cherry-src-badge on EVERY card with a source (all scenarios)', () => {
+    // Owner requirement: the origin channel is shown on every card without exception
+    // (search, favorites, history, related, AND single-source grids).
+    expect(SRC).toMatch(/if \(element\.source\) \{[\s\S]{0,200}cherry-src-badge/);
     expect(SRC).toContain('cherry-src-badge');
     expect(SRC).toMatch(/sourceById\(element\.source\)/);
   });

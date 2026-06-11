@@ -43,9 +43,25 @@ function parseDur(str) {
   if (!str) return 0;
   str = ('' + str).trim();
   if (/^\d+$/.test(str)) return parseInt(str, 10);
-  var p = str.split(':').map(Number);
-  if (p.length === 2) return p[0] * 60 + p[1];
-  if (p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
+  var iso = str.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/i);
+  if (iso && (iso[1] || iso[2] || iso[3])) {
+    return (iso[1] ? parseInt(iso[1], 10) * 3600 : 0) +
+           (iso[2] ? parseInt(iso[2], 10) * 60 : 0) +
+           (iso[3] ? parseInt(iso[3], 10) : 0);
+  }
+  if (str.indexOf(':') !== -1) {
+    var p = str.split(':').map(Number);
+    if (p.length === 2) return p[0] * 60 + p[1];
+    if (p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
+  }
+  var h = str.match(/(\d+)\s*h/i);
+  var m = str.match(/(\d+)\s*m(?:in)?(?![a-z])/i);
+  var s = str.match(/(\d+)\s*s(?![a-z])/i);
+  if (h || m || s) {
+    return (h ? parseInt(h[1], 10) * 3600 : 0) +
+           (m ? parseInt(m[1], 10) * 60 : 0) +
+           (s ? parseInt(s[1], 10) : 0);
+  }
   return 0;
 }
 
@@ -149,8 +165,10 @@ function _kvsParseCards(html, cfg) {
     var title = _decodeHtml(titleRaw);
     if (!title) title = _titleFromUrl(videoUrl);
 
-    // duration
-    var durStr   = _attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</);
+    // duration — prefer schema.org itemprop="duration" content="PT…S" (locale-free)
+    // over the visible text; fall back to the class="duration|time" text. IN SYNC w/ plugin.js.
+    var durStr   = _attr(chunk, /itemprop="duration"[^>]*content="([^"]+)"/i) ||
+                   _attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</);
     var duration = parseDur(durStr);
 
     // views
@@ -1858,8 +1876,13 @@ function xnxxParseCards(html) {
                      block.match(/<a[^>]+>([^<]{5,})/);
     var title = titleMatch ? stripTagsLocal(titleMatch[1]) : '';
     if (!title) title = _titleFromUrl(videoUrl);
+    // Duration is BARE text inside <p class="metadata"> (kept IN SYNC with plugin.js).
+    var metaMatch = block.match(/class="metadata"[^>]*>([\s\S]*?)<\/p>/);
+    var metaTxt = metaMatch ? metaMatch[1] : block;
+    var durMatch = metaTxt.match(/(\d+h\s*)?\d+\s*min\b|\d+:\d+/i);
+    var duration = durMatch ? parseDur(durMatch[0].trim()) : 0;
     items.push({ id: 'xnxx-' + rawId, source: 'xnxx', title: title, thumb: thumb,
-                 preview: preview, url: videoUrl, duration: 0, views: 0 });
+                 preview: preview, url: videoUrl, duration: duration, views: 0 });
   }
   return items;
 }
@@ -2035,6 +2058,22 @@ describe('Fix J — xnxx parser pairs thumb with the SAME card href', function (
     expect(vidId(third.url)).toBe('ccc333');
     expect(third.title).toBe('Lonely untitled card');
   });
+
+  it('items[0]: duration parsed from <p class="metadata"> (12:34 -> 754)', function () {
+    var items = xnxxParseCards(fixture('xnxx-list.html'));
+    expect(items[0].duration).toBe(754);
+  });
+
+  it('bare "5min" metadata text (real listing markup) -> 300s', function () {
+    var html = '<div class="mozaique"><div class="thumb-block ">' +
+               '<div class="thumb"><a href="/video-mmm555/x"><img data-src="t.jpg"></a></div>' +
+               '<div class="thumb-under"><a href="/video-mmm555/x">X</a>' +
+               '<p class="metadata"><span class="right">46.8M</span>\n5min\n' +
+               '<span class="video-hd">720p</span></p></div>' +
+               '</div></div>';
+    var items = xnxxParseCards(html);
+    expect(items[0].duration).toBe(300);
+  });
 });
 
 // ============================================================
@@ -2199,8 +2238,12 @@ function yjParseCards(html) {
     var hd = /class="i-hd"/.test(block) ? 'HD' : '';
     var pvM = block.match(/data-clip="([^"]+\.mp4[^"]*)"/i);
     var preview = pvM ? pvM[1].replace(/^\/\//, 'https://') : '';
+    // Duration: <span class="time"><i class="fa fa-clock-o"></i>&nbsp;11:23</span> (IN SYNC w/ plugin.js).
+    var durMatch = block.match(/class="time"[^>]*>(?:\s*<[^>]+>)*\s*(?:&nbsp;)?\s*([\d:]+(?:\s*min)?)/i) ||
+                   block.match(/<div[^>]*class="[^"]*duration[^"]*"[^>]*>([^<]+)/);
+    var duration = durMatch ? parseDur(durMatch[1].trim()) : 0;
     items.push({ id: 'yj-' + id, source: 'youjizz', thumb: thumb, hd: hd,
-                 url: videoUrl, duration: 0, views: 0, preview: preview || undefined });
+                 url: videoUrl, duration: duration, views: 0, preview: preview || undefined });
   }
   return items;
 }
@@ -2237,6 +2280,14 @@ describe('S2 youjizz — i-hd marker → v.hd "HD"', function () {
                '<img data-original="https://cdn/x.jpg"></a></div>';
     var items = yjParseCards(html);
     expect(items[0].preview).toBeUndefined();
+  });
+
+  it('duration parsed from <span class="time"> (11:23 -> 683)', function () {
+    var html = '<div class="video-thumb"><a href="/videos/slug-12345.html">' +
+               '<img data-original="https://cdn/x.jpg"></a>' +
+               '<span class="time"><i class="fa fa-clock-o"></i>&nbsp;11:23</span></div>';
+    var items = yjParseCards(html);
+    expect(items[0].duration).toBe(683);
   });
 });
 
@@ -2374,6 +2425,99 @@ describe('pornone — _pornoneCards real-card parsing', function () {
       expect(v.url).not.toMatch(/\/amateur\/2\//);
       expect(/^\d+$/.test(v.id)).toBe(true);
     });
+  });
+});
+
+// ============================================================
+// DURATION extraction — per-channel real-markup regression (anti-drift).
+// Exercises the SHIPPED card parsers (grabbed verbatim from plugin.js) against
+// minimal fixtures that mirror the live listing markup confirmed via curl, so a
+// future markup/regex drift that drops duration is caught here.
+// ============================================================
+describe('duration extraction (shipped parsers vs real markup)', function () {
+  const PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+  function grab(name) {
+    const i = PLUGIN.indexOf('function ' + name + '(');
+    expect(i, name).toBeGreaterThan(-1);
+    let depth = 0;
+    for (let k = PLUGIN.indexOf('{', i); k < PLUGIN.length; k++) {
+      if (PLUGIN[k] === '{') depth++;
+      else if (PLUGIN[k] === '}' && --depth === 0) return PLUGIN.slice(i, k + 1);
+    }
+    throw new Error('unbalanced ' + name);
+  }
+  function load(name, extraDeps) {
+    const deps = ['parseDur', 'parseViews', '_attr', '_decodeHtml', '_titleFromUrl']
+      .concat(extraDeps || []).concat([name]).map(grab).join('\n');
+    return new Function(deps + '\nreturn ' + name + ';')();
+  }
+
+  it('3movs: <div class="time">6:36</div> ~945 chars past href', function () {
+    const _3movsCards = load('_3movsCards');
+    const html = '<a class="wrap_image" href="https://www.3movs.com/videos/178834/x/" title="X">' +
+      '<img class="img" data-src="https://t/a.jpg"></a>' + '<span class="ico-fav-1" title="Watch Later"></span>'.padEnd(900, ' ') +
+      '<div class="time">6:36</div>';
+    const items = _3movsCards(html);
+    expect(items[0].duration).toBe(396);
+  });
+
+  it('pornve: <div class="time">11:10</div> ~768 chars past href (item-time decoy ignored)', function () {
+    const _pornveCards = load('_pornveCards');
+    const html = '<a href="https://pornve.com/video/546752/x/" title="X">' +
+      '<img src="https://cdn.pornve.com/contents/videos_screenshots/546000/546752/745x420/1.jpg" alt="X">' +
+      '<span class="item-time " title="Watch Later"></span>'.padEnd(700, ' ') +
+      '<div class="time">11:10</div></a>';
+    const items = _pornveCards(html);
+    expect(items[0].duration).toBe(670);
+  });
+
+  it('porndig: <div class="bubble bubble_duration"><span>08:00</span> (inner span, far past href)', function () {
+    const _porndigCards = load('_porndigCards');
+    const html = '<a href="/videos/236098/x.html" title="X"><img src="https://image-cdn.porndig.com/thumbs/2024/01/236098/a.jpg"></a>' +
+      ''.padEnd(2000, ' ') + '<div class="bubble bubble_duration"><span>08:00</span></div>';
+    const items = _porndigCards(html);
+    expect(items[0].duration).toBe(480);
+  });
+
+  it('perfektdamen: <ul class="video-meta"><li><i class="fa fa-clock-o"></i> <span>24:14</span>', function () {
+    const _perfektCards = load('_perfektCards');
+    const html = '<a href="/video/12345/" title="X"><img data-original="//static.perfektdamen.co/a.jpg"></a>' +
+      ''.padEnd(2000, ' ') + '<ul class="video-meta"><li><i class="fa fa-clock-o"></i> <span>24:14</span></li></ul>';
+    const items = _perfektCards(html);
+    expect(items[0].duration).toBe(1454);
+  });
+
+  it('24rolika: <div class="th-time icon-l"><span class="fa fa-clock-o"></span>39:20</div>', function () {
+    const _rolikaCards = load('_rolikaCards');
+    const html = '<a href="/teen/29123-x.html"><img data-src="/uploads/posts/2024-01/a.jpg">' +
+      '<a class="th-title">X</a>' +
+      '<div class="th-time icon-l"><span class="fa fa-clock-o"></span>39:20</div></a>';
+    const items = _rolikaCards(html);
+    expect(items[0].duration).toBe(2360);
+  });
+
+  it('24rolika fixture: ≥80% of cards carry a duration', function () {
+    const _rolikaCards = load('_rolikaCards');
+    const items = _rolikaCards(readFileSync(join(__dirname, 'fixtures', '24rolika-page.html'), 'utf8'));
+    const withDur = items.filter((v) => v.duration > 0).length;
+    expect(items.length).toBeGreaterThan(10);
+    expect(withDur / items.length).toBeGreaterThan(0.8);
+  });
+
+  it('KVS engine (pornobolt): prefers itemprop="duration" content="PT…S" over localized text', function () {
+    const _kvsParseCards = load('_kvsParseCards');
+    const cfg = {
+      id: 'pornobolt',
+      hrefRxSrc: 'href="(/video/([^/"]+)\\.html)"',
+      idFromUrl: function (u, m) { return m[2]; },
+      chunkWindow: { before: 800, after: 900 },
+      titleRx: [/title="([^"]+)"/]
+    };
+    const html = '<a href="/video/abc.html" title="X"><img src="t.jpg"></a>' +
+      ''.padEnd(560, ' ') +
+      '<span class="vid-info duration" itemprop="duration" content="PT790S">13 мин</span>';
+    const items = _kvsParseCards(html, cfg);
+    expect(items[0].duration).toBe(790);
   });
 });
 
