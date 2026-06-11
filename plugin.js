@@ -812,14 +812,30 @@
       _histVideo = video;
       _histHash  = hashId;
 
+      // HLS on Android can't play in the native/external player: Android hands a raw `.m3u8`
+      // to the system → the "choose player" dialog (or it never opens). Force Lampa's inner
+      // WebView player (hls.js) JUST for HLS streams, then restore the user's global choice a
+      // moment later — so pornhub (HLS-only) and xvideos/xnxx play inline at full quality
+      // without the external chooser, while MP4 channels keep the user's native player.
+      var _finalUrl = px(url);
+      var _restorePlayer;
+      if (_isAndroid() && /\.m3u8|mpegurl/i.test(_finalUrl)) {
+        _restorePlayer = Lampa.Storage.get('player');
+        if (_restorePlayer !== 'inner') Lampa.Storage.set('player', 'inner');
+      }
+
       Lampa.Player.play({
         title:    video.title,
-        url:      px(url),
+        url:      _finalUrl,
         poster:   video.thumb,
         quality:  proxiedQuality,
         id:       hashId,
         timeline: timeline
       });
+
+      if (_restorePlayer !== undefined && _restorePlayer !== 'inner') {
+        setTimeout(function () { try { Lampa.Storage.set('player', _restorePlayer); } catch (e) {} }, 2500);
+      }
 
       // Seed a history record immediately (position 0) so a video opened but
       // closed before any progress event still surfaces under «Продолжить».
@@ -2701,7 +2717,12 @@ SOURCES.push({
           // stays valid, and the proxy adds CORS so the inner/built-in player (hls.js) can load it.
           quality[lbl] = buildProxyUrl(hlsUrls[lbl], 'https://www.pornhub.com/');
         });
-        return { url: bestQualityUrl(quality), quality: quality };
+        // pornhub's per-quality HLS goes through the proxy (residential exit) which caps
+        // throughput; 1080p (~4 Mbps) can out-run it and buffer. Default to 720p on Android
+        // for smooth start (it still fits the proxy bandwidth) — 1080p stays in the quality
+        // menu for users on a fast link. Browser keeps best (direct/faster path).
+        var defUrl = (_isAndroid() && quality['720p']) ? quality['720p'] : bestQualityUrl(quality);
+        return { url: defUrl, quality: quality };
       }
 
       return { url: '', quality: {} };
