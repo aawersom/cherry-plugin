@@ -3934,10 +3934,14 @@ function _porntrexCards(html) {
                     _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.(?:webp|png))/i);
         if (thumb && thumb.charAt(0) === '/' && thumb.charAt(1) === '/') thumb = 'https:' + thumb;
 
+        // The real title lives in the thumbnail's <img alt="…"> (the <a> has no title=). A
+        // generic title="Add to Favourites" sits later in the chunk on the favourite button —
+        // so the old `title="…"`-first order grabbed "Add to Favourites" for every card. Prefer
+        // the img alt; fall back to title= only if it's not the favourites-button text.
         var title = _decodeHtml(
-            _attr(chunk, /title="([^"]+)"/) ||
+            _attr(chunk, /<img[^>]+\balt="([^"]+)"/) ||
             _attr(chunk, /<span[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)<\/span>/) ||
-            _attr(chunk, /alt="([^"]+)"/)
+            _attr(chunk, /title="(?!Add to [Ff]av)([^"]+)"/)
         );
         if (!title) title = _titleFromUrl(videoUrl);
 
