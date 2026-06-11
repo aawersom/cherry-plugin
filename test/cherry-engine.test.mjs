@@ -3167,7 +3167,7 @@ describe('ebun _ebunCards (model + listing share parser; duration via meta-time)
   it('anti-drift: shipped _ebunCards skips inner tags before duration + window 1100', function () {
     var PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
     var at = PLUGIN.indexOf('function _ebunCards');
-    var body = PLUGIN.slice(at, at + 1500);
+    var body = PLUGIN.slice(at, at + 1800);
     expect(body).toContain('m.index + 1100');
     expect(body).toMatch(/\(\?:\\s\*<\[\^>\]\+>\)\*/);   // (?:\s*<[^>]+>)* tag-skip
   });

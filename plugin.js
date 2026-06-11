@@ -4899,13 +4899,15 @@ SOURCES.push({
                      _attr(chunk, /src="([^"?#]+\.jpe?g)"/);
       var thumb = rawThumb && rawThumb.charAt(0) === '/' ? 'https://tv4.tizam.org' + rawThumb : rawThumb;
 
-      // Title: prefer <span class="title"> (actual video name) or <h3>, then img alt
+      // Title: prefer <span class="title"> (actual video name) or <h3>, then img alt.
+      // Some cards (e.g. /…_s_russkim_perevodom/{slug}/) carry no title element in the chunk —
+      // fall back to a humanized slug from the URL so the card never renders title-less.
       var title = _decodeHtml(
         _attr(chunk, /<span[^>]*class="[^"]*\btitle\b[^"]*"[^>]*>([^<]+)/) ||
         _attr(chunk, /<h[23][^>]*>([^<]+)<\/h[23]>/) ||
         _attr(chunk, /itemprop="name"[^>]*>([^<]+)/) ||
         _attr(chunk, /alt="([^"]+)"/)
-      );
+      ) || _titleFromUrl(cardUrl);
 
       if (!title && !thumb) continue;
 
@@ -5539,7 +5541,9 @@ SOURCES.push({
 
 function _ebunCards(html) {
     var items = [];
-    var hrefRx = /href="(https?:\/\/www1\.ebun\.tv\/videos\/(\d+)\/)"/g;
+    // ebun moved its video cards to a new domain (x.ebun.top) while the listing page stays
+    // on www1.ebun.tv — match any ebun host so card links keep resolving across mirror changes.
+    var hrefRx = /href="(https?:\/\/[a-z0-9.-]*ebun[a-z0-9.-]*\/videos\/(\d+)\/)"/g;
     var seen = {};
     var m;
     while ((m = hrefRx.exec(html)) !== null) {
