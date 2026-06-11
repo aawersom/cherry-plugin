@@ -2323,7 +2323,11 @@ function _decodeHtml(str) {
         .replace(/&gt;/g, '>')
         .replace(/&quot;/g, '"')
         .replace(/&#039;/g, "'")
+        .replace(/&apos;/g, "'")
+        .replace(/&excl;/g, '!')
         .replace(/&nbsp;/g, ' ')
+        .replace(/&#(\d+);/g, function (_, n) { return String.fromCharCode(+n); })
+        .replace(/&#x([0-9a-f]+);/gi, function (_, n) { return String.fromCharCode(parseInt(n, 16)); })
         .trim();
 }
 
@@ -3509,6 +3513,8 @@ SOURCES.push({
         var altTitle = block.match(/title="([^"]+)"/);
         title = altTitle ? altTitle[1] : '';
       }
+      // Decode HTML entities (&amp; etc.) like other adapters before the URL fallback.
+      if (title) title = _decodeHtml(title);
       if (!title) title = _titleFromUrl(videoUrl);
 
       var durMatch = block.match(/<div[^>]*class="[^"]*duration[^"]*"[^>]*>([^<]+)/);
@@ -3822,9 +3828,12 @@ SOURCES.push({
     cfg: { categories: _cats('milf:Milf,teen:Teen,mature:Mature,amateur:Amateur,anal:Anal,big-tits:Big Tits,big-ass:Big Ass,blowjob:Blowjob,lesbian:Lesbian,hardcore:Hardcore,pov:POV,blonde:Blonde,brunette:Brunette,busty:Busty,hairy:Hairy,handjob:Handjob,cumshots:Cumshots,doggystyle:Doggystyle,small-tits:Small tits,petite:Petite,fetish:Fetish,bondage:Bondage,college:College,russian:Russian,hentai:Hentai,asian:Asian,japanese:Japanese,indian:Indian,latina:Latina,ebony:Ebony,black:Black,interracial:Interracial,german:German,czech:Czech,arab:Arab,homemade:Homemade,solo:Solo,masturbation:Masturbation,toys:Toys,creampie:Creampie,deepthroat:Deepthroat,gangbang:Gangbang,threesome:Threesome,orgy:Orgy,public:Public,outdoor:Outdoor,massage:Massage,casting:Casting,compilation:Compilation,squirt:Squirt,fisting:Fisting,footjob:Footjob,cuckold:Cuckold,gloryhole:Gloryhole,bukkake:Bukkake,pussy-licking:Pussy licking,ass-licking:Ass licking,double-penetration:Double Penetration (DP),red-head:Red Head,school-girl:School Girl,bbw:BBW,skinny:Skinny,lingerie:Lingerie,uniform:Uniform,office:Office,old-and-young:Old and Young,riding:Riding,fingering:Fingering,strap-on:Strap-on,celebrities:Celebrities,virtual-reality:Virtual Reality (VR)'), sorts: _cats('most-popular:По популярности,most-popular/weekly:Популярное за неделю,most-popular/monthly:Популярное за месяц,top-rated:По рейтингу,longest:Длинные,most-commented:По комментариям') },
 
     search: function (query, page) {
-        var url = 'https://www.porntrex.com/?s=' + encodeURIComponent(query) + '&page=' + page;
+        var p = page || 1;
+        // Path pagination — the site ignores ?s=…&page=N (page2 = page1). /search/{q}/{p}/.
+        var url = 'https://www.porntrex.com/search/' + encodeURIComponent(query) + (p > 1 ? '/' + p + '/' : '/');
         return cherryFetch(url).then(function (html) {
-            return { items: _porntrexCards(html), total_pages: _porntrexPages(html) };
+            var items = _porntrexCards(html);
+            return { items: items, total_pages: _porntrexPages(html, p, items.length) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
@@ -3837,7 +3846,8 @@ SOURCES.push({
             ? _buildCatUrl('https://www.porntrex.com/categories/{slug}/' + s + '/{page}/', category, p, 1, true)
             : 'https://www.porntrex.com/latest-updates/' + (p > 1 ? p + '/' : '');
         return cherryFetch(url).then(function (html) {
-            return { items: _porntrexCards(html), total_pages: _porntrexPages(html) };
+            var items = _porntrexCards(html);
+            return { items: items, total_pages: _porntrexPages(html, p, items.length) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
@@ -3864,7 +3874,8 @@ SOURCES.push({
         var u = modelUrl.replace(/\/+$/, '');
         var url = p > 1 ? u + '/' + p + '/' : u + '/';
         return cherryFetch(url).then(function (html) {
-            return { items: _porntrexCards(html), total_pages: _porntrexPages(html) };
+            var items = _porntrexCards(html);
+            return { items: items, total_pages: _porntrexPages(html, p, items.length) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
@@ -3964,11 +3975,12 @@ function _porntrexCards(html) {
     return items;
 }
 
-function _porntrexPages(html) {
+function _porntrexPages(html, page, itemsLen) {
     var m = /last_page=(\d+)|\/page=(\d+)"[^>]*>[^<]*>>/i.exec(html) ||
             /page=(\d+)"[^>]*(?:last|next|>>)/i.exec(html);
-    if (m) return parseInt(m[1] || m[2], 10) || 10;
-    return 10;
+    if (m) return parseInt(m[1] || m[2], 10) || _derivePages(itemsLen, page, 24);
+    // Regex miss: derive from batch fullness (~24 cards/page) instead of a hardcoded cap.
+    return _derivePages(itemsLen, page, 24);
 }
 
   // «Похожие» helper: build a getRelated(video) from an adapter's EXISTING
@@ -4014,6 +4026,12 @@ function _porntrexPages(html) {
     if (!cfg.hrefRxSrc) return [];
 
     var clean = cfg.stripBase64 ? html.replace(/\bsrc="data:[^"]+"/g, 'src=""') : html;
+    // Optional per-site pre-slice: drop everything before the real listing container
+    // so header/menu dropdowns (identical on every page) aren't harvested as cards.
+    if (cfg.listScopeRx) {
+      var scopeM = cfg.listScopeRx.exec(clean);
+      if (scopeM) clean = clean.slice(scopeM.index);
+    }
     var before = (cfg.chunkWindow && cfg.chunkWindow.before) || 0;
     var after  = (cfg.chunkWindow && cfg.chunkWindow.after !== undefined) ? cfg.chunkWindow.after : 800;
 
@@ -4377,13 +4395,17 @@ function _3movsCards(html) {
         if (!id || seen[id]) continue;
         seen[id] = true;
 
-        var chunk = html.slice(Math.max(0, m.index - 800), m.index + 600);
+        // Start the chunk AT the href (back-window 0) so the title comes from the
+        // card's own <a class="wrap_image"…title="…">/<a class="title">, not the
+        // PREVIOUS card's "Watch Later" button (which sits before the href).
+        var chunk = html.slice(m.index, m.index + 600);
 
         var thumb = _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i) ||
                     _attr(chunk, /(?:data-src|src)="([^"]+\.(?:webp|png))"/i);
 
+        // Reject the watch-later / favourites button titles with a negative lookahead.
         var title = _decodeHtml(
-            _attr(chunk, /title="([^"]+)"/) ||
+            _attr(chunk, /title="(?!Watch Later|Add to [Ff]av)([^"]+)"/) ||
             _attr(chunk, /alt="([^"]+)"/) ||
             _attr(chunk, /<h\d[^>]*>([^<]+)<\/h\d>/)
         );
@@ -4606,7 +4628,7 @@ SOURCES.push({
     id: 'familyporn',
     name: 'FamilyPorn',
     host: 'familyporn.tv',
-    cfg: { categories: _cats('sisters:Sisters,cousin:Cousin,grandma-grandson:Grandma & Grandson,virgin:Virgin,stepbrother-stepsister:Stepbrother & Stepsister,stepdaughter-stepdad:Stepdad & Stepdaughter,brother-sister:Brother & Sister,grandpa-granddaughter:Grandpa & Granddaughter,niece-nephew:Niece & Nephew,stepmom-stepson:Stepmom & Stepson,dad-daughter:Dad & Daughter,mother-daughter:Mother & Daughter'), sorts: _cats('video_viewed:По популярности,post_date:Свежее,rating:По рейтингу,duration:Длинные,most_commented:По комментариям') },
+    cfg: { categories: _cats('cousin:Cousin,grandma-grandson:Grandma & Grandson,virgin:Virgin,stepbrother-stepsister:Stepbrother & Stepsister,stepdaughter-stepdad:Stepdad & Stepdaughter,brother-sister:Brother & Sister,grandpa-granddaughter:Grandpa & Granddaughter,stepmom-stepson:Stepmom & Stepson,dad-daughter:Dad & Daughter,mother-daughter:Mother & Daughter'), sorts: _cats('video_viewed:По популярности,post_date:Свежее,rating:По рейтингу,duration:Длинные,most_commented:По комментариям') },
 
     search: function (query, page) {
         var p = page || 1;
@@ -4896,8 +4918,10 @@ SOURCES.push({
       if (seen[id]) continue;
       seen[id] = true;
 
-      // Look FORWARD from href: chunk covers the <a> and the <h3> title that follows it
-      var chunk = html.slice(m.index, m.index + 1200);
+      // Look FORWARD from href: chunk covers the <a> and the <h3> title that follows it.
+      // Title element sits at ~+1200-1400, so 1200 cut it off (17/32 empty titles) —
+      // 1600 captures it (0/32 empty). _titleFromUrl(cardUrl) remains the fallback.
+      var chunk = html.slice(m.index, m.index + 1600);
 
       var rawThumb = _attr(chunk, /src="([^"]+\/images\/cms\/thumbs\/[^"]+)"/) ||
                      _attr(chunk, /src="([^"?#]+\.jpe?g)"/);
@@ -5154,12 +5178,14 @@ SOURCES.push(_kvsEngine({
     var brRe = /href="https?:\/\/hellporno\.com\/(\d+)\/"/g;
     while ((m = brRe.exec(html)) !== null) {
       var n = parseInt(m[1], 10);
-      if (!isNaN(n)) nums.push(n);
+      // 2257 is the U.S.C. 2257 legal-code footer link (/2257/), present on EVERY
+      // page — never a real pager page. Excluding it stops total_pages=2257.
+      if (!isNaN(n) && n !== 2257) nums.push(n);
     }
     var srRe = /\/search\/(\d+)\//g;
     while ((m = srRe.exec(html)) !== null) {
       var n = parseInt(m[1], 10);
-      if (!isNaN(n)) nums.push(n);
+      if (!isNaN(n) && n !== 2257) nums.push(n);
     }
     return nums.length ? Math.max.apply(null, nums) : (p + 5);
   },
@@ -5317,9 +5343,18 @@ SOURCES.push(_kvsEngine({
         /alt="([^"]+)"/
     ],
     pagesRx: function(html) {
-        var m = /["']\/(\d+)\?sort["'][^>]*(?:last|>>)/i.exec(html) ||
-                /["']\/(\d+)["'][^>]*(?:last|>>)/i.exec(html);
-        return m ? (parseInt(m[1], 10) || 10) : 10;
+        // Pager renders numbered links /{N}?sort=… (last visible page = real max),
+        // e.g. <li class="dots">…<li><a href="/771?sort=mv">771</a>. The old
+        // last/>>-adjacent regex missed them and returned a hardcoded 10. Collect all
+        // numbered ?sort= links and take the max; return 0 on miss so _kvsPages falls
+        // back to _derivePages(items.length, …) instead of capping at 10.
+        var re = /\/(\d+)\?sort=/gi;
+        var nums = [], m;
+        while ((m = re.exec(html)) !== null) {
+            var n = parseInt(m[1], 10);
+            if (!isNaN(n)) nums.push(n);
+        }
+        return nums.length ? Math.max.apply(null, nums) : 0;
     },
     getStream: function(video) {
         return cherryFetch(video.url).then(function(html) {
@@ -5360,6 +5395,10 @@ SOURCES.push(_kvsEngine({
         return 'https://crocotube.com/' + (page || 1) + '/';
     },
     hrefRxSrc: 'href="(https?://crocotube\\.com/videos/[^"]+)"',
+    // Pre-slice to the real listing container so the header mega-menu dropdown
+    // (#menu-tab-free-videos "Last Added", identical on every page) isn't harvested
+    // as ~19 duplicate cards. Start parsing at the first ct-videos-list.
+    listScopeRx: /ct-videos-list/,
     idFromUrl: function(url) {
         return url.replace(/^https?:\/\/[^/]+\/videos\//, '').replace(/[^a-z0-9]/gi, '_');
     },
@@ -5478,9 +5517,12 @@ SOURCES.push({
     cfg: { categories: _cats('russkoe:Русское,molodye:Молодые,zrelye:Зрелые,mamki:Мамки,anal:Анал,minet:Минет,domashnee:Домашнее,krasivye-devushki:Красивые девушки,bryunetki:Брюнетки,blondinki:Блондинки,bolshie-siski:Большие сиськи,bolshie-chleny:Большие члены,jopy:Жопы,hudye:Худые,chulki-i-kolgotki:Чулки и колготки,ot-pervogo-lica:От первого лица,seks-vtroem:Секс втроем,gruppovoe:Групповое,kasting:Кастинг,kasting-vudmana:Кастинг Вудмана,studenty:Студенты,izmena:Измена,jeny:Жены,jmj:ЖМЖ,mjm:МЖМ,negry:Негры,mejrassovoe:Межрассовое,aziatki:Азиатки,latinki:Латинки,eblya:Ебля,rakom:Раком,krempay:Кремпай,sperma:Сперма,glubokaya-glotka:Глубокая глотка,skvirting:Сквиртинг,bdsm:БДСМ,fetish:Фетиш,masturbaciya:Мастурбация,pikap:Пикап,za-dengi:За деньги'), sorts: _cats('most-popular:По популярности,new:Свежее,top-rated:По рейтингу') },
 
     search: function (query, page) {
-        var url = 'https://www1.ebun.tv/search/?q=' + encodeURIComponent(query) + '&page=' + page;
+        var p = page || 1;
+        // Site search param is ?s= (?q= returns 0 results).
+        var url = 'https://www1.ebun.tv/search/?s=' + encodeURIComponent(query) + '&page=' + p;
         return cherryFetch(url).then(function (html) {
-            return { items: _ebunCards(html), total_pages: _ebunPages(html) };
+            var items = _ebunCards(html);
+            return { items: items, total_pages: _ebunPages(html, p, items.length) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
@@ -5489,11 +5531,13 @@ SOURCES.push({
         // Sort is a KVS path segment after the slug: /categories/{slug}/{sort}/{page}/
         // Default = most-popular (По популярности).
         var s = sort || 'most-popular';
+        // NO-category branch uses path pagination — the site ignores ?page=N.
         var url = category
             ? _buildCatUrl('https://www1.ebun.tv/categories/{slug}/' + s + '/{page}/', category, p, 1, true)
-            : 'https://www1.ebun.tv/latest-updates/?page=' + p;
+            : (p > 1 ? 'https://www1.ebun.tv/latest-updates/' + p + '/' : 'https://www1.ebun.tv/latest-updates/');
         return cherryFetch(url).then(function (html) {
-            return { items: _ebunCards(html), total_pages: _ebunPages(html) };
+            var items = _ebunCards(html);
+            return { items: items, total_pages: _ebunPages(html, p, items.length) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
@@ -5520,25 +5564,36 @@ SOURCES.push({
         var url = p > 1 ? u + '/' + p + '/' : u + '/';
         return cherryFetch(url).then(function (html) {
             var items = _ebunCards(html);
-            return { items: items, total_pages: _ebunPages(html) };
+            return { items: items, total_pages: _ebunPages(html, p, items.length) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
     getStream: function (video) {
+        // ebun labels the FULL file with a bare 'mp4' key (no res → bestQualityUrl
+        // ranks it 0) and a smaller file as '360p' → bestQualityUrl wrongly picks 360.
+        // Prefer the unlabeled/bare-mp4 full file when present; else fall back to the
+        // generic ranker. Scoped to ebun (does not touch the shared bestQualityUrl).
+        function ebunBest(quality, fallbackUrl) {
+            var keys = Object.keys(quality || {});
+            if (!keys.length) return fallbackUrl;
+            for (var i = 0; i < keys.length; i++) {
+                if (!/\d{3,4}/.test(keys[i])) return quality[keys[i]]; // bare/unlabeled = full file
+            }
+            return bestQualityUrl(quality);
+        }
         return cherryFetch(video.url).then(function (html) {
             var iframeM = /src="(https?:\/\/666-emded\.com\/embed\/[^"]+)"/i.exec(html);
             if (iframeM) {
                 return cherryFetch(iframeM[1]).then(function (ihtml) {
                     var result = extractStreams(ihtml);
                     if (result.url || Object.keys(result.quality).length) {
-                        var qKeys = Object.keys(result.quality);
-                        var best  = qKeys.length ? bestQualityUrl(result.quality) : result.url;
-                        return { url: best, quality: result.quality };
+                        return { url: ebunBest(result.quality, result.url), quality: result.quality };
                     }
                     return { url: '', quality: {} };
                 }).catch(function () { return { url: '', quality: {} }; });
             }
-            return extractStreams(html);
+            var res = extractStreams(html);
+            return { url: ebunBest(res.quality, res.url), quality: res.quality };
         }).catch(function () { return { url: '', quality: {} }; });
     }
 });
@@ -5584,9 +5639,11 @@ function _ebunCards(html) {
     return items;
 }
 
-function _ebunPages(html) {
+function _ebunPages(html, page, itemsLen) {
     var m = /[?&]page=(\d+)["'][^>]*(?:last|>>)/i.exec(html);
-    return m ? (parseInt(m[1], 10) || 10) : 10;
+    if (m) return parseInt(m[1], 10) || _derivePages(itemsLen, page, 30);
+    // Regex miss: derive from batch fullness (~30 cards/page) instead of a hardcoded cap.
+    return _derivePages(itemsLen, page, 30);
 }
 
 // ---- 12. LenPorno ----
