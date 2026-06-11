@@ -2752,8 +2752,11 @@ describe('S1 total_pages anti-drift', function () {
     expect(/_kvsPages\(html, cfg\.pagesRx, p, items\.length\)/.test(PLUGIN)).toBe(true);
   });
 
-  it('genuine single-page sites keep total_pages 1 with a documented reason', function () {
-    expect(/single-page site/.test(PLUGIN)).toBe(true);
+  it('genuine single-page listings keep total_pages 1 with a documented reason', function () {
+    // perfektdamen's no-cat browse is now the paginated /videos/ feed (was the
+    // single-page /popular/); the remaining documented single-page cases are the
+    // DLE/site searches that expose no page param (rolika/jopa/pornobolt/tizam).
+    expect(/single-page (?:site|search)/.test(PLUGIN)).toBe(true);
   });
 });
 

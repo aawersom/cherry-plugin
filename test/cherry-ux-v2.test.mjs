@@ -1511,7 +1511,9 @@ describe('Phase 3 A3(a): eporner SEARCH uses relevance order (no forced most-pop
   it('eporner cfg exposes API order sorts (no longer sorts:[])', () => {
     var at = SRC.indexOf("id: 'eporner'");
     var cfgBody = SRC.slice(at, at + 1400);
-    expect(cfgBody).toMatch(/sorts: _cats\('most-popular:/);
+    // latest «Свежее» is now first/default (homepage = Recent); most-popular kept after.
+    expect(cfgBody).toMatch(/sorts: _cats\('latest:/);
+    expect(cfgBody).toContain('most-popular:');
     expect(cfgBody).toContain('top-rated:');
   });
 });
@@ -1542,13 +1544,26 @@ describe('Step 2: query-param / API sorts (popular first, Russian labels)', () =
     expect(body).not.toMatch(/items\.unshift/);
   });
 
-  // KVS-engine + custom KVS adapters: sort_by values, popular first.
-  ['xozilla', 'analdin', 'hellporno', 'pornve', 'familyporn', 'perfektdamen'].forEach(function (id) {
+  // KVS-engine + custom KVS adapters: sort_by values. The «Свежее» (post_date) sort is
+  // first/default on channels whose homepage = newest (matches the original site). pornve/
+  // familyporn keep video_viewed first (their /latest-updates/ path ignores sort_by → inert).
+  ['xozilla', 'analdin', 'hellporno', 'perfektdamen'].forEach(function (id) {
+    it(id + ': «Свежее» first, labeled «Свежее», Russian labels', () => {
+      var s = sortsFor(id);
+      expect(s[0].id).toBe('post_date');
+      expect(s[0].label).toBe('Свежее');
+      // every label is Russian (Cyrillic), no leftover English/Популярное
+      s.forEach(function (x) {
+        expect(x.label).toMatch(/[А-Яа-я]/);
+        expect(x.label).not.toBe('Популярное');
+      });
+    });
+  });
+  ['pornve', 'familyporn'].forEach(function (id) {
     it(id + ': popular first, labeled «По популярности», Russian labels', () => {
       var s = sortsFor(id);
       expect(s[0].id).toBe('video_viewed');
       expect(s[0].label).toBe('По популярности');
-      // every label is Russian (Cyrillic), no leftover English/Популярное
       s.forEach(function (x) {
         expect(x.label).toMatch(/[А-Яа-я]/);
         expect(x.label).not.toBe('Популярное');
@@ -1565,16 +1580,18 @@ describe('Step 2: query-param / API sorts (popular first, Russian labels)', () =
     hellporno:['video_viewed_today', 'video_viewed_week', 'video_viewed_month', 'rating_week']
   };
   Object.keys(windowExpect).forEach(function (id) {
-    it(id + ': includes curl-confirmed windowed sorts after «По популярности»', () => {
+    it(id + ': includes curl-confirmed windowed sorts after the default', () => {
       var s = sortsFor(id);
-      expect(s[0].id).toBe('video_viewed');           // all-time stays first/default
       var ids = s.map(function (x) { return x.id; });
+      // post_date «Свежее» is now first/default on the homepage-newest channels
+      // (xozilla/analdin/hellporno); pornve keeps video_viewed first.
+      expect(s[0].id).toBe(id === 'pornve' ? 'video_viewed' : 'post_date');
       windowExpect[id].forEach(function (w) {
         expect(ids).toContain(w);                      // windowed value present
         var item = s.filter(function (x) { return x.id === w; })[0];
         expect(item.label).toMatch(/[А-Яа-я]/);        // Russian label
       });
-      // windows come AFTER all-time popular
+      // windows come AFTER the default (never first)
       expect(ids.indexOf('video_viewed_week')).toBeGreaterThan(0);
     });
   });
@@ -1583,17 +1600,21 @@ describe('Step 2: query-param / API sorts (popular first, Russian labels)', () =
     var ids = sortsFor('hellporno').map(function (x) { return x.id; });
     expect(ids).not.toContain('most_recent');
     expect(ids).not.toContain('latest');
+    // post_date «Свежее» moved to first/default (homepage = newest); rest unchanged.
     expect(ids).toEqual([
-      'video_viewed', 'video_viewed_today', 'video_viewed_week', 'video_viewed_month',
-      'rating_week', 'post_date', 'rating', 'duration', 'most_commented'
+      'post_date', 'video_viewed', 'video_viewed_today', 'video_viewed_week', 'video_viewed_month',
+      'rating_week', 'rating', 'duration', 'most_commented'
     ]);
   });
 
-  it('pornobolt: mv (popular) first, mc по комментариям; only valid values', () => {
+  it('pornobolt: date «Свежее» first (bare homepage = date order), then mv/mc', () => {
     var s = sortsFor('pornobolt');
-    expect(s.map(function (x) { return x.id; })).toEqual(['mv', 'mc']);
-    expect(s[0].label).toBe('По популярности');
-    expect(s[1].label).toBe('По комментариям');
+    // browseUrl no longer forces ?sort=mv; the engine appends ?sort=date by default
+    // (curl-verified bare homepage === ?sort=date, and ?sort=mv differs).
+    expect(s.map(function (x) { return x.id; })).toEqual(['date', 'mv', 'mc']);
+    expect(s[0].label).toBe('Свежее');
+    expect(s[1].label).toBe('По популярности');
+    expect(s[2].label).toBe('По комментариям');
   });
 
   it('pornhub: 3 base orderings (no dead longest) + composite period windows, popular first', () => {
@@ -1609,11 +1630,11 @@ describe('Step 2: query-param / API sorts (popular first, Russian labels)', () =
     expect(SRC).toContain("{ id: 'mostviewed:monthly', label: 'Популярное за месяц' }");
   });
 
-  it('eporner: popular label relabeled «По популярности», order ids preserved', () => {
+  it('eporner: latest «Свежее» first (homepage = Recent), order ids preserved', () => {
     var s = sortsFor('eporner');
     expect(s.map(function (x) { return x.id; }))
-      .toEqual(['most-popular', 'latest', 'top-rated', 'longest', 'top-weekly', 'top-monthly']);
-    expect(s[0].label).toBe('По популярности');
+      .toEqual(['latest', 'most-popular', 'top-rated', 'longest', 'top-weekly', 'top-monthly']);
+    expect(s[0].label).toBe('Свежее');
   });
 
   it('lenporno: 2 (popular) first, 3 рейтинг; browse appends ?sort= and defaults popular', () => {
@@ -1666,11 +1687,13 @@ describe('Step 3: PATH-segment sorts (popular first, Russian labels, segment in 
       shape: "'https://www.porntrex.com/categories/{slug}/' + s + '/{page}/'"
     },
     pornone: {
-      ids:   ['views', 'views/week', 'views/month', 'rating'],
+      ids:   ['newest', 'views', 'views/week', 'views/month', 'rating'],
+      firstLabel: 'Свежее',
       shape: "'https://pornone.com/{slug}/' + s + '/{page}/'"
     },
     '3movs': {
-      ids:   ['most-viewed/all-time', 'most-viewed/week', 'most-viewed/month', 'top-rated/all-time', 'top-rated/week', 'top-rated/month', 'longest', 'latest-updates'],
+      ids:   ['latest-updates', 'most-viewed/all-time', 'most-viewed/week', 'most-viewed/month', 'top-rated/all-time', 'top-rated/week', 'top-rated/month', 'longest'],
+      firstLabel: 'Свежее',
       shape: "'https://3movs.com/categories/{slug}/' + s + '/{page}/'"
     },
     jopaonline: {
@@ -1684,16 +1707,17 @@ describe('Step 3: PATH-segment sorts (popular first, Russian labels, segment in 
   };
   Object.keys(specs).forEach(function (id) {
     var spec = specs[id];
-    it(id + ': popular first «По популярности», Russian labels, exact ids', () => {
+    it(id + ': default-sort first, Russian labels, exact ids', () => {
       var s = sortsFor(id);
       expect(s.map(function (x) { return x.id; })).toEqual(spec.ids);
-      expect(s[0].label).toBe('По популярности');
+      // Homepage-newest channels (pornone/3movs) lead with «Свежее»; the rest «По популярности».
+      expect(s[0].label).toBe(spec.firstLabel || 'По популярности');
       s.forEach(function (x) {
         expect(x.label).toMatch(/[А-Яа-я]/);
         expect(x.label).not.toBe('Популярное');
       });
     });
-    it(id + ': browse injects sort as a path segment (default = popular)', () => {
+    it(id + ': browse injects sort as a path segment (default = sorts[0])', () => {
       expect(SRC).toContain(spec.shape);
       // browse signature carries `sort`, and defaults to the popular value.
       var at = SRC.indexOf("id: '" + id + "'");
@@ -1706,14 +1730,16 @@ describe('Step 3: PATH-segment sorts (popular first, Russian labels, segment in 
   });
 
   // KVS engine path-sort mode: crocotube + ebun-style configs declare sortMode:'path'.
-  it('crocotube: sortMode:path + path-sort ids, popular first', () => {
+  it('crocotube: sortMode:path + path-sort ids, «Свежее» first', () => {
     var at = SRC.indexOf("id: 'crocotube'");
     expect(at).toBeGreaterThan(-1);
     var body = SRC.slice(at, at + 3000);
     expect(body).toMatch(/sortMode: 'path'/);
+    // globalLatestSort marks the «Свежее» id that maps to the bare /{page}/ root.
+    expect(body).toMatch(/globalLatestSort: 'latest-updates'/);
     var s = sortsFor('crocotube');
-    expect(s.map(function (x) { return x.id; })).toEqual(['most-popular', 'top-rated', 'longest']);
-    expect(s[0].label).toBe('По популярности');
+    expect(s.map(function (x) { return x.id; })).toEqual(['latest-updates', 'most-popular', 'top-rated', 'longest']);
+    expect(s[0].label).toBe('Свежее');
   });
 
   it('_kvsEngine path mode builds /{slug}/{sort}/{page} (not ?sort_by=) for path configs', () => {
@@ -1721,10 +1747,12 @@ describe('Step 3: PATH-segment sorts (popular first, Russian labels, segment in 
     expect(eng).toBeGreaterThan(-1);
     var at = SRC.indexOf('browse: function(category, page, sort)', eng);
     expect(at).toBeGreaterThan(-1);
-    var body = SRC.slice(at, at + 1400);
+    var body = SRC.slice(at, at + 1700);
     expect(body).toContain("cfg.sortMode === 'path'");
-    // path mode injects the sort segment after the slug in the categoryFmt
+    // path mode injects the sort segment after the slug in the categoryFmt,
+    // EXCEPT the «Свежее» default (globalLatestSort) which maps to the bare category path.
     expect(body).toMatch(/replace\('\{slug\}', '\{slug\}\/' \+ s\)/);
+    expect(body).toMatch(/s !== cfg\.globalLatestSort/);
     // query mode (xozilla/analdin/etc.) still appends ?sort_by= when sortMode absent
     expect(body).toMatch(/sp \+ '=' \+ s/);
   });
@@ -1981,8 +2009,14 @@ describe('Android native stream — plugin.js source assertions (anti-drift)', (
     expect(blobAt).toBeGreaterThan(-1);
     expect(blobAt).toBeLessThan(androidAt);
   });
-  it('pornhub HLS fallback is raw on Android, proxied otherwise', () => {
-    expect(SRC).toMatch(/_isAndroid\(\)\s*\?\s*hlsUrls\[lbl\]\s*:\s*buildProxyUrl\(hlsUrls\[lbl\]/);
+  it('pornhub HLS is ALWAYS proxied with referer (force-proxied on Android for ipa token + CORS)', () => {
+    // pornhub is HLS-only + ipa=1 IP-bound; its page is force-proxied on Android, so the m3u8 +
+    // segments must go through the SAME proxy exit (referer=pornhub.com) — never raw on Android.
+    expect(SRC).toMatch(/quality\[lbl\]\s*=\s*buildProxyUrl\(hlsUrls\[lbl\],\s*'https:\/\/www\.pornhub\.com\/'\)/);
+    expect(SRC).not.toMatch(/_isAndroid\(\)\s*\?\s*hlsUrls\[lbl\]\s*:\s*buildProxyUrl\(hlsUrls\[lbl\]/);
+    // pornhub page hosts are in the Android force-proxy map + phncdn suffix match
+    expect(SRC).toMatch(/'www\.pornhub\.com':\s*1/);
+    expect(SRC).toMatch(/phncdn\\?\.com\$?/);
   });
 });
 
@@ -2034,28 +2068,33 @@ describe('Final sort batch: xnxx PATH + youjizz/hqporner/spankbang GLOBAL feeds'
   var globalSpecs = {
     youjizz: {
       ids:    ['most-popular', 'trending', 'top-rated', 'top-rated-week', 'top-rated-month', 'highdefinition', 'newest-clips'],
+      firstLabel: 'По популярности',
       // no-category global feed shape
       feed:   "'https://www.youjizz.com/' + (sort || 'most-popular') + '/' + p + '.html'",
       // category shape stays unchanged (no sort)
       cat:    "'https://www.youjizz.com/categories/{slug}-{page}.html'"
     },
     hqporner: {
-      ids:    ['top', 'hdporn', 'top/week', 'top/month'],
+      // hdporn «Свежее» moved to first/default (homepage = latest); feed default stays 'top'.
+      ids:    ['hdporn', 'top', 'top/week', 'top/month'],
+      firstLabel: 'Свежее',
       feed:   "var base = 'https://hqporner.com/' + (sort || 'top');",
       cat:    "'https://hqporner.com/category/{slug}/{page}'"
     },
     spankbang: {
-      ids:    ['most_popular', 'trending_videos', 'new_videos', 'upcoming'],
+      // new_videos «Свежее» moved to first/default (homepage = fresh); feed fallback stays most_popular.
+      ids:    ['new_videos', 'most_popular', 'trending_videos', 'upcoming'],
+      firstLabel: 'Свежее',
       feed:   "'https://ru.spankbang.com/' + (sort || 'most_popular') + '/' + p + '/'",
       cat:    "'https://ru.spankbang.com/s/{slug}/{page}/'"
     }
   };
   Object.keys(globalSpecs).forEach(function (id) {
     var spec = globalSpecs[id];
-    it(id + ': popular first «По популярности», Russian labels, exact ids', () => {
+    it(id + ': default-sort first, Russian labels, exact ids', () => {
       var s = sortsFor(id);
       expect(s.map(function (x) { return x.id; })).toEqual(spec.ids);
-      expect(s[0].label).toBe('По популярности');
+      expect(s[0].label).toBe(spec.firstLabel);
       s.forEach(function (x) {
         expect(x.label).toMatch(/[А-Яа-я]/);
         expect(x.label).not.toBe('Популярное');
