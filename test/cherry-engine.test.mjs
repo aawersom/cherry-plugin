@@ -29,7 +29,11 @@ function _decodeHtml(s) {
                   .replace(/&gt;/g, '>')
                   .replace(/&quot;/g, '"')
                   .replace(/&#039;/g, "'")
+                  .replace(/&apos;/g, "'")
+                  .replace(/&excl;/g, '!')
                   .replace(/&nbsp;/g, ' ')
+                  .replace(/&#(\d+);/g, function (_, n) { return String.fromCharCode(+n); })
+                  .replace(/&#x([0-9a-f]+);/gi, function (_, n) { return String.fromCharCode(parseInt(n, 16)); })
                   .trim();
 }
 
@@ -2950,7 +2954,7 @@ describe('porntrex getModels (/models/ index — protocol-relative avatar)', fun
   it('browseByModel reuses the canonical _porntrexCards + _porntrexPages parser', function () {
     var body = browseByModelBody('porntrex');
     expect(body).toContain('_porntrexCards(html)');
-    expect(body).toContain('_porntrexPages(html)');
+    expect(body).toContain('_porntrexPages(html, p, items.length)');
   });
   it('anti-drift: shipped porntrex getModels carries models hrefRx + letter exclude', function () {
     var body = getModelsBody('porntrex');
