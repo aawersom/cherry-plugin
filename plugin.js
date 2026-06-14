@@ -1928,7 +1928,7 @@
       cherry_search_hint: { ru: 'Введите запрос',      en: 'Enter a query'      },
       cherry_sources:     { ru: 'Источники',           en: 'Sources'            },
       cherry_favorites:   { ru: 'Случайные',           en: 'Favorites'          },
-      cherry_continue:    { ru: 'РП',                  en: 'Continue'           },
+      cherry_continue:    { ru: 'RP',                  en: 'Continue'           },
       cherry_sync:        { ru: 'Синхронизация',       en: 'Sync'               },
       cherry_sync_ok:     { ru: 'Избранное синхронизировано', en: 'Favorites synced' },
       cherry_sync_err:    { ru: 'Синхронизация не удалась — проверьте сеть', en: 'Sync failed — check connection' },
