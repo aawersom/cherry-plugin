@@ -1746,7 +1746,9 @@
       // 5) Watch history («РП») — resume surface, placed LAST (after all sources).
       // Shown only when history exists.
       if (Hist.all().length) {
-        results.push({ title: Lampa.Lang.translate('cherry_continue'), img: '', _kind: 'continue', _initial: '▶', _action: true });
+        // Append the build version to the RP tile so the TV always shows which plugin build
+        // is loaded («RP · v2026.06.14») — lets the owner confirm the cache refreshed.
+        results.push({ title: Lampa.Lang.translate('cherry_continue') + ' · v' + CHERRY_VERSION, img: '', _kind: 'continue', _initial: '▶', _action: true });
       }
 
       this.build({ title: 'Cherry', results: results, total_pages: 1 });
