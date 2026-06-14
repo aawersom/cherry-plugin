@@ -4,9 +4,10 @@
   if (window.plugin_cherry_ready) return;
   window.plugin_cherry_ready = true;
 
-  // Build version — shown in Lampa Settings → «Cherry · vX» so a TV can confirm it loaded the
-  // latest plugin (Lampa caches plugins; bump this on every deploy to verify the cache refreshed).
-  var CHERRY_VERSION = '2026.06.14';
+  // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
+  // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
+  // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
+  var CHERRY_VERSION = '0.9.1';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -1746,9 +1747,7 @@
       // 5) Watch history («РП») — resume surface, placed LAST (after all sources).
       // Shown only when history exists.
       if (Hist.all().length) {
-        // Append the build version to the RP tile so the TV always shows which plugin build
-        // is loaded («RP · v2026.06.14») — lets the owner confirm the cache refreshed.
-        results.push({ title: Lampa.Lang.translate('cherry_continue') + ' · v' + CHERRY_VERSION, img: '', _kind: 'continue', _initial: '▶', _action: true });
+        results.push({ title: Lampa.Lang.translate('cherry_continue'), img: '', _kind: 'continue', _initial: '▶', _action: true });
       }
 
       this.build({ title: 'Cherry', results: results, total_pages: 1 });
