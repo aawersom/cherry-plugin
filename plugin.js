@@ -4,6 +4,10 @@
   if (window.plugin_cherry_ready) return;
   window.plugin_cherry_ready = true;
 
+  // Build version — shown in Lampa Settings → «Cherry · vX» so a TV can confirm it loaded the
+  // latest plugin (Lampa caches plugins; bump this on every deploy to verify the cache refreshed).
+  var CHERRY_VERSION = '2026.06.14';
+
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
   // ============================================================
@@ -2048,7 +2052,7 @@
     if (Lampa.SettingsApi && Lampa.SettingsApi.addComponent && Lampa.SettingsApi.addParam) {
       Lampa.SettingsApi.addComponent({
         component: 'cherry',
-        name: 'Cherry',
+        name: 'Cherry · v' + CHERRY_VERSION,
         icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 21s-7-4.35-9.5-8.5C0.5 9 2 5 5.5 5c2 0 3.5 1.5 4 2.5C10 6.5 11.5 5 13.5 5 17 5 18.5 9 16.5 12.5 14 16.65 12 21 12 21z" fill="#e75480"/></svg>'
       });
       Lampa.SettingsApi.addParam({
