@@ -142,10 +142,12 @@
     try {
       var h = new URL(url).hostname;
       if (_ANDROID_FORCE_PROXY[h]) return true;
-      // pornhub stream CDN: subdomains vary (em-h, im-h, ev-h, hm-h…) on *.phncdn.com.
-      // Suffix-match so the m3u8 + segments route through the SAME proxy exit IP as the
-      // page (ipa=1 binding) — exact-match alone would miss every phncdn subdomain.
-      if (/(^|\.)phncdn\.com$/.test(h)) return true;
+      // pornhub: the video PAGE is served from rt.pornhub.com (not www), and the stream CDN
+      // subdomains vary (em-h, im-h, ev-h, hm-h…) on *.phncdn.com. Suffix-match BOTH pornhub.com
+      // and phncdn.com so the page + m3u8 + segments ALL route through the SAME proxy exit IP —
+      // otherwise the page (device IP) and the proxied stream (proxy IP) disagree and the
+      // ipa=1 IP-bound token fails (404/load error). Exact-match alone missed rt./*.phncdn.
+      if (/(^|\.)(phncdn|pornhub)\.com$/.test(h)) return true;
     } catch (e) {}
     return false;
   }
