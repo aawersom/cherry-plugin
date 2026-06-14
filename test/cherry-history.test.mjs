@@ -233,7 +233,7 @@ describe('plugin.js source assertions (anti-drift)', () => {
   });
 
   it('defines the cherry_continue lang key (ru/en)', () => {
-    expect(SRC).toMatch(/cherry_continue:\s*\{\s*ru:\s*'РП',\s*en:\s*'Continue'/);
+    expect(SRC).toMatch(/cherry_continue:\s*\{\s*ru:\s*'RP',\s*en:\s*'Continue'/);
   });
 
   it('history tile («РП») is placed LAST — after the SOURCES.forEach loop', () => {
