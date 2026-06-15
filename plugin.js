@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.9.1';
+  var CHERRY_VERSION = '0.9.2';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -118,6 +118,10 @@
   // native device-IP for page+stream, so they are deliberately excluded.
   var _ANDROID_FORCE_PROXY = {
     'hqporner.com': 1, 'www.hqporner.com': 1,
+    // hqporner's player embed (mydaddy.cc) + its CDN (*.bigcdn.cc) block the device home IP
+    // (mydaddy returns a 181-byte stub → no stream → "doesn't open"). Force both through the
+    // proxy so the embed loads AND the bigcdn mp4 token co-locates on the same proxy IP.
+    'mydaddy.cc': 1,
     'hellporno.com': 1, 'www.hellporno.com': 1,
     // lenporno + eporner: the device-IP native fetch of the PAGE gets redirected/blocked
     // (lenporno → mirror redirect, 0 cards; eporner → 369-byte block, no stream hash), but
@@ -134,25 +138,25 @@
     // that device IP → no playback. Browser (proxy→VPS) works. porntrex's get_file stream is
     // on the SAME host (www.porntrex.com), so forcing the page → VPS co-locates page+stream
     // on one IP, matching the working browser path.
-    'www.porntrex.com': 1, 'porntrex.com': 1,
-    // pornhub: HLS-only (get_media MP4 returns empty) + IP-bound (the m3u8 carries ipa=1).
-    // The page, the m3u8 manifest, and the .ts segments MUST all exit from ONE proxy IP,
-    // and the CF worker's rewriteM3u8 (workers/cherry-proxy) adds CORS + keeps segment IP
-    // affinity — required so Cherry's inner/built-in player can actually play the stream
-    // (raw phncdn m3u8 → native picks external chooser; inner hls.js → CORS fail). The page
-    // hosts are exact-matched here; the *.phncdn.com stream CDN is matched by suffix below.
-    'www.pornhub.com': 1, 'pornhub.com': 1
+    'www.porntrex.com': 1, 'porntrex.com': 1
+    // pornhub is deliberately NOT here: its webmasters API (www.pornhub.com) returns JSON and
+    // works on the device IP — routing it through the residential proxy returns an empty catalog.
+    // Only the *.phncdn.com stream CDN is auto-forced (suffix match below); the video PAGE is
+    // proxied EXPLICITLY in pornhub.getStream() with referer=www.pornhub.com so the page + m3u8 +
+    // segments all exit from the SAME proxy IP (ipa=1 token) while the catalog stays device-IP.
   };
   function _forceProxyAndroid(url) {
     try {
       var h = new URL(url).hostname;
       if (_ANDROID_FORCE_PROXY[h]) return true;
-      // pornhub: the video PAGE is served from rt.pornhub.com (not www), and the stream CDN
-      // subdomains vary (em-h, im-h, ev-h, hm-h…) on *.phncdn.com. Suffix-match BOTH pornhub.com
-      // and phncdn.com so the page + m3u8 + segments ALL route through the SAME proxy exit IP —
-      // otherwise the page (device IP) and the proxied stream (proxy IP) disagree and the
-      // ipa=1 IP-bound token fails (404/load error). Exact-match alone missed rt./*.phncdn.
-      if (/(^|\.)(phncdn|pornhub)\.com$/.test(h)) return true;
+      // pornhub stream CDN subdomains vary (em-h, im-h, ev-h, hm-h…) on *.phncdn.com — suffix
+      // match so the m3u8 + segments route through the proxy. pornhub.com is intentionally NOT
+      // matched here: the catalog API (www.pornhub.com) must stay on the device IP, and the
+      // video PAGE is proxied explicitly in getStream (with referer) — see the map comment.
+      if (/(^|\.)phncdn\.com$/.test(h)) return true;
+      // hqporner CDN: *.bigcdn.cc (s1, s42…) — proxy the mp4 too so it co-locates on the VPS
+      // egress IP with the mydaddy.cc embed fetch (bigcdn token is bound to that IP).
+      if (/(^|\.)bigcdn\.cc$/.test(h)) return true;
     } catch (e) {}
     return false;
   }
@@ -2549,7 +2553,12 @@ SOURCES.push({
   // No ':' → all-time (no &period=). Verified: &period=weekly|monthly changes results.
   _sortParams: function(sort) {
     var parts = String(sort || 'mostviewed').split(':');
-    return { ordering: parts[0] || 'mostviewed', period: parts[1] || '' };
+    var period = parts[1] || '';
+    // The webmasters API period vocabulary is week/month/year — NOT weekly/monthly. Sending
+    // 'weekly' returns {code:2001,"No Videos found!"} → empty catalog. Map our sort-id periods
+    // to the API's. (Verified: period=week → 30 videos, period=weekly → 0.)
+    var P = { weekly: 'week', monthly: 'month', daily: 'day', yearly: 'year' };
+    return { ordering: parts[0] || 'mostviewed', period: P[period] || period };
   },
 
   search: function(query, page, sort) {
@@ -2689,7 +2698,21 @@ SOURCES.push({
     var pageUrl = video.url;
     if (!pageUrl) return Promise.resolve({ url: '', quality: {} });
 
-    return cherryFetch(pageUrl).then(function(html) {
+    // On Android, proxy the video PAGE explicitly with referer=www.pornhub.com so it shares the
+    // SAME proxy exit IP (the worker selects the SOCKS5 port by referer-domain) as the m3u8 +
+    // segments → the ipa=1 IP-bound token stays valid. The page host varies (rt.pornhub.com from
+    // the API, www.pornhub.com from search) — proxying explicitly normalizes both. The catalog
+    // API itself is NOT proxied (device IP) so the listing stays reliable.
+    // The residential proxy flakes (~40% of single fetches return an empty/blocked page → no
+    // flashvars → "load error" on ~half the videos). RETRY up to 4× until flashvars appear.
+    function _fetchPage(tries) {
+      var u = _isAndroid() ? buildProxyUrl(pageUrl, 'https://www.pornhub.com/') : pageUrl;
+      return cherryFetch(u).then(function (html) {
+        if ((!html || html.indexOf('flashvars_') === -1) && tries > 0) return _fetchPage(tries - 1);
+        return html;
+      }).catch(function (e) { if (tries > 0) return _fetchPage(tries - 1); throw e; });
+    }
+    return _fetchPage(4).then(function(html) {
       var fvMatch = html.match(/var\s+flashvars_\d+\s*=\s*(\{[\s\S]+?\});\s*\n/);
       if (!fvMatch) return { url: '', quality: {} };
 
