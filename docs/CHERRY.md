@@ -295,6 +295,20 @@ hardcoded:
 - Genuinely single-page-search sites (search has no page param) report `total_pages:1`:
   `tizam`, `pornobolt`, `lenporno`, `24rolika`, `jopaonline`.
 
+### Default (no-category) feed must paginate — per-channel (v0.13.3)
+
+Several sites' **homepages don't paginate** (page 2 re-serves page 1). The global feed for those
+is repointed at a real paginating listing so infinite scroll works EVERYWHERE (verified on stand,
+`test/tv-audit3.mjs`):
+
+- `xvideos` → `/new/{p}` (1-based). Home `/` and `/best/` don't paginate; `/new/` also carries
+  `data-pvv` previews.
+- `pornone` → `/newest/{p}/` (home `/page/{p}/` → 404).
+- `tizam` → `/fil_my_dlya_vzroslyh/all_sex/?p={n}` (bare `/?p=` repeats the homepage rail).
+- `hellporno` → `/hd/{p}/` (global `/new/{p}/` is anti-bot-locked to page 1; `/hd/` ≈ whole site).
+
+Full per-channel coverage matrix + site limits: `tasks/coverage-audit-2026-06-17.md`.
+
 ---
 
 ## Related ("Похожие") — two distinct menu items
@@ -319,12 +333,21 @@ The card long-press menu (`cardRender.onMenu`, `plugin.js:834`) offers two relat
 
 ## Model browsing
 
-Activated the previously-dead `browseByModel`/`model_url` path for **pornhub only**:
-`_mapVideo` sets `card.model {name, url}` from the JSON `pornstars[]` (`plugin.js:1556`).
-`cardRender.onMenu` adds a «Модель: <name>» item when `element.model.name` exists; selecting
-it pushes a `cherry_grid` with `model_url` → `browseByModel(model_url, page)` (`plugin.js:530`).
-xvideos defines `browseByModel` but the model is only on the video page (not in listings),
-so it is left dead.
+«Модели» is a model INDEX grid (`getModels`) → a model's videos (`browseByModel`), offered on
+~18 channels that expose a pornstar index. `_kvsEngine` provides both from a `cfg.modelIndex`
+declaration; custom adapters (pornhub/xvideos/xnxx/eporner/spankbang/hqporner/porndig/familyporn)
+implement their own.
+
+- **KVS fallback URL needs a trailing slash** (v0.13.3): `browseByModel`'s default builds
+  `modelUrl + '/{page}/'` — without the slash `/models/{slug}/{n}` 404s (this had xozilla/analdin
+  returning **0** model videos). Sites with a custom `cfg.modelIndex.videosUrl` are unaffected.
+- Coverage note: `getModels()[0]` is often a sparse uploader (1–2 videos), so a quick sample can
+  understate a channel — a prolific model returns the full paginating list.
+- **Site-limited** (documented in the coverage report): `porndig` (40/page, DLE-AJAX, no GET page),
+  `familyporn` (JS-rendered model pages), `crocotube` (`listScopeRx` + no `/N/` pagination),
+  `ebun` (post-migration `/models/` is country groupings, not pornstars).
+
+Full matrix: `tasks/coverage-audit-2026-06-17.md`.
 
 ---
 

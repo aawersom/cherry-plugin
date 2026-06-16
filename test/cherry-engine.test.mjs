@@ -51,8 +51,9 @@ function parseDur(str) {
   }
   if (str.indexOf(':') !== -1) {
     var p = str.split(':').map(Number);
-    if (p.length === 2) return p[0] * 60 + p[1];
-    if (p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
+    var allNum = p.length >= 2 && p.every(function (n) { return !isNaN(n); });
+    if (allNum && p.length === 2) return p[0] * 60 + p[1];
+    if (allNum && p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
   }
   var h = str.match(/(\d+)\s*h/i);
   var m = str.match(/(\d+)\s*m(?:in)?(?![a-z])/i);
@@ -291,6 +292,29 @@ var BASE_CFG = {
     /alt="([^"]+)"/
   ]
 };
+
+// =============================================================================
+// describe: parseDur
+// =============================================================================
+
+describe('parseDur', () => {
+  it('plain colon forms', () => {
+    expect(parseDur('12:34')).toBe(754);
+    expect(parseDur('1:02:03')).toBe(3723);
+  });
+  it('unit forms', () => {
+    expect(parseDur('7min')).toBe(420);
+    expect(parseDur('12m34s')).toBe(754);
+    expect(parseDur('PT13M10S')).toBe(790);
+  });
+  // xozilla renders "{M}m:{S}s" (e.g. "17m:37s") — the ':' must NOT trigger the
+  // numeric-colon branch (Number("17m")=NaN), it must fall through to the unit scan.
+  it('mixed unit+colon (xozilla "17m:37s")', () => {
+    expect(parseDur('17m:37s')).toBe(17 * 60 + 37);
+    expect(parseDur('18m:47s')).toBe(18 * 60 + 47);
+    expect(parseDur('1h:05m:09s')).toBe(3600 + 5 * 60 + 9);
+  });
+});
 
 // =============================================================================
 // describe: _kvsPages

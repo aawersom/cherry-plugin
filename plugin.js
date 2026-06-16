@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.2';
+  var CHERRY_VERSION = '0.13.3';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -2253,10 +2253,13 @@ function parseDur(str) {
            (iso[3] ? parseInt(iso[3], 10) : 0);
   }
   // Colon form (12:34 / 1:02:03) — handle before the h/m/s scan so it isn't shadowed.
+  // Only when every part is a plain number; mixed unit+colon (xozilla "17m:37s") must
+  // fall through to the unit scan below, else Number("17m")=NaN poisons the result.
   if (str.indexOf(':') !== -1) {
     var p = str.split(':').map(Number);
-    if (p.length === 2) return p[0] * 60 + p[1];
-    if (p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
+    var allNum = p.length >= 2 && p.every(function (n) { return !isNaN(n); });
+    if (allNum && p.length === 2) return p[0] * 60 + p[1];
+    if (allNum && p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
   }
   // Unit form: any of h / m(in) / s, in any combination, spaces tolerated.
   // Examples handled: "7min", "7 min", "1h2min", "1h 2m", "1h", "12m34s".
@@ -3062,7 +3065,6 @@ SOURCES.push({
   browse: function(category, page, sort) {
     var self = this;
     var p = page || 1;
-    var pageIdx = p - 1;
     var url;
     // Category/homepage listings accept ONLY the base sort (duration/quality/date
     // facets are search-only on xvideos), so strip any ~facet suffix here.
@@ -3073,9 +3075,11 @@ SOURCES.push({
       var s = baseSort || 'views';
       url = _buildCatUrl('https://www.xvideos.com/c/s:' + s + '/{slug}/{page}', category, p, 0, true);
     } else {
-      // Non-category homepage: sort='views' → /best/ prefix; else /
-      var base = (baseSort === 'views') ? 'https://www.xvideos2.com/best/' : 'https://www.xvideos2.com/';
-      url = pageIdx === 0 ? base : base + pageIdx;
+      // Non-category global feed → /new/{p} (1-based; /new/0 → 404). It's the site's
+      // paginating NEWEST listing. The homepage / and bare /best/ DON'T paginate
+      // (page2 == page1), so route the global feed here to guarantee infinite scroll.
+      // Per-sort global listings aren't paginable on xvideos — sorts apply in categories.
+      url = 'https://www.xvideos2.com/new/' + p;
     }
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html, p);
@@ -4082,10 +4086,10 @@ SOURCES.push({
                 return { items: items, total_pages: _pornonePages(html, p, items.length) };
             }).catch(function () { return { items: [], total_pages: 0 }; });
         }
-        // NO category → the site HOMEPAGE feed (curated "New Porn Videos" order = the site's
-        // own default). The old wp-json API path (orderby=date) now 404s and only ever "worked"
-        // by falling back here — so fetch the homepage directly (one request, matches the site).
-        var url = p > 1 ? 'https://pornone.com/page/' + p + '/' : 'https://pornone.com/';
+        // NO category → /newest/{p}/ : the paginating "New Porn Videos" feed (same order as
+        // the site homepage, but it actually scrolls). The homepage / and /page/{p}/ DON'T
+        // paginate (/page/2/ → 404), which previously capped the global feed at one page.
+        var url = 'https://pornone.com/newest/' + p + '/';
         return cherryFetch(url).then(function (html) {
             var items = _pornoneCards(html);
             return { items: items, total_pages: _pornonePages(html, p, items.length) };
@@ -4596,9 +4600,12 @@ function _porntrexPages(html, page, itemsLen) {
       // (KVS model pages render listing-identical cards). Never touches getStream.
       browseByModel: cfg.modelIndex ? function (modelUrl, page) {
         var p = page || 1;
+        // Trailing slash is REQUIRED: KVS model pages are canonical at /models/{slug}/{n}/ —
+        // the slash-less /models/{slug}/{n} 404s (verified xozilla/analdin). page1 omits the
+        // page segment → /models/{slug}/ (slash kept); page2+ → /models/{slug}/{n}/.
         var url = cfg.modelIndex.videosUrl
           ? cfg.modelIndex.videosUrl(modelUrl, p)
-          : _buildCatUrl(modelUrl.replace(/\/+$/, '') + '/{page}', '', p, 1, true);
+          : _buildCatUrl(modelUrl.replace(/\/+$/, '') + '/{page}/', '', p, 1, true);
         return cherryFetch(url).then(function (html) {
           var items = _kvsParseCards(html, cfg);
           return { items: items, total_pages: _kvsPages(html, cfg.pagesRx, p, items.length) };
@@ -5285,6 +5292,8 @@ function _porndigCards(html) {
         // the value is in an inner <span>, so step past the leading inner tags.
         var duration = parseDur(_attr(durChunk, /class="[^"]*duration[^"]*"[^>]*>(?:\s*<[^>]+>)*\s*([\d:]+(?:\s*min)?)/i));
         var views    = parseViews(_attr(durChunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
+        // No grid preview: porndig lazy-loads the hover clip via JS (the only inline
+        // …/previewclip/…mp4 attrs are in the sidebar/featured blocks, not grid cards).
 
         if (title || thumb) {
             items.push({ id: id, source: 'porndig', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
@@ -5392,11 +5401,11 @@ SOURCES.push({
         return { items: items, total_pages: _derivePages(items.length, p, 12) };
       }).catch(function() { return { items: [], total_pages: 0 }; });
     }
-    // NO category → site homepage cross-category "Последние поступления" (all-category
-    // newest). Was the SINGLE category /s_russkim_perevodom/. Curl-verified: the bare
-    // root /?p={n} spans many categories (s_russkim_perevodom, klassika, all_sex,
-    // incest, italyan_porn…) and paginates (?p=0 ≠ ?p=1). Same zero-indexed ?p= scheme.
-    var url = 'https://tv4.tizam.org/?p=' + (p - 1);
+    // NO category → the broad "all_sex" (Фильмы xxx) listing. The bare root /?p={n} only
+    // LOOKS paginated: it re-shows the same homepage rail on every page (leading cards
+    // identical ?p=0 vs ?p=1 → no fresh cards on scroll). all_sex paginates cleanly
+    // (?p=0 ≠ ?p=1), so it's the global feed that guarantees infinite scroll.
+    var url = 'https://tv4.tizam.org/fil_my_dlya_vzroslyh/all_sex/?p=' + (p - 1);
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html);
       return { items: items, total_pages: _derivePages(items.length, p, 12) };
@@ -5606,7 +5615,13 @@ SOURCES.push(_kvsEngine({
     return 'https://hellporno.com/search/' + (page || 1) + '/?q=' + encodeURIComponent(query);
   },
   browseUrl: function(page) {
-    return 'https://hellporno.com/' + (page || 1) + '/';
+    // The global "new videos" feed is anti-bot-locked to page 1 — both /{p}/ and /new/{p}/
+    // re-serve page 1 to our non-JS client (verified /new/100/ == /new/1/), while CATEGORY
+    // listings paginate fine. /hd/ ≈ the whole site (almost every video is HD) and paginates
+    // cleanly, so use it as the scrollable global feed → infinite scroll works. The engine
+    // appends sort_by=post_date (default) so it stays newest-first.
+    var p = page || 1;
+    return p > 1 ? 'https://hellporno.com/hd/' + p + '/' : 'https://hellporno.com/hd/';
   },
   pagesRx: function(html, p) {
     var nums = [];

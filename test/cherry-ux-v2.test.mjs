@@ -2193,6 +2193,32 @@ describe('KVS categories — _buildCatUrl POST behaviour', () => {
     expect(_buildCatUrl('https://www.youjizz.com/categories/{slug}-{page}.html', 'anal', 1, 1, false)).toBe('https://www.youjizz.com/categories/anal-1.html');
     expect(_buildCatUrl('https://www.youjizz.com/categories/{slug}-{page}.html', 'anal', 2, 1, false)).toBe('https://www.youjizz.com/categories/anal-2.html');
   });
+  // KVS browseByModel fallback builds modelUrl + '/{page}/' — the trailing slash is
+  // REQUIRED (xozilla/analdin model pages 404 without it). page1 omits the page seg.
+  it('model-videos fallback keeps trailing slash (xozilla/analdin)', () => {
+    expect(_buildCatUrl('https://www.xozilla.com/models/xander/{page}/', '', 1, 1, true)).toBe('https://www.xozilla.com/models/xander/');
+    expect(_buildCatUrl('https://www.xozilla.com/models/xander/{page}/', '', 2, 1, true)).toBe('https://www.xozilla.com/models/xander/2/');
+  });
+});
+
+describe('Infinite scroll — default-feed URLs paginate (anti-drift)', () => {
+  // The site homepages don't paginate; these per-channel feeds DO. Regressing any of
+  // these back to the homepage breaks "infinite scroll everywhere". (Verified on stand.)
+  it('xvideos global feed → /new/{p} (homepage / and /best/ do not paginate)', () => {
+    expect(SRC).toContain("'https://www.xvideos2.com/new/' + p");
+  });
+  it('pornone global feed → /newest/{p}/ (/page/{p}/ 404s)', () => {
+    expect(SRC).toContain("'https://pornone.com/newest/' + p + '/'");
+  });
+  it('tizam global feed → all_sex listing (bare /?p= re-shows homepage)', () => {
+    expect(SRC).toContain("'https://tv4.tizam.org/fil_my_dlya_vzroslyh/all_sex/?p=' + (p - 1)");
+  });
+  it('hellporno global feed → /hd/{p}/ (bare /{p}/ and /new/{p}/ are anti-bot-locked to page 1)', () => {
+    expect(SRC).toContain("'https://hellporno.com/hd/' + p + '/'");
+  });
+  it('KVS browseByModel fallback uses trailing-slash {page}/', () => {
+    expect(SRC).toContain("modelUrl.replace(/\\/+$/, '') + '/{page}/'");
+  });
 });
 
 describe('KVS categories — plugin.js source assertions (anti-drift)', () => {
