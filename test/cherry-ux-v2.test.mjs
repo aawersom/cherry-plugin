@@ -1176,7 +1176,7 @@ describe('P1: plugin.js source assertions (anti-drift)', () => {
 
   it('comp.create toggles the activity loader and calls build()', () => {
     expect(SRC).toMatch(/comp\.create\s*=\s*function[\s\S]{0,400}this\.activity\.loader\(\s*true\s*\)/);
-    expect(SRC).toMatch(/comp\.create\s*=\s*function[\s\S]{0,1400}\.build\(\s*\{/);
+    expect(SRC).toMatch(/comp\.create\s*=\s*function[\s\S]{0,1900}\.build\(\s*\{/);
   });
 
   it('nextPageReuest is overridden for framework-driven paging', () => {
@@ -1836,7 +1836,7 @@ describe('all_sources pagination wiring', () => {
     // A named timeout const + a Promise.race so one hung source can never block
     // the whole page (first screen returns in ≤ the cap, others stream on scroll).
     expect(body).toMatch(/var ALL_SRC_TIMEOUT_MS = 7000;/);
-    expect(body).toMatch(/Promise\.race\(\[search, timeout\]\)/);
+    expect(body).toMatch(/Promise\.race\(\[fetch, timeout\]\)/);
     // A timed-out source resolves to an empty batch (so it contributes [] and is
     // not miscounted toward anyFull / total_pages).
     expect(body).toMatch(/setTimeout\(function \(\) \{[\s\S]{0,120}r\(\{ items: \[\], total_pages: 1, _srcId: src\.id \}\);[\s\S]{0,20}\}, ALL_SRC_TIMEOUT_MS\)/);
@@ -1884,6 +1884,25 @@ describe('per-channel search pagination audit', () => {
     var at = SRC.indexOf("id: 'spankbang'");
     var body = SRC.slice(SRC.indexOf('search: function', at), SRC.indexOf('browse: function', at));
     expect(body).toContain("'https://ru.spankbang.com/s/' + q + '/' + p + '/'");
+  });
+});
+
+describe('«Все видео» — unified all-channel latest feed (all_videos)', () => {
+  it('home has an all_videos tile and its onEnter pushes an all_videos grid', () => {
+    expect(SRC).toContain("cherry_all_videos");
+    expect(SRC).toMatch(/_kind:\s*'all_videos'/);
+    expect(SRC).toMatch(/element\._kind === 'all_videos'[\s\S]{0,400}all_videos:\s*true/);
+  });
+  it('the fan-out branch also fires for all_videos and browses (no query) per source', () => {
+    var at = SRC.indexOf('All-sources search');
+    var body = SRC.slice(at, at + 1200);
+    expect(body).toMatch(/object\.all_sources\s*&&\s*object\.query\)\s*\|\|\s*object\.all_videos/);
+    expect(body).toMatch(/_isSearch\s*\?\s*src\.search\(object\.query,\s*page\)/);
+    expect(body).toMatch(/:\s*src\.browse\(''\s*,\s*page/);
+  });
+  it('all_videos grid offers guaranteed client sort (not server sort/cats)', () => {
+    expect(SRC).toMatch(/_hasSorts[\s\S]{0,260}!object\.all_videos/);
+    expect(SRC).toMatch(/_hasClientSort\s*=\s*!object\.models_index\s*&&\s*!object\.studios_index/);
   });
 });
 

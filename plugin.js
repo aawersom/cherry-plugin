@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.11.0';
+  var CHERRY_VERSION = '0.12.0';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -935,25 +935,25 @@
     // model_url excluded: model browse is already filtered to a performer.
     // is_history (like is_favorites) is a flat local list → no menu axes.
     var _source    = source;
-    var _canSearch = !object.is_favorites && !object.is_history && !object.all_sources && !object.related_video && !object.model_url && !object.models_index && !object.studio_url && !object.studios_index;
+    var _canSearch = !object.is_favorites && !object.is_history && !object.all_sources && !object.all_videos && !object.related_video && !object.model_url && !object.models_index && !object.studio_url && !object.studios_index;
     // Server sort applies only to a single-source grid. In all-sources search the
     // resolved `source` is SOURCES[0] (which HAS cfg.sorts), so without this guard the
     // menu showed BOTH «Сортировка» (server) AND «Сортировка» (client) — a duplicate.
     // Keep ALL sorting in one entry: server-sort for single source, client-sort for all-sources.
     var _hasSorts  = !!(source && source.cfg && source.cfg.sorts && source.cfg.sorts.length
-                        && !object.all_sources && !object.models_index && !object.studios_index);
+                        && !object.all_sources && !object.all_videos && !object.models_index && !object.studios_index);
     var _hasCats   = !!(source && source.cfg && source.cfg.categories && source.cfg.categories.length
-                        && !object.all_sources && !object.models_index && !object.studios_index);
+                        && !object.all_sources && !object.all_videos && !object.models_index && !object.studios_index);
     // «Модели»: offered only when the adapter can list a model index, and only on a
     // normal browse grid (not inside model browse / search / favorites / all-sources).
     var _hasModels = !!(source && source.getModels &&
-                        !object.is_favorites && !object.is_history && !object.all_sources &&
+                        !object.is_favorites && !object.is_history && !object.all_sources && !object.all_videos &&
                         !object.related_video && !object.model_url && !object.models_index &&
                         !object.studio_url && !object.studios_index);
     // «Студии»: offered when the adapter can list a studio/channel index, on a
     // normal browse grid only (mirrors _hasModels exclusions).
     var _hasStudios = !!(source && source.getStudios &&
-                        !object.is_favorites && !object.is_history && !object.all_sources &&
+                        !object.is_favorites && !object.is_history && !object.all_sources && !object.all_videos &&
                         !object.related_video && !object.model_url && !object.models_index &&
                         !object.studio_url && !object.studios_index);
     // A2: all_sources search has no single source to honor a server sort, so offer
@@ -1038,23 +1038,28 @@
         return;
       }
 
-      // All-sources search — parallel, FLAT concat (drop group labels). Paginates:
-      // each source is queried for the SAME `page`; if ANY source returns a full
-      // batch this page there's likely more (→ page+1), else this is the last page.
-      if (object.all_sources && object.query) {
+      // All-sources search + «Все видео» fan-out — parallel, FLAT concat. Two modes share one path:
+      //   • SEARCH (all_sources + query): each source.search(query, page) + relevance filter.
+      //   • «Все видео» (all_videos, no query): each source.browse('', page, defaultSort) — a
+      //     mixed LATEST feed across every channel (the unified «Все видео» tab). No word filter.
+      // Paginates: each source uses the SAME `page`; any full batch ⇒ more pages.
+      if ((object.all_sources && object.query) || object.all_videos) {
         if (!SOURCES.length) { resolve([], 1); return; }
+        var _isSearch = !!object.query;
         // First-screen-fast: one slow/hung source (or a stalled proxy) must NOT
-        // block the whole page. Each source races its search against a hard cap,
-        // resolving to an empty batch on timeout so Promise.all settles in ≤cap.
-        // A timed-out source contributes [] → not counted toward anyFull/pages.
+        // block the whole page. Each source races against a hard cap, resolving to
+        // an empty batch on timeout so Promise.all settles in ≤cap.
         var ALL_SRC_TIMEOUT_MS = 7000;
         var promises = SOURCES.map(function (src) {
-          var search = src.search(object.query, page).then(function (r) {
+          var fetch = (_isSearch
+            ? src.search(object.query, page)
+            : src.browse('', page, (src.cfg && src.cfg.sorts && src.cfg.sorts[0] && src.cfg.sorts[0].id) || '')
+          ).then(function (r) {
             r = r || { items: [] };
             r._srcId = src.id;
             return r;
           }).catch(function (err) {
-            console.warn('[Cherry] all_sources search error from ' + src.id + ':', err);
+            console.warn('[Cherry] all-sources fan-out error from ' + src.id + ':', err);
             return { items: [], total_pages: 1, _srcId: src.id };
           });
           var timeout = new Promise(function (r) {
@@ -1062,7 +1067,7 @@
               r({ items: [], total_pages: 1, _srcId: src.id });
             }, ALL_SRC_TIMEOUT_MS);
           });
-          return Promise.race([search, timeout]);
+          return Promise.race([fetch, timeout]);
         });
         Promise.all(promises).then(function (results) {
           var flat = [];
@@ -1784,6 +1789,8 @@
       var results = [];
       // 1) Search entry — opens keyboard, then all-sources search grid.
       results.push({ title: Lampa.Lang.translate('cherry_search'), img: '', _kind: 'search', _initial: '⌕', _action: true });
+      // 1b) «Все видео» — unified LATEST feed mixed across every channel (all_videos grid).
+      results.push({ title: Lampa.Lang.translate('cherry_all_videos'), img: '', _kind: 'all_videos', _initial: '▦', _action: true });
       // 2) Favorites entry.
       results.push({ title: Lampa.Lang.translate('cherry_favorites'), img: '', _kind: 'favorites', _initial: '♥', _action: true });
       // 3) Sync entry — set the cross-device PIN; opening Cherry also auto-syncs.
@@ -1832,6 +1839,15 @@
               all_sources: true,
               page:        1
             });
+          });
+        } else if (element._kind === 'all_videos') {
+          // Unified «Все видео» — latest mixed across every channel (all_videos grid).
+          Lampa.Activity.push({
+            component:  'cherry_grid',
+            title:      Lampa.Lang.translate('cherry_all_videos'),
+            source_id:  (SOURCES[0] && SOURCES[0].id) || '',
+            all_videos: true,
+            page:       1
           });
         } else if (element._kind === 'continue') {
           Lampa.Activity.push({
@@ -1981,6 +1997,7 @@
   function addLang() {
     Lampa.Lang.add({
       cherry_search:      { ru: 'Поиск',               en: 'Search'             },
+      cherry_all_videos:  { ru: 'Все видео',           en: 'All videos'         },
       cherry_search_empty:     { ru: 'По запросу ничего не найдено', en: 'Nothing found'  },
       cherry_empty:            { ru: 'Здесь пока пусто',     en: 'Nothing here yet'   },
       cherry_search_type:      { ru: 'Ввести запрос',       en: 'Type a query'       },
