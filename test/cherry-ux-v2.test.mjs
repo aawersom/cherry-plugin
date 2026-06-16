@@ -1175,7 +1175,7 @@ describe('P1: plugin.js source assertions (anti-drift)', () => {
 
   it('comp.create toggles the activity loader and calls build()', () => {
     expect(SRC).toMatch(/comp\.create\s*=\s*function[\s\S]{0,400}this\.activity\.loader\(\s*true\s*\)/);
-    expect(SRC).toMatch(/comp\.create\s*=\s*function[\s\S]{0,900}\.build\(\s*\{/);
+    expect(SRC).toMatch(/comp\.create\s*=\s*function[\s\S]{0,1400}\.build\(\s*\{/);
   });
 
   it('nextPageReuest is overridden for framework-driven paging', () => {

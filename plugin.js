@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.10.0';
+  var CHERRY_VERSION = '0.10.1';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -1453,9 +1453,18 @@
       var _this = this;
       currentPage = 1;
       this.activity.loader(true);
+      // Skeleton: shimmer placeholder cards while the (possibly slow, multi-source) load runs —
+      // the screen gets structure + motion instead of a blank spinner. Removed before build().
+      try {
+        var _skel = '<div class="cherry-skeleton">';
+        for (var _s = 0; _s < 15; _s++) _skel += '<div class="cherry-skeleton__card"></div>';
+        _skel += '</div>';
+        _this.render().append(_skel);
+      } catch (e) {}
 
       _seenIds = {};                 // reset dedup tracking for a fresh grid
       _gridLoad(object, 1, function (items, total) {
+        try { _this.render().find('.cherry-skeleton').remove(); } catch (e) {}
         currentPage = 1;
         items = _dedupNew(items);    // seed seen-set (page 1 is all new)
         // P3.2: empty favorites shows a PERSISTENT hint (not a transient toast).
@@ -1476,6 +1485,7 @@
       }, function () {
         // P3.2: a load failure is DISTINCT from "no results". A focusable «Повторить»
         // re-runs create() so a transient network failure is recoverable on the remote.
+        try { _this.render().find('.cherry-skeleton').remove(); } catch (e) {}
         _this.activity.loader(false);
         _this.empty(Lampa.Lang.translate('cherry_load_error'), function () {
           _this.create();
@@ -1943,6 +1953,11 @@
 
       /* ---- Larger empty/error text for 10-foot readability ----------------- */
       '.activity .empty__descr{font-size:1.5em;line-height:1.4;}',
+
+      /* ---- Skeleton placeholders while a grid loads (perceived speed) ------- */
+      '.cherry-skeleton{display:flex;flex-wrap:wrap;padding:1.5em;}',
+      '.cherry-skeleton__card{width:18%;margin:1%;padding-bottom:10.1%;border-radius:.4em;background:#1c1c1c;background-image:linear-gradient(90deg,rgba(255,255,255,0) 0,rgba(255,255,255,.07) 50%,rgba(255,255,255,0) 100%);background-size:200% 100%;animation:cherry-shimmer 1.3s linear infinite;}',
+      '@keyframes cherry-shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}',
 
       /* ---- P3.4 Cherry header filter button -------------------- */
       '.cherry-filter-btn{color:#fff;}',
