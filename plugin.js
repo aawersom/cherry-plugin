@@ -2719,6 +2719,18 @@ SOURCES.push({
     return { ordering: parts[0] || 'mostviewed', period: P[period] || period };
   },
 
+  // The webmasters API intermittently returns an empty {videos:[]} (~50% from a hammered IP) —
+  // retry up to `tries` times until it yields cards, so catalog/search don't flicker to empty.
+  _apiFetch: function(url, tries) {
+    var self = this;
+    return cherryFetch(url).then(function(text) {
+      var data; try { data = JSON.parse(text); } catch (e) { data = null; }
+      var videos = (data && (data.videos || (data.data && data.data.videos))) || [];
+      if (!videos.length && tries > 0) return self._apiFetch(url, tries - 1);
+      return videos.map(function(v) { return self._mapVideo(v); });
+    }).catch(function() { if (tries > 0) return self._apiFetch(url, tries - 1); return []; });
+  },
+
   search: function(query, page, sort) {
     var self = this;
     var p = page || 1;
@@ -2726,13 +2738,9 @@ SOURCES.push({
     var url = 'https://www.pornhub.com/webmasters/search?search=' + encodeURIComponent(query) +
       '&page=' + p + '&ordering=' + sp.ordering +
       (sp.period ? '&period=' + sp.period : '') + '&thumbsize=medium_hd';
-    return cherryFetch(url).then(function(text) {
-      var data = JSON.parse(text);
-      var videos = data.videos || (data.data && data.data.videos) || [];
-      var items = videos.map(function(v) { return self._mapVideo(v); });
-      var total_pages = _derivePages(items.length, p, self._PAGE_SIZE);
-      return { items: items, total_pages: total_pages };
-    }).catch(function() { return { items: [], total_pages: 0 }; });
+    return self._apiFetch(url, 4).then(function(items) {
+      return { items: items, total_pages: _derivePages(items.length, p, self._PAGE_SIZE) };
+    });
   },
 
   browse: function(category, page, sort) {
@@ -2743,13 +2751,9 @@ SOURCES.push({
       '&ordering=' + sp.ordering + (sp.period ? '&period=' + sp.period : '') +
       '&thumbsize=medium_hd' +
       (category ? '&category=' + encodeURIComponent(category) : '');
-    return cherryFetch(url).then(function(text) {
-      var data = JSON.parse(text);
-      var videos = data.videos || (data.data && data.data.videos) || [];
-      var items = videos.map(function(v) { return self._mapVideo(v); });
-      var total_pages = _derivePages(items.length, p, self._PAGE_SIZE);
-      return { items: items, total_pages: total_pages };
-    }).catch(function() { return { items: [], total_pages: 0 }; });
+    return self._apiFetch(url, 4).then(function(items) {
+      return { items: items, total_pages: _derivePages(items.length, p, self._PAGE_SIZE) };
+    });
   },
 
   // Parse pornhub video-listing HTML (model /videos pages AND related blocks).
@@ -4078,22 +4082,14 @@ SOURCES.push({
                 return { items: items, total_pages: _pornonePages(html, p, items.length) };
             }).catch(function () { return { items: [], total_pages: 0 }; });
         }
-        var apiUrl = 'https://pornone.com/wp-json/wp/v2/posts?orderby=date&order=desc' +
-            '&per_page=20&page=' + p +
-            '&_embed=wp%3Afeaturedmedia&_fields=id,title,link,_embedded';
-        return cherryFetch(apiUrl).then(function (text) {
-            var items = self._fromApi(text);
-            if (items) return { items: items, total_pages: _derivePages(items.length, p, 20) };
-            throw new Error('api-empty');
-        }).catch(function () {
-            var url = p > 1
-                ? 'https://pornone.com/page/' + p + '/'
-                : 'https://pornone.com/';
-            return cherryFetch(url).then(function (html) {
-                var items = _pornoneCards(html);
-                return { items: items, total_pages: _pornonePages(html, p, items.length) };
-            }).catch(function () { return { items: [], total_pages: 0 }; });
-        });
+        // NO category → the site HOMEPAGE feed (curated "New Porn Videos" order = the site's
+        // own default). The old wp-json API path (orderby=date) now 404s and only ever "worked"
+        // by falling back here — so fetch the homepage directly (one request, matches the site).
+        var url = p > 1 ? 'https://pornone.com/page/' + p + '/' : 'https://pornone.com/';
+        return cherryFetch(url).then(function (html) {
+            var items = _pornoneCards(html);
+            return { items: items, total_pages: _pornonePages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
     getRelated: function (video) {
@@ -4881,7 +4877,7 @@ SOURCES.push({
     id: 'pornve',
     name: 'PornVe',
     host: 'pornve.com',
-    cfg: { categories: _cats('blowjob:Blowjob,japanese:Japanese,big-tits:Big Tits,teens:Teens,asian:Asian,brunette:Brunette,hardcore:Hardcore,blonde:Blonde,milf:MILF,big-cock:Big Cock,cumshot:Cumshot,anal:Anal,big-ass:Big Ass,babes:Babes,amateur:Amateur,small-tits:Small Tits,petite:Petite,one-on-one:One on One,creampie:Creampie,threesome:Threesome,masturbation:Masturbation,lesbian:Lesbian,interracial:Interracial,facial:Facial,handjob:Handjob,pov:POV,lingerie:Lingerie,cowgirl:Cowgirl,pussy-licking:Pussy Licking,fingering:Fingering,toys:Toys,deepthroat:Deepthroat,latina:Latina,doggy:Doggy,tattoo:Tattoo,shaved-pussy:Shaved Pussy,webcam:Webcam,natural-tits:Natural Tits,fetish:Fetish,redhead:Redhead'), sorts: _cats('video_viewed:По популярности,video_viewed_today:Популярное за день,video_viewed_week:Популярное за неделю,video_viewed_month:Популярное за месяц,rating_week:Рейтинг за неделю,rating_month:Рейтинг за месяц,post_date:Свежее,rating:По рейтингу,duration:Длинные,most_commented:По комментариям') },
+    cfg: { categories: _cats('blowjob:Blowjob,japanese:Japanese,big-tits:Big Tits,teens:Teens,asian:Asian,brunette:Brunette,hardcore:Hardcore,blonde:Blonde,milf:MILF,big-cock:Big Cock,cumshot:Cumshot,anal:Anal,big-ass:Big Ass,babes:Babes,amateur:Amateur,small-tits:Small Tits,petite:Petite,one-on-one:One on One,creampie:Creampie,threesome:Threesome,masturbation:Masturbation,lesbian:Lesbian,interracial:Interracial,facial:Facial,handjob:Handjob,pov:POV,lingerie:Lingerie,cowgirl:Cowgirl,pussy-licking:Pussy Licking,fingering:Fingering,toys:Toys,deepthroat:Deepthroat,latina:Latina,doggy:Doggy,tattoo:Tattoo,shaved-pussy:Shaved Pussy,webcam:Webcam,natural-tits:Natural Tits,fetish:Fetish,redhead:Redhead'), sorts: _cats('post_date:Свежее,video_viewed:По популярности,video_viewed_today:Популярное за день,video_viewed_week:Популярное за неделю,video_viewed_month:Популярное за месяц,rating_week:Рейтинг за неделю,rating_month:Рейтинг за месяц,rating:По рейтингу,duration:Длинные,most_commented:По комментариям') },
 
     search: function (query, page) {
         var q = encodeURIComponent(query).replace(/%20/g, '+');
@@ -5019,7 +5015,7 @@ SOURCES.push({
     id: 'familyporn',
     name: 'FamilyPorn',
     host: 'familyporn.tv',
-    cfg: { categories: _cats('cousin:Cousin,grandma-grandson:Grandma & Grandson,virgin:Virgin,stepbrother-stepsister:Stepbrother & Stepsister,stepdaughter-stepdad:Stepdad & Stepdaughter,brother-sister:Brother & Sister,grandpa-granddaughter:Grandpa & Granddaughter,stepmom-stepson:Stepmom & Stepson,dad-daughter:Dad & Daughter,mother-daughter:Mother & Daughter'), sorts: _cats('video_viewed:По популярности,post_date:Свежее,rating:По рейтингу,duration:Длинные,most_commented:По комментариям') },
+    cfg: { categories: _cats('cousin:Cousin,grandma-grandson:Grandma & Grandson,virgin:Virgin,stepbrother-stepsister:Stepbrother & Stepsister,stepdaughter-stepdad:Stepdad & Stepdaughter,brother-sister:Brother & Sister,grandpa-granddaughter:Grandpa & Granddaughter,stepmom-stepson:Stepmom & Stepson,dad-daughter:Dad & Daughter,mother-daughter:Mother & Daughter'), sorts: _cats('post_date:Свежее,video_viewed:По популярности,rating:По рейтингу,duration:Длинные,most_commented:По комментариям') },
 
     search: function (query, page) {
         var p = page || 1;
@@ -5160,10 +5156,12 @@ SOURCES.push({
     browse: function (category, page) {
         var p = page || 1;
         // category is a composite "{id}/{name}" channel slug.
-        // NO category → site-wide latest feed /video/ (paginates /video/page/{n}/) —
-        // curl-verified cross-topic recent cards. (The old default fetched the ANAL
-        // channel /channels/33/anal/ — a single category, not the homepage. /latest-updates/
-        // and /most-recent/ both 404 on porndig; /video/ is the real all-topic feed.)
+        // NO category → /video/ = the site-wide ALL-TOPIC feed (paginates /video/page/{n}/),
+        // ordered by POPULARITY (title "Most popular sex videos"). NOTE: porndig's homepage
+        // "last amateur videos" NEWEST block is a DLE async loader (load_async_container, no
+        // GET-able URL — /latest-updates/, /most-recent/, /new/ all 404, ?sort=date ignored),
+        // so a clean newest feed isn't reproducible; /video/ (popular all-topic) is the best
+        // deterministic default. (Old default was the single ANAL channel — worse.)
         var url = category
             ? 'https://porndig.com/channels/' + category + (p > 1 ? '/page/' + p : '')
             : 'https://porndig.com/video/' + (p > 1 ? 'page/' + p + '/' : '');
@@ -5313,8 +5311,10 @@ SOURCES.push({
     var items = [];
     var seen = {};
     // Match only 3-segment video URLs: /category/subcategory/slug/
-    // [^/?#"]+ excludes ? # / " so ?p=N pagination links are never matched
-    var hrefRx = /href="((?:https?:\/\/tv4\.tizam\.org)?\/fil_my_dlya_vzroslyh\/[^/?#"]+\/[^/?#"]+\/)"/g;
+    // [^/?#"]+ excludes ? # / " so ?p=N pagination links are never matched.
+    // Host-agnostic: tv4.tizam.org 301-redirects to li.tizam.org (mirror), so hrefs may be
+    // relative OR carry either host — match any *.tizam.org so a mirror change can't empty cards.
+    var hrefRx = /href="((?:https?:\/\/[a-z0-9.-]*tizam\.org)?\/fil_my_dlya_vzroslyh\/[^/?#"]+\/[^/?#"]+\/)"/g;
     var m;
     while ((m = hrefRx.exec(html)) !== null) {
       var cardUrl = m[1].charAt(0) === '/' ? 'https://tv4.tizam.org' + m[1] : m[1];
