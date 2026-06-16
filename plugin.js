@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.12.0';
+  var CHERRY_VERSION = '0.13.0';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -3316,6 +3316,43 @@ SOURCES.push({
       var url = hlsUrl || highUrl || lowUrl || '';
       return { url: url, quality: quality };
     }).catch(function() { return { url: '', quality: {} }; });
+  },
+
+  getModels: function(page) {
+    var p = page || 1;
+    var url = 'https://www.xnxx.com/pornstars' + (p > 1 ? '/' + p : '');
+    return cherryFetch(url).then(function(html) {
+      return _parseModelIndex(html, {
+        window: 800,
+        hrefRx: /href="(\/pornstar\/[^"\/?#]+)"/g,
+        normalizeUrl: function(raw) { return 'https://www.xnxx.com' + raw; },
+        nameRx: [/<p class="title"><a[^>]*>([^<]{2,60})<\/a>/, /<a[^>]+href="\/pornstar\/[^"]+"[^>]*>([^<]{2,60})<\/a>/],
+        thumbRx: [/<img[^>]+src="(https?:\/\/[^"]+xnxx-cdn[^"]+\.jpg)"/i]
+      });
+    }).catch(function() { return []; });
+  },
+
+  _mapModelVideo: function(o) {
+    if (!o || !o.eid) return null;
+    var dm = o.d && String(o.d).match(/(\d+)\s*min/);
+    var slug2 = (String(o.u||'').replace(/\/$/,'').split('/').pop()) || o.eid;
+    return { id: 'xnxx-' + o.eid, source: 'xnxx', title: _decodeHtml(o.tf || o.t || ''),
+      thumb: o.il || o.i || '', preview: o.ipu || '',
+      url: 'https://www.xnxx.com/video-' + o.eid + '/' + slug2,
+      duration: dm ? parseInt(dm[1],10)*60 : 0, views: parseViews(String(o.n||0)) };
+  },
+
+  browseByModel: function(modelUrl, page) {
+    var self = this; var p = page || 1;
+    var slug = (modelUrl.replace(/\/$/,'').match(/\/pornstar\/([^\/?#]+)/) || [,''])[1] || modelUrl.replace(/\/$/,'').split('/').pop();
+    var url = 'https://www.xnxx.com/pornstar/' + slug + '/videos/best/' + (p - 1);
+    return cherryFetch(url).then(function(text) {
+      var data; try { data = JSON.parse(text); } catch(e) { data = null; }
+      var vids = (data && data.videos) || []; var items = [];
+      vids.forEach(function(o){ var c = self._mapModelVideo(o); if (c) items.push(c); });
+      var total = (data && data.nb_videos && data.nb_per_page) ? Math.ceil(data.nb_videos/data.nb_per_page) : _derivePages(items.length, p, 50);
+      return { items: items, total_pages: total || 1 };
+    }).catch(function(){ return { items: [], total_pages: 0 }; });
   }
 });
 
@@ -3452,6 +3489,28 @@ SOURCES.push({
     }).catch(function() {
       return { url: '', quality: {} };
     });
+  },
+
+  getModels: function(page) {
+    var p = page || 1;
+    var url = 'https://www.eporner.com/pornstar-list/' + (p > 1 ? p + '/' : '');
+    return cherryFetch(url).then(function(html) {
+      return _parseModelIndex(html, {
+        window: 400,
+        hrefRx: /href="(\/pornstar\/[^"\/?#]+\/)"/g,
+        normalizeUrl: function(raw) { return 'https://www.eporner.com' + raw; },
+        nameRx: [/title="([^"]+)"/, /alt="([^"]+)"/, /<span>([^<]{2,60})<\/span>/],
+        thumbRx: [/data-src="(https?:\/\/[^"]+\.jpe?g[^"]*)"/i]
+      });
+    }).catch(function() { return []; });
+  },
+
+  browseByModel: function(modelUrl, page) {
+    var p = page || 1; var url = modelUrl.replace(/\/+$/,'') + '/' + p + '/';
+    return cherryFetch(url).then(function(html) {
+      var items = _epornerRelated(html);
+      return { items: items, total_pages: _derivePages(items.length, p, 38) };
+    }).catch(function(){ return { items: [], total_pages: 0 }; });
   }
 });
 
@@ -3591,6 +3650,33 @@ SOURCES.push({
       // Phase 3: generic extractStreams
       return extractStreams(html);
     }).catch(function() { return { url: '', quality: {} }; });
+  },
+
+  getModels: function(page) {
+    var p = page || 1;
+    var url = p > 1 ? 'https://ru.spankbang.com/pornstars/' + p : 'https://ru.spankbang.com/pornstars';
+    return cherryFetch(url).then(function(html) {
+      var items = []; var seen = {};
+      var blocks = html.split('data-testid="hottest-models"');
+      for (var i = 1; i < blocks.length; i++) {
+        var b = blocks[i];
+        var hrefM = b.match(/href="(\/[a-z0-9]+\/pornstar\/[^"]+\/)"/i); if (!hrefM) continue;
+        var u = 'https://ru.spankbang.com' + hrefM[1]; if (seen[u]) continue; seen[u] = 1;
+        var nameM = b.match(/alt="([^"]+)"/);
+        var name = nameM ? nameM[1] : decodeURIComponent(hrefM[1].split('/pornstar/')[1] || '').replace(/[+\/]/g,' ').trim();
+        var thumbM = b.match(/data-src="(\/\/spankbang\.com\/pornstarimg\/[^"]+)"/i);
+        items.push({ name: name, url: u, thumb: thumbM ? 'https:' + thumbM[1] : '' });
+      }
+      return items;
+    }).catch(function() { return []; });
+  },
+
+  browseByModel: function(modelUrl, page) {
+    var self = this; var p = page || 1;
+    var url = p > 1 ? modelUrl + p + '/' : modelUrl;
+    return cherryFetch(url).then(function(html) {
+      return { items: self._parseCards(html), total_pages: self._parseTotalPages(html) };
+    }).catch(function(){ return { items: [], total_pages: 0 }; });
   }
 });
 
@@ -3726,6 +3812,26 @@ SOURCES.push({
       }
       return extractStreams(html);
     }).catch(function() { return { url: '', quality: {} }; });
+  },
+
+  getModels: function(page) {
+    if ((page || 1) > 1) return Promise.resolve([]);   // /girls is a single page
+    return cherryFetch('https://hqporner.com/girls').then(function(html) {
+      var sec = html; var gi = html.indexOf('<span>Girls</span>');
+      if (gi >= 0) sec = html.slice(gi, html.indexOf('</section>', gi));
+      var items = []; var re = /<a href="(\/actress\/[^"]+)" class="sidebar-link[^"]*">([^<]+)<\/a>/g; var m;
+      while ((m = re.exec(sec)) !== null) items.push({ name: stripTags(m[2]).trim(), url: 'https://hqporner.com' + m[1], thumb: '' });
+      return items;
+    }).catch(function() { return []; });
+  },
+
+  browseByModel: function(modelUrl, page) {
+    var self = this; var p = page || 1;
+    var url = p > 1 ? modelUrl + '/' + p : modelUrl;
+    return cherryFetch(url).then(function(html) {
+      var items = self._parseCards(html);
+      return { items: items, total_pages: _derivePages(items.length, p, 50) };
+    }).catch(function(){ return { items: [], total_pages: 0 }; });
   }
 });
 
