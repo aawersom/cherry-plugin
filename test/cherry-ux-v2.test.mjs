@@ -1767,13 +1767,13 @@ describe('Step 3: PATH-segment sorts (popular first, Russian labels, segment in 
 });
 
 describe('Phase 3 A3(b): all_sources per-source title-match filter before slice', () => {
-  it('filter matches ALL query words (per-word AND) and runs before slice(0,10)', () => {
+  it('filter matches ALL query GROUPS (synonym-expanded AND) before slice(0,10)', () => {
     var at = SRC.indexOf('All-sources search');
     expect(at).toBeGreaterThan(-1);
-    var body = SRC.slice(at, at + 4200);
-    // per-WORD AND match (every query word present), not full-phrase indexOf
-    expect(body).toMatch(/_wordHits\(v\.title\)\s*===\s*words\.length/);
-    var filterIdx = body.indexOf('_wordHits(v.title) === words.length');
+    var body = SRC.slice(at, at + 5000);
+    // per-GROUP AND match (synonym-expanded), not full-phrase indexOf
+    expect(body).toMatch(/_groupHits\(v\.title\)\s*===\s*groups\.length/);
+    var filterIdx = body.indexOf('_groupHits(v.title) === groups.length');
     var sliceIdx  = body.indexOf('picked.slice(0, 10)');
     expect(filterIdx).toBeGreaterThan(-1);
     expect(sliceIdx).toBeGreaterThan(filterIdx);
@@ -1781,22 +1781,30 @@ describe('Phase 3 A3(b): all_sources per-source title-match filter before slice'
 
   it('non-ASCII (Cyrillic) queries skip the word filter', () => {
     var at = SRC.indexOf('All-sources search');
-    var body = SRC.slice(at, at + 4200);
-    expect(body).toMatch(/isLatin\s*=\s*\/\^\[\\x00-\\x7F\]\*\$\/\.test\(ql\)/);
-    expect(body).toMatch(/words\s*=\s*\(ql\s*&&\s*isLatin\)/);
+    var body = SRC.slice(at, at + 5000);
+    expect(body).toMatch(/isLatin\s*=\s*\/\^\[\\x00-\\x7F\]\*\$\/\.test/);
+    expect(body).toMatch(/groups\s*=\s*\(object\.query\s*&&\s*isLatin\)/);
   });
 
   it('keeps a source unfiltered top-N when its filtered slice is empty', () => {
     var at = SRC.indexOf('All-sources search');
-    var body = SRC.slice(at, at + 4200);
+    var body = SRC.slice(at, at + 5000);
     expect(body).toMatch(/if\s*\(matched\.length\)\s*picked\s*=\s*matched/);
   });
 
-  it('ranks the merged set by query-word hits (multi-word relevance)', () => {
+  it('ranks merged set by group hits + phrase boost, then cross-source dedups', () => {
     var at = SRC.indexOf('All-sources search');
-    var body = SRC.slice(at, at + 5200);
-    expect(body).toMatch(/words\.length\s*>\s*1/);
+    var body = SRC.slice(at, at + 6000);
     expect(body).toMatch(/b\.h\s*-\s*a\.h\s*\|\|\s*a\.i\s*-\s*b\.i/);
+    // cross-source dedup by normalized title + bucketed duration
+    expect(body).toMatch(/_seenKey/);
+    expect(body).toMatch(/_normText\(v\.title\)\.slice\(0,\s*40\)/);
+  });
+
+  it('exposes _searchGroups + _normText + a synonym map for global search', () => {
+    expect(SRC).toMatch(/function _searchGroups/);
+    expect(SRC).toMatch(/function _normText/);
+    expect(SRC).toMatch(/_SEARCH_SYN/);
   });
 });
 
@@ -1804,8 +1812,8 @@ describe('all_sources pagination wiring', () => {
   function allSourcesBody() {
     var at = SRC.indexOf('All-sources search');
     expect(at).toBeGreaterThan(-1);
-    // Window widened: the branch grew with the per-source timeout race wrapper + word-rank sort.
-    return SRC.slice(at, at + 5200);
+    // Window widened: the branch grew with the per-source timeout race wrapper + rank + dedup.
+    return SRC.slice(at, at + 6500);
   }
 
   it('queries every source for the requested page (not hardcoded 1)', () => {

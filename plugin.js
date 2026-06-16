@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.9.3';
+  var CHERRY_VERSION = '0.10.0';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -1063,17 +1063,20 @@
           // queries — scraped titles are often English so a Cyrillic substring would
           // wrongly empty every source. If a source's filtered slice is empty, fall
           // back to its unfiltered top-N (don't drop a whole source).
-          var ql = (object.query || '').toLowerCase();
-          var isLatin = /^[\x00-\x7F]*$/.test(ql);
-          // Per-WORD matching (AND), not full-phrase substring: a query like "blonde milf"
-          // must match "Blonde teen MILF" (both words present, not adjacent). The old
-          // exact-phrase indexOf dropped those → weak multi-word search. Cyrillic queries
-          // skip the filter (scraped titles are usually English).
-          var words = (ql && isLatin) ? ql.split(/\s+/).filter(Boolean) : [];
-          function _wordHits(title) {
-            var t = (title || '').toLowerCase();
-            var n = 0;
-            for (var i = 0; i < words.length; i++) if (t.indexOf(words[i]) !== -1) n++;
+          var isLatin = /^[\x00-\x7F]*$/.test((object.query || '').toLowerCase());
+          // Synonym-expanded word GROUPS (AND match): "blonde milf" must hit both groups; a
+          // group hits if the title contains any synonym (milf↔mom↔mature). Normalized text
+          // (ё→е, punctuation-insensitive) handles light typos. Cyrillic queries skip the
+          // filter (scraped titles are usually English → a Cyrillic substring empties sources).
+          var groups = (object.query && isLatin) ? _searchGroups(object.query) : [];
+          var phrase = _normText(object.query || '');
+          function _groupHits(title) {
+            var t = _normText(title), n = 0;
+            for (var g = 0; g < groups.length; g++) {
+              for (var k = 0; k < groups[g].length; k++) {
+                if (t.indexOf(groups[g][k]) !== -1) { n++; break; }
+              }
+            }
             return n;
           }
           results.forEach(function (r) {
@@ -1084,26 +1087,35 @@
               // A full raw batch (>=10) from any source implies a further page exists.
               if (r.items.length >= 10) anyFull = true;
               var picked = r.items;
-              if (words.length) {
-                // Keep cards containing ALL query words; fall back to top-N if none match.
-                var matched = r.items.filter(function (v) { return _wordHits(v.title) === words.length; });
+              if (groups.length) {
+                // Keep cards matching ALL query groups; fall back to top-N if none match.
+                var matched = r.items.filter(function (v) { return _groupHits(v.title) === groups.length; });
                 if (matched.length) picked = matched;
               }
               flat = flat.concat(picked.slice(0, 10));
             }
           });
-          // Relevance rank across the merged set: more query words in the title first
-          // (stable for ties → preserves the per-source interleave). Only for multi-word.
-          if (words.length > 1) {
+          // Relevance rank: more matched groups first, +0.5 boost when the exact phrase is
+          // present (stable for ties → preserves per-source interleave).
+          if (groups.length) {
             flat = flat
-              .map(function (v, i) { return { v: v, h: _wordHits(v.title), i: i }; })
+              .map(function (v, i) { return { v: v, h: _groupHits(v.title) + (_normText(v.title).indexOf(phrase) !== -1 ? 0.5 : 0), i: i }; })
               .sort(function (a, b) { return b.h - a.h || a.i - b.i; })
               .map(function (x) { return x.v; });
           }
-          // A2: client-side sort for all_sources search (no single source to honor
-          // a server sort). Only duration is uniformly available across adapters;
-          // 'relevance' keeps the natural per-source-interleaved order (default).
-          // Sort is applied to the CURRENT page's flat only (per-page sort).
+          // Cross-source dedup: the same video posted on several sites → keep one (the
+          // highest-ranked, since we dedup AFTER the relevance sort). Key = normalized title
+          // (first 40 chars) + duration bucketed to 15s. Cards without a title can't be keyed.
+          var _seenKey = {};
+          flat = flat.filter(function (v) {
+            if (!v.title) return true;
+            var key = _normText(v.title).slice(0, 40) + '|' + (Math.round((v.duration || 0) / 15) * 15);
+            if (_seenKey[key]) return false;
+            _seenKey[key] = true;
+            return true;
+          });
+          // A2: optional client-side sort (only duration is uniform across all adapters;
+          // 'relevance' is the default order above). Applied to the current page's flat.
           if (object.client_sort === 'duration') {
             flat.sort(function (a, b) { return (b.duration || 0) - (a.duration || 0); });
           }
@@ -2409,6 +2421,37 @@ function _decodeHtml(str) {
         .replace(/&#(\d+);/g, function (_, n) { return String.fromCharCode(+n); })
         .replace(/&#x([0-9a-f]+);/gi, function (_, n) { return String.fromCharCode(parseInt(n, 16)); })
         .trim();
+}
+
+// ---- Search text normalization + light synonyms (global search relevance) -------------
+// Normalize for matching/dedup: lowercase, ё→е, non-alphanumeric → space, collapse.
+function _normText(s) {
+    return (s || '').toLowerCase().replace(/ё/g, 'е')
+        .replace(/[^a-z0-9а-я]+/gi, ' ').trim().replace(/\s+/g, ' ');
+}
+// Conservative synonym groups — a query word matches a title if ANY member appears. Keeps
+// recall high for equivalent terms without over-broadening (e.g. "milf" finds "mom"/"mature").
+var _SEARCH_SYN = {
+    milf: ['milf', 'mature', 'mom', 'mommy', 'mother'],
+    mom: ['mom', 'mommy', 'mother', 'milf'],
+    mature: ['mature', 'milf', 'mom'],
+    teen: ['teen', 'young', 'teenage'],
+    young: ['young', 'teen'],
+    stepmom: ['stepmom', 'step mom', 'milf', 'mom'],
+    stepsister: ['stepsister', 'step sister', 'sister'],
+    wife: ['wife', 'wifey'],
+    big: ['big', 'huge', 'large'],
+    anal: ['anal', 'ass'],
+    lesbian: ['lesbian', 'lesbians']
+};
+// Turn a query into synonym-expanded word groups: [[w1,syn…],[w2,syn…]]. A title "hits" a
+// group if it contains any member. Used for AND-matching + relevance scoring in global search.
+function _searchGroups(query) {
+    var words = _normText(query).split(' ').filter(Boolean);
+    return words.map(function (w) {
+        var syn = _SEARCH_SYN[w];
+        return syn ? syn.slice() : [w];
+    });
 }
 
 /**
