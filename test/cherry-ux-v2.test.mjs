@@ -947,10 +947,11 @@ describe('P0: plugin.js source assertions (anti-drift)', () => {
     expect(SRC).not.toMatch(/function _atRightEdge\(/);
   });
 
-  it('per-source search opens Lampa.Input.edit and pushes source_id without all_sources', () => {
-    // Lampa.Keyboard.show does not exist on this build; Input.edit is the real API.
-    expect(SRC).toMatch(/_openSearch[\s\S]{0,400}Lampa\.Input\.edit/);
-    expect(SRC).toMatch(/_openSearch[\s\S]{0,800}Lampa\.Activity\.push\([\s\S]{0,300}source_id/);
+  it('per-source search uses the search picker (popular/voice/type) and pushes source_id', () => {
+    // _openSearch now delegates to _searchPicker (quick-picks + voice + Input.edit fallback).
+    expect(SRC).toMatch(/_openSearch[\s\S]{0,300}_searchPicker\(/);
+    expect(SRC).toMatch(/_openSearch[\s\S]{0,400}Lampa\.Activity\.push\([\s\S]{0,300}source_id/);
+    expect(SRC).toMatch(/_searchPicker[\s\S]{0,600}Lampa\.Input\.edit/);  // type fallback present
     expect(SRC).not.toMatch(/Lampa\.Keyboard\.show/);
   });
 
@@ -1456,27 +1457,23 @@ describe('Phase 3 A1: search callbacks do NOT toggle on the push path', () => {
   // toggles ONLY inside the empty-query guard (no push). Both Input.edit callbacks
   // (home all_sources search + per-source _openSearch) must match this shape.
 
-  it('_openSearch: toggle only inside the empty-query guard (if (!q))', () => {
+  it('_openSearch delegates to _searchPicker; empty-query guard lives in the picker', () => {
     var at = SRC.indexOf('function _openSearch()');
     expect(at).toBeGreaterThan(-1);
-    var body = SRC.slice(at, at + 700);
-    // The empty guard toggles then returns.
-    expect(body).toMatch(/if\s*\(!q\)\s*\{\s*Lampa\.Controller\.toggle\('content'\);\s*return;\s*\}/);
-    // Exactly one toggle in the whole _openSearch body (the guard one).
-    expect((body.match(/Lampa\.Controller\.toggle\('content'\)/g) || []).length).toBe(1);
-    // The push must NOT be preceded by an unguarded toggle.
-    expect(body).not.toMatch(/toggle\('content'\);\s*var q[\s\S]{0,40}Activity\.push/);
+    var body = SRC.slice(at, at + 400);
+    expect(body).toMatch(/_searchPicker\(/);
+    // The empty-query guard (toggle + return) now lives once inside _searchPicker._type.
+    var pick = SRC.indexOf('function _searchPicker(');
+    var pbody = SRC.slice(pick, pick + 900);
+    expect(pbody).toMatch(/if\s*\(!q\)\s*\{[\s\S]{0,60}toggle\('content'\)[\s\S]{0,30}return;/);
   });
 
-  it('home all_sources search callback: toggle only in the empty-query guard', () => {
-    // Isolate the all_sources Input.edit callback (it carries all_sources: true).
+  it('home all_sources search uses the picker and pushes all_sources:true', () => {
     var at = SRC.indexOf("element._kind === 'search'");
     expect(at).toBeGreaterThan(-1);
-    var body = SRC.slice(at, at + 1400);
-    expect(body).toMatch(/if\s*\(!q\)\s*\{\s*Lampa\.Controller\.toggle\('content'\);\s*return;\s*\}/);
+    var body = SRC.slice(at, at + 600);
+    expect(body).toMatch(/_searchPicker\(/);
     expect(body).toMatch(/all_sources:\s*true/);
-    // No toggle on the line before var q / before the push.
-    expect(body).not.toMatch(/edit\([\s\S]{0,200}toggle\('content'\);\s*var q = \(value/);
   });
 });
 
@@ -1891,8 +1888,8 @@ describe('per-channel search pagination audit', () => {
 });
 
 describe('Phase 3 A2: all_sources client-side sort exposed in the action menu', () => {
-  it('_hasClientSort flag set for all_sources + query', () => {
-    expect(SRC).toMatch(/_hasClientSort\s*=\s*!!\(object\.all_sources\s*&&\s*object\.query\)/);
+  it('_hasClientSort enabled on every video grid (not just all_sources)', () => {
+    expect(SRC).toMatch(/_hasClientSort\s*=\s*!object\.models_index\s*&&\s*!object\.studios_index/);
   });
 
   it('action menu pushes a clientsort entry', () => {
@@ -1900,19 +1897,20 @@ describe('Phase 3 A2: all_sources client-side sort exposed in the action menu', 
     expect(SRC).toMatch(/item\.action\s*===\s*'clientsort'/);
   });
 
-  it('_openClientSort re-pushes with client_sort and applies duration in _gridLoad', () => {
+  it('_openClientSort re-pushes preserving grid params + client_sort; _applyClientSort sorts', () => {
     expect(SRC).toMatch(/function _openClientSort\(\)/);
-    expect(SRC).toMatch(/client_sort:\s*item\.id/);
-    expect(SRC).toMatch(/object\.client_sort\s*===\s*'duration'/);
+    expect(SRC).toMatch(/p\.client_sort\s*=\s*item\.id/);
+    expect(SRC).toMatch(/function _applyClientSort/);
+    expect(SRC).toMatch(/cs\s*===\s*'duration'/);
   });
 
-  it('client sort offers relevance (default) and duration only', () => {
+  it('client sort offers default + longest + shortest + title (guaranteed, always works)', () => {
     var at = SRC.indexOf('function _openClientSort()');
-    var body = SRC.slice(at, at + 500);
+    var body = SRC.slice(at, at + 700);
     expect(body).toContain('cherry_sort_relevance');
     expect(body).toContain('cherry_sort_duration');
-    // no popular/views claim for all_sources (data not uniform)
-    expect(body).not.toMatch(/cherry_sort_(popular|views)/);
+    expect(body).toContain('cherry_sort_duration_asc');
+    expect(body).toContain('cherry_sort_title');
   });
 
   it('client-sort lang keys registered (ru/en)', () => {
