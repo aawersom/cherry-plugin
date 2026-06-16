@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.0';
+  var CHERRY_VERSION = '0.13.1';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -2708,7 +2708,9 @@ SOURCES.push({
   // Split a (possibly composite) sort id "ordering:period" into the two API params.
   // No ':' → all-time (no &period=). Verified: &period=weekly|monthly changes results.
   _sortParams: function(sort) {
-    var parts = String(sort || 'mostviewed').split(':');
+    // Default (single-channel open, no sort) → mostrecent (newest), matching pornhub's home feed
+    // + cfg.sorts[0]. Was 'mostviewed' (all-time) — that contradicted the homepage-default policy.
+    var parts = String(sort || 'mostrecent').split(':');
     var period = parts[1] || '';
     // The webmasters API period vocabulary is week/month/year — NOT weekly/monthly. Sending
     // 'weekly' returns {code:2001,"No Videos found!"} → empty catalog. Map our sort-id periods
@@ -3398,8 +3400,9 @@ SOURCES.push({
   // gay API params. No suffix → straight (gay=0). Mirrors pornhub's _sortParams.
   _orient: function(sort) {
     var m = String(sort || '').match(/^(.*?)~gay([012])$/);
-    if (m) return { order: m[1] || 'most-popular', gay: m[2] };
-    return { order: sort || 'most-popular', gay: '0' };
+    if (m) return { order: m[1] || 'latest', gay: m[2] };
+    // Default (no sort) → latest, matching eporner's "Most recent" home + cfg.sorts[0].
+    return { order: sort || 'latest', gay: '0' };
   },
 
   _apiFetch: function(url) {
@@ -3606,7 +3609,7 @@ SOURCES.push({
     // NO category → GLOBAL sorted feed /{sort}/{page}/, defaulting to most_popular (По популярности).
     var url = category
       ? _buildCatUrl('https://ru.spankbang.com/s/{slug}/{page}/', category, p, 1, true)
-      : 'https://ru.spankbang.com/' + (sort || 'most_popular') + '/' + p + '/';
+      : 'https://ru.spankbang.com/' + (sort || 'new_videos') + '/' + p + '/';
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html);
       var total = self._parseTotalPages(html);
@@ -3763,7 +3766,7 @@ SOURCES.push({
     if (category) {
       url = _buildCatUrl('https://hqporner.com/category/{slug}/{page}', category, p, 1, true);
     } else {
-      var base = 'https://hqporner.com/' + (sort || 'top');
+      var base = 'https://hqporner.com/' + (sort || 'hdporn');
       url = p > 1 ? base + '/' + p : base;
     }
     return cherryFetch(url).then(function(html) {

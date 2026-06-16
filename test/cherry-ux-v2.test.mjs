@@ -1493,17 +1493,16 @@ describe('Phase 3 A3(a): eporner SEARCH uses relevance order (no forced most-pop
     expect(urlLine).not.toContain('order=');
   });
 
-  it('eporner browse() defaults to most-popular but honors a chosen sort (S3)', () => {
+  it('eporner browse() defaults to latest (homepage «Most recent») but honors a chosen sort (S3)', () => {
     var at = SRC.indexOf("id: 'eporner'");
     var browseAt = SRC.indexOf('browse: function(category, page', at);
     expect(browseAt).toBeGreaterThan(-1);
     var browseBody = SRC.slice(browseAt, browseAt + 900);
-    // _orient() now extracts {order, gay}; the chosen sort flows through to &order=.
     expect(browseBody).toMatch(/var o = self\._orient\(sort\)/);
     expect(browseBody).toMatch(/&order=' \+ o\.order/);
-    // The default order (most-popular) lives in the shared _orient helper.
+    // Default order = latest (matches eporner homepage); lives in the _orient helper.
     var epBody = SRC.slice(at, browseAt);
-    expect(epBody).toMatch(/order: sort \|\| 'most-popular'/);
+    expect(epBody).toMatch(/order: sort \|\| 'latest'/);
   });
   it('eporner cfg exposes API order sorts (no longer sorts:[])', () => {
     var at = SRC.indexOf("id: 'eporner'");
@@ -2108,14 +2107,14 @@ describe('Final sort batch: xnxx PATH + youjizz/hqporner/spankbang GLOBAL feeds'
       // hdporn «Свежее» moved to first/default (homepage = latest); feed default stays 'top'.
       ids:    ['hdporn', 'top', 'top/week', 'top/month'],
       firstLabel: 'Свежее',
-      feed:   "var base = 'https://hqporner.com/' + (sort || 'top');",
+      feed:   "var base = 'https://hqporner.com/' + (sort || 'hdporn');",
       cat:    "'https://hqporner.com/category/{slug}/{page}'"
     },
     spankbang: {
       // new_videos «Свежее» moved to first/default (homepage = fresh); feed fallback stays most_popular.
       ids:    ['new_videos', 'most_popular', 'trending_videos', 'upcoming'],
       firstLabel: 'Свежее',
-      feed:   "'https://ru.spankbang.com/' + (sort || 'most_popular') + '/' + p + '/'",
+      feed:   "'https://ru.spankbang.com/' + (sort || 'new_videos') + '/' + p + '/'",
       cat:    "'https://ru.spankbang.com/s/{slug}/{page}/'"
     }
   };
@@ -2380,7 +2379,7 @@ describe('Pornhub adapter — webmasters slugs/orderings/pagination', () => {
   it('browse/search split composite sort id into ordering+period (default mostviewed, no mv special-case)', () => {
     // _sortParams splits "ordering:period" → {ordering, period}; no ':' = all-time.
     expect(PH).toContain('_sortParams: function(sort)');
-    expect(PH).toContain("var parts = String(sort || 'mostviewed').split(':');");
+    expect(PH).toContain("var parts = String(sort || 'mostrecent').split(':');");
     expect(PH).not.toContain("!== 'mv'");
     expect(PH).toContain("'&ordering=' + sp.ordering");
     expect(PH).toContain("(sp.period ? '&period=' + sp.period : '')");
