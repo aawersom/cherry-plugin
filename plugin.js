@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.10.1';
+  var CHERRY_VERSION = '0.11.0';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -958,7 +958,9 @@
                         !object.studio_url && !object.studios_index);
     // A2: all_sources search has no single source to honor a server sort, so offer
     // a lightweight CLIENT-side sort (relevance/duration) applied in _gridLoad.
-    var _hasClientSort = !!(object.all_sources && object.query);
+    // Guaranteed client sort is offered on EVERY video grid (browse, search, all_sources,
+    // favorites, history, related) — NOT the model/studio index grids (those aren't videos).
+    var _hasClientSort = !object.models_index && !object.studios_index;
 
     // ---- card mapping (adapter VideoCard → base-renderer card_data) -------
     // Mutate in place so id/url/source/preview/model/views/duration ride along
@@ -987,6 +989,16 @@
      * @param {Function} resolve  (items, total_pages)
      * @param {Function} reject
      */
+    // GUARANTEED client-side sort: works on whatever cards loaded, regardless of whether the
+    // site's server sort honors the request (e.g. pornhub period was ignored). Applied per page.
+    function _applyClientSort(items) {
+      var cs = object.client_sort;
+      if (cs === 'duration')          items.sort(function (a, b) { return (b.duration || 0) - (a.duration || 0); });
+      else if (cs === 'duration_asc') items.sort(function (a, b) { return (a.duration || 0) - (b.duration || 0); });
+      else if (cs === 'title')        items.sort(function (a, b) { return _normText(a.title).localeCompare(_normText(b.title)); });
+      return items;
+    }
+
     function _gridLoad(object, page, resolve, reject) {
       // Favorites — single page, no paging.
       if (object.is_favorites) {
@@ -1114,11 +1126,8 @@
             _seenKey[key] = true;
             return true;
           });
-          // A2: optional client-side sort (only duration is uniform across all adapters;
-          // 'relevance' is the default order above). Applied to the current page's flat.
-          if (object.client_sort === 'duration') {
-            flat.sort(function (a, b) { return (b.duration || 0) - (a.duration || 0); });
-          }
+          // Optional guaranteed client-side sort ('relevance' = default order above).
+          _applyClientSort(flat);
           resolve(flat.map(toCard), anyFull ? (page + 50) : page);
         }).catch(function (err) {
           console.warn('[Cherry] loadAllSources error:', err);
@@ -1197,6 +1206,7 @@
 
       promise.then(function (result) {
         var m = mapResult(result);
+        _applyClientSort(m.items);   // guaranteed client sort (longest/shortest/A-Z) per page
         resolve(m.items, m.total_pages);
       }).catch(function (err) {
         console.warn('[Cherry] grid load error (page ' + page + '):', err);
@@ -1302,18 +1312,8 @@
 
     function _openSearch() {
       if (!_source) return;
-      if (typeof Lampa.Input === 'undefined' || !Lampa.Input.edit) return;
-      Lampa.Input.edit({
-        title: Lampa.Lang.translate('cherry_search'),
-        value: object.query || '',
-        free:  true,
-        nosave: true
-      }, function (text) {
-        var q = (text || '').trim();
-        // A1: toggle ONLY on the empty-query path (no push). On the push path the
-        // pushed cherry_grid's own start() re-binds the controller — toggling here
-        // first would bind to the OLD activity and leave focus nowhere (dead nav).
-        if (!q) { Lampa.Controller.toggle('content'); return; }
+      // Popular quick-picks + voice + manual type (same picker as global search).
+      _searchPicker(object.query || '', function (q) {
         Lampa.Activity.push({
           component: 'cherry_grid',
           title:     _source.name + ': ' + q,
@@ -1393,22 +1393,24 @@
     // xvideos/pornhub/kvs honor it) — single-source search-sort is best-effort.
     function _openClientSort() {
       var items = [
-        { title: Lampa.Lang.translate('cherry_sort_relevance'), id: '' },
-        { title: Lampa.Lang.translate('cherry_sort_duration'),  id: 'duration' }
+        { title: Lampa.Lang.translate('cherry_sort_relevance'),     id: '' },
+        { title: Lampa.Lang.translate('cherry_sort_duration'),      id: 'duration' },
+        { title: Lampa.Lang.translate('cherry_sort_duration_asc'),  id: 'duration_asc' },
+        { title: Lampa.Lang.translate('cherry_sort_title'),         id: 'title' }
       ];
       Lampa.Select.show({
-        title: Lampa.Lang.translate('cherry_sort'),
+        title: Lampa.Lang.translate('cherry_sort_guaranteed'),
         items: items,
+        selected: _selectedIndex(items, object.client_sort || ''),
         onSelect: function (item) {
-          Lampa.Activity.push({
-            component:   'cherry_grid',
-            title:       object.title,
-            source_id:   object.source_id,
-            query:       object.query,
-            all_sources: true,
-            client_sort: item.id,
-            page:        1
-          });
+          // Re-push the SAME grid (preserve source/category/query/all_sources/etc.) + client_sort,
+          // so the guaranteed client sort works on browse, search and all_sources alike.
+          var p = {};
+          for (var k in object) if (object.hasOwnProperty(k)) p[k] = object[k];
+          p.component   = 'cherry_grid';
+          p.client_sort = item.id;
+          p.page        = 1;
+          Lampa.Activity.push(p);
         },
         onBack: function () { Lampa.Controller.toggle('content'); }
       });
@@ -1424,7 +1426,7 @@
       var items = [];
       if (_canSearch)     items.push({ title: Lampa.Lang.translate('cherry_search'),   action: 'search'     });
       if (_hasSorts)      items.push({ title: Lampa.Lang.translate('cherry_sort'),     action: 'sort'       });
-      if (_hasClientSort) items.push({ title: Lampa.Lang.translate('cherry_sort'),     action: 'clientsort' });
+      if (_hasClientSort) items.push({ title: Lampa.Lang.translate('cherry_sort_guaranteed'), action: 'clientsort' });
       if (_hasCats)       items.push({ title: Lampa.Lang.translate('cherry_category'), action: 'cat'        });
       if (_hasModels)     items.push({ title: Lampa.Lang.translate('cherry_models'),   action: 'models'     });
       if (_hasStudios)    items.push({ title: Lampa.Lang.translate('cherry_studios'),  action: 'studios'    });
@@ -1471,6 +1473,13 @@
         if (!items.length && object.is_favorites) {
           _this.activity.loader(false);
           _this.empty(Lampa.Lang.translate('cherry_fav_empty_hint'));
+          return;
+        }
+        // Clear "nothing found" state for an empty first page (search or browse) — instead of
+        // a blank grid. Page 2+ emptiness is end-of-list, handled by pagination (not here).
+        if (!items.length) {
+          _this.activity.loader(false);
+          _this.empty(Lampa.Lang.translate(object.query ? 'cherry_search_empty' : 'cherry_empty'));
           return;
         }
         // P3.1: header reflects the active sort/category filter.
@@ -1813,28 +1822,17 @@
     comp.cardRender = function (object, element, card) {
       card.onEnter = function () {
         if (element._kind === 'search') {
-          if (typeof Lampa.Input !== 'undefined' && Lampa.Input.edit) {
-            Lampa.Input.edit({
-              title: Lampa.Lang.translate('cherry_search'),
-              value: '',
-              free:  true,
-              nosave: true
-            }, function (value) {
-              var q = (value || '').trim();
-              // A1: toggle ONLY on the empty-query path (no push). On the push path
-              // the pushed cherry_grid's start() re-binds the controller; toggling
-              // here first would bind the OLD activity and kill arrow nav.
-              if (!q) { Lampa.Controller.toggle('content'); return; }
-              Lampa.Activity.push({
-                component:   'cherry_grid',
-                title:       Lampa.Lang.translate('cherry_search') + ': ' + q,
-                source_id:   (SOURCES[0] && SOURCES[0].id) || '',
-                query:       q,
-                all_sources: true,
-                page:        1
-              });
+          // Popular quick-picks + voice + manual type — avoids D-pad typing for common queries.
+          _searchPicker('', function (q) {
+            Lampa.Activity.push({
+              component:   'cherry_grid',
+              title:       Lampa.Lang.translate('cherry_search') + ': ' + q,
+              source_id:   (SOURCES[0] && SOURCES[0].id) || '',
+              query:       q,
+              all_sources: true,
+              page:        1
             });
-          }
+          });
         } else if (element._kind === 'continue') {
           Lampa.Activity.push({
             component:  'cherry_grid',
@@ -1983,6 +1981,11 @@
   function addLang() {
     Lampa.Lang.add({
       cherry_search:      { ru: 'Поиск',               en: 'Search'             },
+      cherry_search_empty:     { ru: 'По запросу ничего не найдено', en: 'Nothing found'  },
+      cherry_empty:            { ru: 'Здесь пока пусто',     en: 'Nothing here yet'   },
+      cherry_search_type:      { ru: 'Ввести запрос',       en: 'Type a query'       },
+      cherry_search_voice:     { ru: 'Голосом',             en: 'Voice'              },
+      cherry_search_listening: { ru: 'Говорите…',           en: 'Listening…'         },
       cherry_search_hint: { ru: 'Введите запрос',      en: 'Enter a query'      },
       cherry_sources:     { ru: 'Источники',           en: 'Sources'            },
       cherry_favorites:   { ru: 'Случайные',           en: 'Favorites'          },
@@ -2004,8 +2007,11 @@
       cherry_similar_titles:   { ru: 'Похожие названия',     en: 'Similar titles'     },
       cherry_sort:             { ru: 'Сортировка',          en: 'Sort'               },
       cherry_sort_default:     { ru: 'По умолчанию',        en: 'Default'            },
-      cherry_sort_relevance:   { ru: 'Релевантность',       en: 'Relevance'          },
-      cherry_sort_duration:    { ru: 'По длительности',     en: 'By duration'        },
+      cherry_sort_relevance:   { ru: 'По умолчанию',        en: 'Default'            },
+      cherry_sort_duration:    { ru: 'Длинные сначала',     en: 'Longest first'      },
+      cherry_sort_duration_asc:{ ru: 'Короткие сначала',    en: 'Shortest first'     },
+      cherry_sort_title:       { ru: 'По названию (А-Я)',   en: 'Title (A-Z)'        },
+      cherry_sort_guaranteed:  { ru: 'Сортировка (точная)', en: 'Sort (exact)'       },
       cherry_category:         { ru: 'Категория',           en: 'Category'           },
       cherry_category_default: { ru: 'Все категории',       en: 'All categories'     },
       cherry_model_videos:     { ru: 'Видео модели',        en: 'Model videos'       },
@@ -2466,6 +2472,61 @@ function _searchGroups(query) {
     return words.map(function (w) {
         var syn = _SEARCH_SYN[w];
         return syn ? syn.slice() : [w];
+    });
+}
+
+// Popular search terms — quick picks so the user rarely has to type on a D-pad.
+var _POPULAR_TERMS = ['milf', 'teen', 'anal', 'blonde', 'mature', 'lesbian', 'japanese',
+    'big tits', 'creampie', 'threesome', 'massage', 'step mom', 'pov', 'amateur', 'asian'];
+
+// Best-effort voice input via the WebView SpeechRecognition (Android TV mic). Calls
+// onText(query) on success; returns false (caller falls back to keyboard) if unavailable.
+function _voiceQuery(onText) {
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return false;
+    try {
+        var rec = new SR();
+        rec.lang = 'ru-RU';
+        rec.interimResults = false;
+        rec.maxAlternatives = 1;
+        try { Lampa.Noty.show(Lampa.Lang.translate('cherry_search_listening')); } catch (e) {}
+        rec.onresult = function (e) {
+            var t = (e.results && e.results[0] && e.results[0][0] && e.results[0][0].transcript) || '';
+            if (t.trim()) onText(t.trim());
+            else { try { Lampa.Controller.toggle('content'); } catch (e2) {} }
+        };
+        rec.onerror = function () { try { Lampa.Noty.show(Lampa.Lang.translate('cherry_error'), { style: 'warn' }); Lampa.Controller.toggle('content'); } catch (e2) {} };
+        rec.start();
+        return true;
+    } catch (e) { return false; }
+}
+
+// Search entry picker: popular quick-picks + voice + manual type. `onQuery(text)` runs the
+// actual search. Avoids D-pad typing for the common case. Used by global + per-channel search.
+function _searchPicker(prefill, onQuery) {
+    function _type() {
+        if (typeof Lampa.Input === 'undefined' || !Lampa.Input.edit) return;
+        Lampa.Input.edit({ title: Lampa.Lang.translate('cherry_search'), value: prefill || '', free: true, nosave: true },
+            function (value) {
+                var q = (value || '').trim();
+                if (!q) { try { Lampa.Controller.toggle('content'); } catch (e) {} return; }
+                onQuery(q);
+            });
+    }
+    var items = [{ title: '✎ ' + Lampa.Lang.translate('cherry_search_type'), id: '__type__' }];
+    if (window.SpeechRecognition || window.webkitSpeechRecognition) {
+        items.push({ title: '🎤 ' + Lampa.Lang.translate('cherry_search_voice'), id: '__voice__' });
+    }
+    _POPULAR_TERMS.forEach(function (t) { items.push({ title: t, id: t }); });
+    Lampa.Select.show({
+        title: Lampa.Lang.translate('cherry_search'),
+        items: items,
+        onSelect: function (item) {
+            if (item.id === '__type__') _type();
+            else if (item.id === '__voice__') { if (!_voiceQuery(onQuery)) _type(); }
+            else onQuery(item.id);
+        },
+        onBack: function () { try { Lampa.Controller.toggle('content'); } catch (e) {} }
     });
 }
 
