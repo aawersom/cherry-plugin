@@ -1556,10 +1556,10 @@ describe('Step 2: query-param / API sorts (popular first, Russian labels)', () =
     });
   });
   ['pornve', 'familyporn'].forEach(function (id) {
-    it(id + ': popular first, labeled «По популярности», Russian labels', () => {
+    it(id + ': «Свежее» (post_date) first — honest label (sort param ignored, feed is newest)', () => {
       var s = sortsFor(id);
-      expect(s[0].id).toBe('video_viewed');
-      expect(s[0].label).toBe('По популярности');
+      expect(s[0].id).toBe('post_date');
+      expect(s[0].label).toBe('Свежее');
       s.forEach(function (x) {
         expect(x.label).toMatch(/[А-Яа-я]/);
         expect(x.label).not.toBe('Популярное');
@@ -1579,9 +1579,9 @@ describe('Step 2: query-param / API sorts (popular first, Russian labels)', () =
     it(id + ': includes curl-confirmed windowed sorts after the default', () => {
       var s = sortsFor(id);
       var ids = s.map(function (x) { return x.id; });
-      // post_date «Свежее» is now first/default on the homepage-newest channels
-      // (xozilla/analdin/hellporno); pornve keeps video_viewed first.
-      expect(s[0].id).toBe(id === 'pornve' ? 'video_viewed' : 'post_date');
+      // post_date «Свежее» is first/default on homepage-newest channels (incl. pornve, whose
+      // /latest-updates/ feed is newest regardless of the sort param → honest label).
+      expect(s[0].id).toBe('post_date');
       windowExpect[id].forEach(function (w) {
         expect(ids).toContain(w);                      // windowed value present
         var item = s.filter(function (x) { return x.id === w; })[0];
