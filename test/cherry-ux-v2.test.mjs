@@ -1617,17 +1617,16 @@ describe('Step 2: query-param / API sorts (popular first, Russian labels)', () =
     expect(s[2].label).toBe('По комментариям');
   });
 
-  it('pornhub: 3 base orderings (no dead longest) + composite period windows, popular first', () => {
-    // Base sorts come via _cats; the time-window composites are appended as literal
-    // objects (id carries a ':' so _cats can't hold them). `longest` is dropped (API no-op).
+  it('pornhub: 3 working orderings, «Свежее» (mostrecent) first — no period composites (API ignores period)', () => {
+    // The webmasters API ignores &period (weekly==monthly==all-time, 30/30 overlap) → the
+    // composite period sorts were no-ops and are removed. Default = mostrecent («Свежее»).
     var base = sortsFor('pornhub');
     expect(base.map(function (x) { return x.id; }))
-      .toEqual(['mostviewed', 'rating', 'mostrecent']);
-    expect(base[0].label).toBe('По популярности (всё время)');
+      .toEqual(['mostrecent', 'mostviewed', 'rating']);
+    expect(base[0].label).toBe('Свежее');
     expect(base.map(function (x) { return x.id; })).not.toContain('longest');
-    // Default (sorts[0]) is "popular THIS WEEK", prepended before the _cats base list.
-    expect(SRC).toContain("[{ id: 'mostviewed:weekly', label: 'Популярное за неделю' }].concat(");
-    expect(SRC).toContain("{ id: 'mostviewed:monthly', label: 'Популярное за месяц' }");
+    expect(SRC).not.toContain("mostviewed:weekly");
+    expect(SRC).not.toContain("mostviewed:monthly");
   });
 
   it('eporner: latest «Свежее» first (homepage = Recent), order ids preserved', () => {
@@ -1768,30 +1767,36 @@ describe('Step 3: PATH-segment sorts (popular first, Russian labels, segment in 
 });
 
 describe('Phase 3 A3(b): all_sources per-source title-match filter before slice', () => {
-  it('filter uses indexOf(query) and runs before slice(0,10)', () => {
+  it('filter matches ALL query words (per-word AND) and runs before slice(0,10)', () => {
     var at = SRC.indexOf('All-sources search');
     expect(at).toBeGreaterThan(-1);
-    var body = SRC.slice(at, at + 3300);
-    // per-source title match
-    expect(body).toMatch(/\.toLowerCase\(\)\.indexOf\(ql\)\s*!==\s*-1/);
-    // filter executes before the slice
-    var filterIdx = body.indexOf('indexOf(ql)');
+    var body = SRC.slice(at, at + 4200);
+    // per-WORD AND match (every query word present), not full-phrase indexOf
+    expect(body).toMatch(/_wordHits\(v\.title\)\s*===\s*words\.length/);
+    var filterIdx = body.indexOf('_wordHits(v.title) === words.length');
     var sliceIdx  = body.indexOf('picked.slice(0, 10)');
     expect(filterIdx).toBeGreaterThan(-1);
     expect(sliceIdx).toBeGreaterThan(filterIdx);
   });
 
-  it('non-ASCII (Cyrillic) queries skip the filter', () => {
+  it('non-ASCII (Cyrillic) queries skip the word filter', () => {
     var at = SRC.indexOf('All-sources search');
-    var body = SRC.slice(at, at + 3300);
+    var body = SRC.slice(at, at + 4200);
     expect(body).toMatch(/isLatin\s*=\s*\/\^\[\\x00-\\x7F\]\*\$\/\.test\(ql\)/);
-    expect(body).toMatch(/if\s*\(ql\s*&&\s*isLatin\)/);
+    expect(body).toMatch(/words\s*=\s*\(ql\s*&&\s*isLatin\)/);
   });
 
   it('keeps a source unfiltered top-N when its filtered slice is empty', () => {
     var at = SRC.indexOf('All-sources search');
-    var body = SRC.slice(at, at + 3300);
+    var body = SRC.slice(at, at + 4200);
     expect(body).toMatch(/if\s*\(matched\.length\)\s*picked\s*=\s*matched/);
+  });
+
+  it('ranks the merged set by query-word hits (multi-word relevance)', () => {
+    var at = SRC.indexOf('All-sources search');
+    var body = SRC.slice(at, at + 5200);
+    expect(body).toMatch(/words\.length\s*>\s*1/);
+    expect(body).toMatch(/b\.h\s*-\s*a\.h\s*\|\|\s*a\.i\s*-\s*b\.i/);
   });
 });
 
@@ -1799,8 +1804,8 @@ describe('all_sources pagination wiring', () => {
   function allSourcesBody() {
     var at = SRC.indexOf('All-sources search');
     expect(at).toBeGreaterThan(-1);
-    // Window widened: the branch grew with the per-source timeout race wrapper.
-    return SRC.slice(at, at + 4200);
+    // Window widened: the branch grew with the per-source timeout race wrapper + word-rank sort.
+    return SRC.slice(at, at + 5200);
   }
 
   it('queries every source for the requested page (not hardcoded 1)', () => {
@@ -2328,16 +2333,15 @@ describe('Pornhub adapter — webmasters slugs/orderings/pagination', () => {
     expect(PH).not.toContain('hairy:');
   });
 
-  it('sorts: 3 valid base orderings (no dead longest) + composite period windows', () => {
-    const sortsMatch = PH.match(/sorts:[\s\S]*?_cats\('([^']*)'\)/);
+  it('sorts: 3 working orderings, mostrecent first — no period composites (API ignores period)', () => {
+    const sortsMatch = PH.match(/sorts:\s*_cats\('([^']*)'\)/);
     expect(sortsMatch).toBeTruthy();
     const ids = sortsMatch[1].split(',').map(p => p.slice(0, p.indexOf(':')));
-    // `longest` removed — the webmasters API silently ignored it (no-op = mostrecent).
-    expect(ids).toEqual(['mostviewed', 'rating', 'mostrecent']);
+    // `longest` + period composites (weekly/monthly) removed — the webmasters API ignores them.
+    expect(ids).toEqual(['mostrecent', 'mostviewed', 'rating']);
     expect(ids).not.toContain('longest');
-    // Default (sorts[0]) = "popular this week", prepended before the _cats base list.
-    expect(PH).toContain("[{ id: 'mostviewed:weekly', label: 'Популярное за неделю' }].concat(");
-    expect(PH).toContain("{ id: 'mostviewed:monthly', label: 'Популярное за месяц' }");
+    expect(PH).not.toContain("mostviewed:weekly");
+    expect(PH).not.toContain("mostviewed:monthly");
   });
 
   it('sorts contain NO legacy fake ids (mv/tr/mr)', () => {
