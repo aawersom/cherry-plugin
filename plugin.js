@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.9.2';
+  var CHERRY_VERSION = '0.9.3';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -1065,6 +1065,17 @@
           // back to its unfiltered top-N (don't drop a whole source).
           var ql = (object.query || '').toLowerCase();
           var isLatin = /^[\x00-\x7F]*$/.test(ql);
+          // Per-WORD matching (AND), not full-phrase substring: a query like "blonde milf"
+          // must match "Blonde teen MILF" (both words present, not adjacent). The old
+          // exact-phrase indexOf dropped those → weak multi-word search. Cyrillic queries
+          // skip the filter (scraped titles are usually English).
+          var words = (ql && isLatin) ? ql.split(/\s+/).filter(Boolean) : [];
+          function _wordHits(title) {
+            var t = (title || '').toLowerCase();
+            var n = 0;
+            for (var i = 0; i < words.length; i++) if (t.indexOf(words[i]) !== -1) n++;
+            return n;
+          }
           results.forEach(function (r) {
             if (r && r.items && r.items.length) {
               // Stamp each card with ITS originating source so «Похожие» opens the
@@ -1073,13 +1084,22 @@
               // A full raw batch (>=10) from any source implies a further page exists.
               if (r.items.length >= 10) anyFull = true;
               var picked = r.items;
-              if (ql && isLatin) {
-                var matched = r.items.filter(function (v) { return (v.title || '').toLowerCase().indexOf(ql) !== -1; });
+              if (words.length) {
+                // Keep cards containing ALL query words; fall back to top-N if none match.
+                var matched = r.items.filter(function (v) { return _wordHits(v.title) === words.length; });
                 if (matched.length) picked = matched;
               }
               flat = flat.concat(picked.slice(0, 10));
             }
           });
+          // Relevance rank across the merged set: more query words in the title first
+          // (stable for ties → preserves the per-source interleave). Only for multi-word.
+          if (words.length > 1) {
+            flat = flat
+              .map(function (v, i) { return { v: v, h: _wordHits(v.title), i: i }; })
+              .sort(function (a, b) { return b.h - a.h || a.i - b.i; })
+              .map(function (x) { return x.v; });
+          }
           // A2: client-side sort for all_sources search (no single source to honor
           // a server sort). Only duration is uniformly available across adapters;
           // 'relevance' keeps the natural per-source-interleaved order (default).
@@ -2536,10 +2556,10 @@ SOURCES.push({
     // search() split the id on ':' → &ordering= + &period= (no ':' = all-time, no period param).
     // Default (sorts[0]) = "popular THIS WEEK" so the listing refreshes weekly instead of
     // showing the same all-time top videos every time. All-time + rating + recent stay available.
-    sorts: [{ id: 'mostviewed:weekly', label: 'Популярное за неделю' }].concat(
-      _cats('mostviewed:По популярности (всё время),rating:По рейтингу,mostrecent:Свежее')).concat([
-      { id: 'mostviewed:monthly', label: 'Популярное за месяц' }
-    ]),
+    // The webmasters API IGNORES &period (the week/month windows returned the all-time list,
+    // verified 30/30 overlap) → those period sorts were a no-op and are removed. Default to
+    // mostrecent («Свежее»): it actually filters (newest first) AND refreshes constantly.
+    sorts: _cats('mostrecent:Свежее,mostviewed:По популярности,rating:По рейтингу'),
     // Pornhub categories are SLUGS passed to the webmasters API (&category=), not numeric ids.
     // Slugs verified against the webmasters/categories endpoint.
     categories: _cats('18-25:Teen 18-25,ai:AI,ai-straight:AI Straight,amateur:Amateur,anal:Anal,arab:Arab,asian:Asian,babe:Babe,babysitter-18:Babysitter 18+,bbw:BBW,behind-the-scenes:Behind The Scenes,big-ass:Big Ass,big-dick:Big Dick,big-tits:Big Tits,bisexual-male:Bisexual Male,black:Black,blonde:Blonde,blowjob:Blowjob,bondage:Bondage,brazilian:Brazilian,british:British,brunette:Brunette,bukkake:Bukkake,cartoon:Cartoon,casting:Casting,celebrity:Celebrity,college-18:College 18+,compilation:Compilation,cosplay:Cosplay,creampie:Creampie,cuckold:Cuckold,cumshot:Cumshot,czech:Czech,deepthroat:Deepthroat,double-penetration:Double Penetration,ebony:Ebony,euro:Euro,exclusive:Exclusive,feet:Feet,female-orgasm:Female Orgasm,fetish:Fetish,ffm:FFM,fingering:Fingering,fisting:Fisting,fmm:FMM,french:French,gangbang:Gangbang,gay:Gay,german:German,golden-shower:Golden Shower,handjob:Handjob,hardcore:Hardcore,hd-porn:HD Porn,hentai:Hentai,indian:Indian,interracial:Interracial,italian:Italian,japanese:Japanese,korean:Korean,latina:Latina,lesbian:Lesbian,lipstick:Lipstick,massage:Massage,masturbation:Masturbation,mature:Mature,milf:MILF,muscular-men:Muscular Men,old-young-18:Old/Young 18+,orgy:Orgy,parody:Parody,party:Party,pissing:Pissing,pornstar:Pornstar,pov:POV,public:Public,pussy-licking:Pussy Licking,real-couples:Real Couples,reality:Reality,red-head:Red Head,role-play:Role Play,romantic:Romantic,rough-sex:Rough Sex,russian:Russian,school-18:School 18+,scissoring:Scissoring,small-tits:Small Tits,smoking:Smoking,solo-female:Solo Female,solo-male:Solo Male,squirt:Squirt,step-fantasy:Step Fantasy,strap-on:Strap On,striptease:Striptease,tattooed-women:Tattooed Women,threesome:Threesome,toys:Toys,trans-male:Trans Male,trans-with-girl:Trans With Girl,trans-with-guy:Trans With Guy,transgender:Transgender,twink-18:Twink 18+,uncensored:Uncensored,verified-amateurs:Verified Amateurs,verified-couples:Verified Couples,verified-models:Verified Models,vintage:Vintage,vr:VR,webcam:Webcam,wet-pussy:Wet Pussy')
@@ -3650,7 +3670,8 @@ SOURCES.push({
     var self = this;
     var p = page || 1;
     var q = encodeURIComponent(query);
-    var url = 'https://www.youjizz.com/search/videos/' + q + '-' + p + '.html';
+    // youjizz search route is /search/{q}-{page}.html (NOT /search/videos/… — that 404s → 0 results).
+    var url = 'https://www.youjizz.com/search/' + q + '-' + p + '.html';
     // Status-tolerant: this search route can return a non-200 whose body still holds
     // result cards (datacenter IP saw a 404); cherryFetch would throw and drop them.
     return _fetchAny(url).then(function(html) {
