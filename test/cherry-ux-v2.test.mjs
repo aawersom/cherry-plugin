@@ -1479,6 +1479,33 @@ describe('Phase 3 A1: search callbacks do NOT toggle on the push path', () => {
     expect(body).toMatch(/_searchPicker\(/);
     expect(body).toMatch(/all_sources:\s*true/);
   });
+
+  // Voice search on Android TV is NATIVE (AndroidJS.voiceStart → window.voiceResult), the
+  // same hook Lampa's own keyboard uses. The WebView's Web Speech API has the constructor
+  // but no mic (navigator.mediaDevices absent) → it must NOT be used/offered on TV.
+  it('voice uses the native LAMPA path (AndroidJS.voiceStart + window.voiceResult)', () => {
+    var at = SRC.indexOf('function _voiceNative(');
+    expect(at).toBeGreaterThan(-1);
+    var nat = SRC.slice(at, at + 260);
+    expect(nat).toMatch(/window\.AndroidJS[\s\S]{0,60}voiceStart/);
+    expect(nat).toMatch(/Lampa\.Android[\s\S]{0,40}voiceStart/);
+    var vq = SRC.indexOf('function _voiceQuery(');
+    var vbody = SRC.slice(vq, vq + 900);
+    expect(vbody).toMatch(/window\.voiceResult\s*=\s*function/);   // result hook the app calls
+    expect(vbody).toMatch(/Lampa\.Android\.voiceStart\(\)/);
+  });
+  it('Web Speech voice requires a real mic (mediaDevices.getUserMedia), not just the constructor', () => {
+    var at = SRC.indexOf('function _voiceWeb(');
+    var body = SRC.slice(at, at + 260);
+    expect(body).toMatch(/navigator\.mediaDevices/);
+    expect(body).toMatch(/getUserMedia/);
+  });
+  it('search picker gates the voice item on _voiceAvailable() (not the raw SR constructor)', () => {
+    var at = SRC.indexOf('function _searchPicker(');
+    var body = SRC.slice(at, at + 900);
+    expect(body).toMatch(/if\s*\(_voiceAvailable\(\)\)/);
+    expect(body).not.toMatch(/if\s*\(window\.SpeechRecognition\s*\|\|\s*window\.webkitSpeechRecognition\)\s*\{[\s\S]{0,80}__voice__/);
+  });
 });
 
 describe('Phase 3 A3(a): eporner SEARCH uses relevance order (no forced most-popular)', () => {

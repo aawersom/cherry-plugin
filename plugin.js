@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.4';
+  var CHERRY_VERSION = '0.13.5';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -2512,26 +2512,61 @@ function _searchGroups(query) {
 var _POPULAR_TERMS = ['milf', 'teen', 'anal', 'blonde', 'mature', 'lesbian', 'japanese',
     'big tits', 'creampie', 'threesome', 'massage', 'step mom', 'pov', 'amateur', 'asian'];
 
-// Best-effort voice input via the WebView SpeechRecognition (Android TV mic). Calls
-// onText(query) on success; returns false (caller falls back to keyboard) if unavailable.
+// Voice availability — two distinct mechanisms:
+//  • NATIVE (LAMPA Android TV app): recognition runs in the app via AndroidJS.voiceStart()
+//    using the REMOTE mic; the app delivers the text by calling window.voiceResult(text)
+//    — the exact hook Lampa's own search keyboard registers. This is the ONLY voice that
+//    works on a TV.
+//  • WEB Speech API: the WebView exposes the SpeechRecognition constructor but has NO mic
+//    pipeline (navigator.mediaDevices is absent on Android WebView) → rec.start() errors
+//    silently. So only offer/use it where a real mic API exists (e.g. a desktop browser).
+function _voiceNative() {
+    return !!(window.AndroidJS && typeof window.AndroidJS.voiceStart === 'function'
+              && typeof Lampa !== 'undefined' && Lampa.Android && typeof Lampa.Android.voiceStart === 'function');
+}
+function _voiceWeb() {
+    return !!((window.SpeechRecognition || window.webkitSpeechRecognition)
+              && navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function');
+}
+function _voiceAvailable() { return _voiceNative() || _voiceWeb(); }
+
+// Start voice input → onText(query) on success. Returns false (caller falls back to the
+// keyboard) when no working voice path exists.
 function _voiceQuery(onText) {
-    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) return false;
-    try {
-        var rec = new SR();
-        rec.lang = 'ru-RU';
-        rec.interimResults = false;
-        rec.maxAlternatives = 1;
-        try { Lampa.Noty.show(Lampa.Lang.translate('cherry_search_listening')); } catch (e) {}
-        rec.onresult = function (e) {
-            var t = (e.results && e.results[0] && e.results[0][0] && e.results[0][0].transcript) || '';
-            if (t.trim()) onText(t.trim());
-            else { try { Lampa.Controller.toggle('content'); } catch (e2) {} }
-        };
-        rec.onerror = function () { try { Lampa.Noty.show(Lampa.Lang.translate('cherry_error'), { style: 'warn' }); Lampa.Controller.toggle('content'); } catch (e2) {} };
-        rec.start();
-        return true;
-    } catch (e) { return false; }
+    // Native Android TV — the recognizer is the app's; result arrives via window.voiceResult.
+    if (_voiceNative()) {
+        try {
+            window.voiceResult = function (text) {
+                window.voiceResult = null;
+                var t = ('' + (text || '')).trim();
+                if (t) onText(t);
+                else { try { Lampa.Controller.toggle('content'); } catch (e2) {} }
+            };
+            try { Lampa.Noty.show(Lampa.Lang.translate('cherry_search_listening')); } catch (e) {}
+            Lampa.Android.voiceStart();
+            return true;
+        } catch (e) { window.voiceResult = null; }
+    }
+    // Web Speech (desktop browsers with a real mic).
+    if (_voiceWeb()) {
+        var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        try {
+            var rec = new SR();
+            rec.lang = 'ru-RU';
+            rec.interimResults = false;
+            rec.maxAlternatives = 1;
+            try { Lampa.Noty.show(Lampa.Lang.translate('cherry_search_listening')); } catch (e) {}
+            rec.onresult = function (e) {
+                var t = (e.results && e.results[0] && e.results[0][0] && e.results[0][0].transcript) || '';
+                if (t.trim()) onText(t.trim());
+                else { try { Lampa.Controller.toggle('content'); } catch (e2) {} }
+            };
+            rec.onerror = function () { try { Lampa.Noty.show(Lampa.Lang.translate('cherry_error'), { style: 'warn' }); Lampa.Controller.toggle('content'); } catch (e2) {} };
+            rec.start();
+            return true;
+        } catch (e) { return false; }
+    }
+    return false;
 }
 
 // Search entry picker: popular quick-picks + voice + manual type. `onQuery(text)` runs the
@@ -2547,7 +2582,7 @@ function _searchPicker(prefill, onQuery) {
             });
     }
     var items = [{ title: '✎ ' + Lampa.Lang.translate('cherry_search_type'), id: '__type__' }];
-    if (window.SpeechRecognition || window.webkitSpeechRecognition) {
+    if (_voiceAvailable()) {
         items.push({ title: '🎤 ' + Lampa.Lang.translate('cherry_search_voice'), id: '__voice__' });
     }
     _POPULAR_TERMS.forEach(function (t) { items.push({ title: t, id: t }); });

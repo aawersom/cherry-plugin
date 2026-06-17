@@ -228,6 +228,14 @@ and 6 `Lampa.Template.add` registrations (`cherry_main`, `cherry_source_card`,
 > Search is opened via **`Lampa.Input.edit`**, NOT `Lampa.Keyboard.show` — the latter
 > does not exist on this build.
 
+> **Voice input (`_voiceQuery`, v0.13.5):** on the LAMPA Android TV app, recognition is
+> NATIVE — `Lampa.Android.voiceStart()` (remote mic) and the app returns the text via the
+> global `window.voiceResult(text)` hook (the same one Lampa's own search keyboard uses).
+> The WebView's Web Speech API exposes the `SpeechRecognition` constructor but has **no mic
+> pipeline** (`navigator.mediaDevices` absent) so it silently fails on TV — it's used only as
+> a desktop-browser fallback (gated on `getUserMedia`). The «🎤 Голосом» picker item shows
+> when `_voiceAvailable()` (native OR a real-mic browser), not on the bare constructor.
+
 **all_sources mechanics** (`_gridLoad`, `plugin.js:477`): runs `src.search(query, page)`
 over every adapter in parallel (`Promise.all`, per-source failures swallowed). For Latin
 queries a per-source title-match filter is applied *before* `slice(0,10)` (Cyrillic queries
