@@ -326,8 +326,12 @@ The card long-press menu (`cardRender.onMenu`, `plugin.js:834`) offers two relat
    - Coverage ~16 channels. Only shown when `cardSrc.getRelated` exists.
    - On player close, a related grid is auto-pushed if `getRelated` resolved in the
      background (`playVideo` + the `player` `destroy` listener, REQ-4).
+   - **Infinite scroll (v0.13.4):** the site's related block is a fixed list (ignores `page`),
+     so the grid CONTINUES into the channel's own feed: page 1 = `getRelated(video)`, page 2+ =
+     `src.browse('', cp)` (paginates everywhere after v0.13.3). Empty related → feed from page 1.
+     Title-similarity is the separate «Похожие названия» item, so search is not duplicated here.
 2. **«Похожие названия»** — a keyword search of the video's title words across all sources
-   (`all_sources:true`), always offered.
+   (`all_sources:true`), always offered. Already paginates (the all_sources fan-out).
 
 ---
 

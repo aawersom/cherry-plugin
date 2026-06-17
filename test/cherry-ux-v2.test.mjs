@@ -543,13 +543,17 @@ describe('plugin.js source assertions (anti-drift)', () => {
     // No longer awaits getRelated before pushing (the grid fetches per page).
     expect(body).not.toMatch(/cardSrc\.getRelated\(element\)\.then/);
   });
-  it('C9: _gridLoad has a paginated related_video branch calling getRelated(video, page) via _derivePages', () => {
+  it('C9: related_video branch = getRelated(page 1) + channel-feed continuation (infinite scroll)', () => {
     var at = SRC.indexOf('if (object.related_video)');
     expect(at).toBeGreaterThan(-1);
-    var body = SRC.slice(at, at + 700);
-    expect(body).toMatch(/getRelated\(\s*object\.related_video\s*,\s*page\s*\)/);
-    expect(body).toMatch(/_derivePages\(/);
-    // Stamps each related card with its source so nested «Похожие» works.
+    var body = SRC.slice(at, at + 1400);
+    // Page 1 = the site's related block.
+    expect(body).toMatch(/relSrc\.getRelated\(relVideo,\s*1\)/);
+    // Page 2+ continuation = the channel's own browse feed (paginates everywhere).
+    expect(body).toMatch(/relSrc\.browse\(\s*''\s*,\s*cp\s*,\s*relSort\s*\)/);
+    // Empty related → feed from page 1 (no dead first page).
+    expect(body).toMatch(/_relNoP1/);
+    // Stamps each card with its source so nested «Похожие» works.
     expect(body).toMatch(/v\.source\s*=\s*relSrc\.id/);
   });
   it('labels: cherry_related = "Похожие" / "Related"', () => {
