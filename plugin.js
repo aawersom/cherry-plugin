@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.3';
+  var CHERRY_VERSION = '0.13.4';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -1014,27 +1014,40 @@
         return;
       }
 
-      // «Похожие»: a PAGINATED grid of the card's source-site related videos.
-      // Carries the VIDEO (related_video) + its source, not a pre-fetched list, so
-      // it scrolls like any other grid. getRelated(video, page) returns an array;
-      // we map it through toCard and derive pages generously via _derivePages.
-      // Adapters whose related is the video-page's fixed block ignore `page` and
-      // re-serve the same cards → the cross-page dedup guard yields ZERO new cards
-      // on page 2 → the grid stops cleanly after page 1 (honest, no infinite dupes).
-      // Any adapter that threads `page` (reusing a listing parser) keeps scrolling.
+      // «Похожие» — infinite scroll (REQ: scroll everywhere). The site's own related
+      // block (getRelated) is a FIXED list that ignores `page`, so on its own it can't
+      // scroll. So the grid continues into the channel's OWN feed, which paginates
+      // EVERYWHERE after v0.13.3 (the reliable "more like this site" continuation):
+      //   page 1   → getRelated(video)   — the site's recommended block (most relevant)
+      //   page 2+  → src.browse('', cp)   — the channel feed (newest), keeps scrolling
+      // Title-similarity is the SEPARATE «Похожие названия» item, so we don't duplicate
+      // search here. The grid dedups across pages by card id, so repeats are dropped.
       if (object.related_video) {
         var relSrc = sourceById(object.related_video_source || object.source_id);
-        if (!relSrc || !relSrc.getRelated) { resolve([], 1); return; }
-        relSrc.getRelated(object.related_video, page).then(function (rel) {
-          rel = rel || [];
-          // Stamp each related card with the source it came from so nested
-          // «Похожие» on these cards re-opens the same channel.
-          rel.forEach(function (v) { if (v && !v.source) v.source = relSrc.id; });
-          resolve(rel.map(toCard), _derivePages(rel.length, page, 20));
-        }).catch(function (err) {
-          console.warn('[Cherry] related load error (page ' + page + '):', err);
-          reject();
-        });
+        if (!relSrc) { resolve([], 1); return; }
+        var relVideo = object.related_video;
+        var relSort  = (relSrc.cfg && relSrc.cfg.sorts && relSrc.cfg.sorts[0] && relSrc.cfg.sorts[0].id) || '';
+        var _relDone = function (items) {
+          items = (items || []).filter(function (v) { return v && v.url !== relVideo.url; });
+          items.forEach(function (v) { if (v && !v.source) v.source = relSrc.id; });
+          resolve(items.map(toCard), items.length ? (page + 50) : page);
+        };
+        var _relFeed = function (cp) {
+          if (!relSrc.browse) { resolve([], page); return; }
+          relSrc.browse('', cp, relSort).then(function (r) { _relDone((r && r.items) || []); })
+            .catch(function () { resolve([], page); });
+        };
+        if (page === 1) {
+          var gp = relSrc.getRelated ? relSrc.getRelated(relVideo, 1) : Promise.resolve([]);
+          Promise.resolve(gp).then(function (rel) {
+            rel = (rel || []).filter(function (v) { return v && v.url !== relVideo.url; });
+            if (!rel.length) { object._relNoP1 = true; _relFeed(1); return; }  // no site-related → feed from page 1
+            rel.forEach(function (v) { if (v && !v.source) v.source = relSrc.id; });
+            resolve(rel.map(toCard), page + 50);   // always offer the feed continuation
+          }).catch(function () { object._relNoP1 = true; _relFeed(1); });
+          return;
+        }
+        _relFeed(object._relNoP1 ? page : (page - 1));  // align cp to whether page 1 was related
         return;
       }
 
