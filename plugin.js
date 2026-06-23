@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.6';
+  var CHERRY_VERSION = '0.13.7';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -3266,6 +3266,11 @@ SOURCES.push({
       var href = hrefMatch[1];
       var rawId = hrefMatch[2] || '';
       var videoUrl = 'https://www.xnxx.com' + href;
+      // Listing hrefs now carry a thumbnail-hover placeholder segment
+      // /video-{id}/{numid}/THUMBNUM/{slug} — the literal "THUMBNUM" is never substituted,
+      // so the page returns a 77-byte "Please visit xnxx.com" stub → getStream finds no
+      // stream. Collapse to the canonical /video-{id}/{slug} (verified playable).
+      videoUrl = videoUrl.replace(/\/\d+\/THUMBNUM\//, '/').replace('/THUMBNUM/', '/').replace('/THUMBNUM', '');
 
       var thumbMatch = block.match(/data-src="([^"]+)"/) || block.match(/src="([^"]+\.jpg[^"]*)"/);
       var thumb = thumbMatch ? thumbMatch[1] : '';
@@ -3922,6 +3927,9 @@ SOURCES.push({
                        block.match(/data-src="([^"?#]+\.jpe?g)/i) ||
                        block.match(/src="([^"?#]+\.jpe?g)/i);
       var thumb = thumbMatch ? thumbMatch[1] : '';
+      // youjizz serves protocol-relative thumbs (//cdne-pics.youjizz.com/…); normalize to
+      // https:// so cards render consistently (matches every other source's absolute URL).
+      if (thumb.indexOf('//') === 0) thumb = 'https:' + thumb;
 
       var titleMatch = block.match(/<div[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\/div>/);
       var title = titleMatch ? stripTags(titleMatch[1]) : '';

@@ -2232,6 +2232,24 @@ describe('KVS categories — _buildCatUrl POST behaviour', () => {
   });
 });
 
+describe('Playback/thumb hygiene — plugin.js source assertions (anti-drift)', () => {
+  // xnxx listing hrefs carry a /video-{id}/{num}/THUMBNUM/{slug} hover placeholder; the
+  // literal "THUMBNUM" makes the page a 77-byte stub → getStream finds no stream. The
+  // parser must collapse it to the canonical /video-{id}/{slug}.
+  it('xnxx strips the THUMBNUM hover placeholder from the video url', () => {
+    var at = SRC.indexOf("id: 'xnxx'");
+    var body = SRC.slice(at, at + 1600);
+    expect(body).toContain('THUMBNUM');
+    expect(body).toContain(".replace('/THUMBNUM', '')");
+  });
+  // youjizz serves protocol-relative //cdne-pics… thumbs; normalize to https:// for
+  // consistent rendering.
+  it('youjizz normalizes protocol-relative thumbs to https://', () => {
+    // the fix line is unique to the youjizz parser
+    expect(SRC).toContain("thumb = 'https:' + thumb");
+  });
+});
+
 describe('Infinite scroll — default-feed URLs paginate (anti-drift)', () => {
   // The site homepages don't paginate; these per-channel feeds DO. Regressing any of
   // these back to the homepage breaks "infinite scroll everywhere". (Verified on stand.)
