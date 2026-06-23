@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.5';
+  var CHERRY_VERSION = '0.13.6';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -2858,18 +2858,18 @@ SOURCES.push({
     return items;
   },
 
+  // Model videos via the webmasters API SEARCH by the performer's name (de-slugged from the
+  // url). The HTML /pornstar/{slug}/videos path was doubly unreliable: the slug is GUESSED
+  // from the name so it 404s on mismatches (e.g. "Lisa Canon"), and _parseHtmlCards on the
+  // model page intermittently yields a single junk card. The API returns clean _mapVideo
+  // cards (playable m3u8 + paginated + carrying card.model), works for ANY name, and shares
+  // the same empty-retry as catalog/search. Stand-verified: 30/page, page 2 brings fresh.
   browseByModel: function(modelUrl, page) {
-    var self = this;
     var p = page || 1;
-    var url = modelUrl.replace(/\/$/, '') + '/videos?page=' + p;
-    return cherryFetch(url).then(function(html) {
-      var items = self._parseHtmlCards(html);
-      var totalMatch = html.match(/paginationCount[^>]*>[^<]*<strong>([^<]+)<\/strong>/);
-      var total = totalMatch
-        ? Math.ceil(parseInt((totalMatch[1] || '0').replace(/[^0-9]/g, ''), 10) / 30)
-        : (p + 5);
-      return { items: items, total_pages: total || 1 };
-    }).catch(function() { return { items: [], total_pages: 0 }; });
+    var slug = (String(modelUrl || '').match(/\/(?:pornstar|model|channels|channel)\/([^\/?#]+)/) || [null, ''])[1] || '';
+    var name = slug.replace(/[-_]+/g, ' ').trim();
+    if (!name) return Promise.resolve({ items: [], total_pages: 0 });
+    return this.search(name, p, 'mostrecent');
   },
 
   // Models: /pornstars HTML index (paginated ?page=N). Links /pornstar/{slug};
