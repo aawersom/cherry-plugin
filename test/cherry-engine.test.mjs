@@ -2789,9 +2789,9 @@ describe('S1 total_pages anti-drift', function () {
 // (re-activates the dead browseByModel path — see onMenu "Модель").
 // ============================================================
 
-// Verbatim mirror of the model branch added to pornhub._mapVideo.
-// browseByModel() appends "/videos?page=P" itself, so the url must be the
-// pornstar page BASE (/pornstar/{slug}) WITHOUT a trailing /videos.
+// Verbatim mirror of the model branch added to pornhub._mapVideo. model.url is the
+// pornstar page BASE (/pornstar/{slug}); browseByModel de-slugs it to a NAME and resolves
+// the videos via the webmasters API search (the HTML pornstar page was unreliable).
 function phMapModel(v) {
   var card = { id: 'x', source: 'pornhub', title: v.title || '' };
   if (v.pornstars && v.pornstars[0] && v.pornstars[0].pornstar_name) {
@@ -2819,7 +2819,7 @@ describe('S4 pornhub _mapVideo model field', function () {
     expect(card.model.url).toBe('https://www.pornhub.com/pornstar/l-a-o-connor');
   });
 
-  it('model.url has NO trailing /videos (browseByModel appends it)', function () {
+  it('model.url is the pornstar BASE (no trailing /videos)', function () {
     var card = phMapModel({ pornstars: [{ pornstar_name: 'Riley Reid' }] });
     expect(card.model.url).not.toMatch(/\/videos/);
     expect(card.model.url.endsWith('/riley-reid')).toBe(true);
@@ -2836,6 +2836,21 @@ describe('S4 pornhub _mapVideo model field', function () {
     expect(/v\.pornstars\s*&&\s*v\.pornstars\[0\]\s*&&\s*v\.pornstars\[0\]\.pornstar_name/.test(PLUGIN)).toBe(true);
     expect(/card\.model\s*=\s*\{/.test(PLUGIN)).toBe(true);
     expect(/https:\/\/www\.pornhub\.com\/pornstar\//.test(PLUGIN)).toBe(true);
+  });
+
+  // browseByModel resolves a pornstar's videos via the webmasters API SEARCH by the
+  // de-slugged name — NOT the HTML /pornstar/{slug}/videos page (slug often 404s, e.g.
+  // "Lisa Canon"; and the scrape intermittently yields 1 junk card). API cards are clean
+  // _mapVideo objects → reliable, paginated, and playable (m3u8). Stand-verified.
+  it('anti-drift: pornhub browseByModel de-slugs the url and uses the API search', function () {
+    var PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+    var at = PLUGIN.indexOf('browseByModel: function(modelUrl, page)');
+    expect(at).toBeGreaterThan(-1);
+    var body = PLUGIN.slice(at, at + 600);
+    expect(body).toMatch(/pornstar\|model\|channels\|channel/);          // de-slug from any namespace
+    expect(body).toMatch(/replace\(\/\[-_\]\+\/g, ' '\)/);               // slug → name
+    expect(body).toMatch(/this\.search\(name, p, 'mostrecent'\)/);       // API search by name
+    expect(body).not.toMatch(/_parseHtmlCards/);                          // no more HTML scrape here
   });
 });
 
