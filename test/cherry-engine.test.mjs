@@ -2479,10 +2479,13 @@ describe('duration extraction (shipped parsers vs real markup)', function () {
   it('3movs: <div class="time">6:36</div> ~945 chars past href', function () {
     const _3movsCards = load('_3movsCards');
     const html = '<a class="wrap_image" href="https://www.3movs.com/videos/178834/x/" title="X">' +
-      '<img class="img" data-src="https://t/a.jpg"></a>' + '<span class="ico-fav-1" title="Watch Later"></span>'.padEnd(900, ' ') +
+      '<img class="img" data-src="https://t/a.jpg" data-preview="https://www.3movs.com/get_file/8/x/178834_preview.mp4/"></a>' +
+      '<span class="ico-fav-1" title="Watch Later"></span>'.padEnd(900, ' ') +
       '<div class="time">6:36</div>';
     const items = _3movsCards(html);
     expect(items[0].duration).toBe(396);
+    // hover-preview clip extracted from data-preview (past the 600-char title window)
+    expect(items[0].preview).toBe('https://www.3movs.com/get_file/8/x/178834_preview.mp4/');
   });
 
   it('pornve: <div class="time">11:10</div> ~768 chars past href (item-time decoy ignored)', function () {
@@ -2505,10 +2508,12 @@ describe('duration extraction (shipped parsers vs real markup)', function () {
 
   it('perfektdamen: <ul class="video-meta"><li><i class="fa fa-clock-o"></i> <span>24:14</span>', function () {
     const _perfektCards = load('_perfektCards');
-    const html = '<a href="/video/12345/" title="X"><img data-original="//static.perfektdamen.co/a.jpg"></a>' +
+    const html = '<a href="/video/12345/" title="X" data-preview-custom="https://www.perfektdamen.co/get_file/13/x/12345_preview360p.mp4/"><img data-original="//static.perfektdamen.co/a.jpg"></a>' +
       ''.padEnd(2000, ' ') + '<ul class="video-meta"><li><i class="fa fa-clock-o"></i> <span>24:14</span></li></ul>';
     const items = _perfektCards(html);
     expect(items[0].duration).toBe(1454);
+    // hover-preview clip extracted from data-preview-custom
+    expect(items[0].preview).toBe('https://www.perfektdamen.co/get_file/13/x/12345_preview360p.mp4/');
   });
 
   it('24rolika: <div class="th-time icon-l"><span class="fa fa-clock-o"></span>39:20</div>', function () {

@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.7';
+  var CHERRY_VERSION = '0.13.8';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -4861,8 +4861,9 @@ function _3movsCards(html) {
         var duration = parseDur(_attr(durChunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
         var views    = parseViews(_attr(durChunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
 
-        // Hover-preview mp4 — every 3movs card carries data-preview="…_preview.mp4/".
-        var preview = _attr(chunk, /data-preview="([^"]+\.mp4[^"]*)"/i);
+        // Hover-preview mp4 — every 3movs card carries data-preview="…_preview.mp4/", but it
+        // sits past the 600-char title window (alongside the thumb), so read the wider durChunk.
+        var preview = _attr(durChunk, /data-preview="([^"]+\.mp4[^"]*)"/i);
 
         if (title || thumb) {
             items.push({ id: id, source: '3movs', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views, preview: preview || undefined });
@@ -5646,8 +5647,12 @@ function _perfektCards(html) {
         );
         var views    = parseViews(_attr(durChunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
 
+        // Hover-preview clip: data-preview-custom="…/get_file/…/{id}_preview360p.mp4/" on the card.
+        // Read the card-bounded durChunk (the attr sits past the forward title window).
+        var preview = _attr(durChunk, /data-preview-custom="(https?:\/\/[^"]+\.mp4[^"]*)"/i);
+
         if (title || thumb) {
-            items.push({ id: id, source: 'perfektdamen', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
+            items.push({ id: id, source: 'perfektdamen', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views, preview: preview || undefined });
         }
     }
     return items;
