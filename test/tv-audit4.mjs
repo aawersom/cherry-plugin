@@ -14,6 +14,10 @@ await send('Runtime.enable');
 const evalJS = async (expr, t = 80000) => { const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true, timeout: t }); if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description || JSON.stringify(r.exceptionDetails)); return r.result.value; };
 let code = readFileSync('D:/Works/Lampa/plugin.js', 'utf8').replace(/^﻿/, '');
 code = code.replace('if (window.plugin_cherry_ready) return;', 'window.plugin_cherry_ready = false;');
+// Don't call startPlugin() on re-inject — Lampa.Menu.addButton crashes when Lampa hasn't
+// reached its main menu yet, aborting before SOURCES/exports are defined. Skipping it still
+// runs the whole plugin body (channels, helpers) and exposes __C.
+code = code.replace('if (window.appready) {', 'if (false) {');
 const ix = code.lastIndexOf('})();');
 code = code.slice(0, ix) + '\n;try{window.__C={SOURCES:SOURCES,cherryFetch:cherryFetch,buildProxyUrl:buildProxyUrl,_isAndroid:_isAndroid,_forceProxyAndroid:(typeof _forceProxyAndroid!=="undefined"?_forceProxyAndroid:function(){return false;}),bestQualityUrl:bestQualityUrl,PROXY:PROXY_URL};}catch(e){window.__C_ERR=String(e);}\n' + code.slice(ix);
 await evalJS('window.appready=true;');

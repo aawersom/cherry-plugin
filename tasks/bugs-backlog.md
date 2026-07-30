@@ -139,3 +139,28 @@ embed+thumbs, без клипа), hqporner (нет атрибутов), pornone 
 (data-preview только в JS-hover, не на карточке), porndig (JS-lazy, инлайн только в сайдбаре), tizam,
 ebun (нет атрибутов), lenporno (класс has-trailer без inline-URL), 24rolika (сайт отдаёт 530).
 Итог: в «Все видео»/поиске превью теперь у ~14 каналов из 24; остальные физически без hover-клипа.
+
+## Полная верификация 2026-06-25 (эмулятор + OmniRoute GPT-5.5 + ruflo) — v0.13.8
+Прогон tv-audit3+tv-audit4 по всем 24 + device-IP liveness (техника OmniRoute: Range bytes=0-15 →
+магия mp4 `ftyp`). ИТОГ: плагин ЗДОРОВ, прежние фиксы держатся (xnxx playback, youjizz thumb,
+perfektdamen+3movs preview 100%, pornhub models 30+30, бесконечный скролл везде).
+
+Playback перепроверен по device-IP (не через прокси!): **pornone/3movs/familyporn/pornve = LIVE**
+(играют с резидентного device-IP; их 403 через прокси — ложный негатив, датацентр-ASN блокируется).
+
+ДВА site-side проблемных канала (безопасно плагином НЕ чинятся):
+- **24rolika — РЕШЕНО НЕЛЬЗЯ (site outage)**: все домены отдают HTTP 530 (Cloudflare origin down).
+  OmniRoute: скрейпер-сайд фикса нет, только retry/mirror. Канал уже деградирует gracefully (0 карточек).
+  Стоит понаблюдать — если 530 навсегда, отключить канал (сейчас добавляет ~7s таймаут к «Все видео»).
+- **ebun — hotlink на стриме**: mp4 `666-emded.com/get_file/...` играет с device-IP + NO-Referer ИЛИ
+  Referer=embed; 403 при Referer=lampa.mx (inner WebView-плеер) И 403 через ОБА прокси (CF+VPS — все
+  датацентр-IP заблокированы). Дефолтный внешний/нативный плеер шлёт no-referer → ebun играет у
+  большинства; проблема только у пользователей inner-плеера. OmniRoute-фикс = форс внешнего плеера
+  для ebun, НО нативный запуск плеера не тестируется через CDP → вслепую в прод не катим. На реальном ТВ.
+
+Превью: максимизировано — каналы с 0% (pornhub/eporner/hqporner/pornone/porntrex/porndig/tizam/ebun/
+lenporno) физически не отдают hover-клип (API/разметка). Поиск: возвращает результаты на всех живых
+каналах. Модели: работают; ✗MODSCRL = артефакт выборки model[0] (малонаполненный) или лимит сайта.
+
+Харнесс: tv-audit3/tv-audit4 теперь глушат вызов startPlugin() (appready→false) — ре-инъекция
+переживает состояние «Lampa не на главном меню» (иначе Lampa.Menu.addButton крашит до экспорта SOURCES).

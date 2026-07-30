@@ -14,6 +14,8 @@ await send('Runtime.enable');
 const evalJS = async (expr, t = 90000) => { const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true, timeout: t }); if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description || JSON.stringify(r.exceptionDetails)); return r.result.value; };
 let code = readFileSync('D:/Works/Lampa/plugin.js', 'utf8').replace(/^﻿/, '');
 code = code.replace('if (window.plugin_cherry_ready) return;', 'window.plugin_cherry_ready = false;');
+// Skip startPlugin() on re-inject (Lampa.Menu.addButton crashes before the menu exists).
+code = code.replace('if (window.appready) {', 'if (false) {');
 const ix = code.lastIndexOf('})();');
 code = code.slice(0, ix) + '\n;try{window.__CHERRY={SOURCES:SOURCES};}catch(e){window.__CHERRY_ERR=String(e);}\n' + code.slice(ix);
 await evalJS('window.appready=true;');
