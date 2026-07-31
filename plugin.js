@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.8';
+  var CHERRY_VERSION = '0.13.9';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -5055,8 +5055,10 @@ function _pornveCards(html) {
 
         var views = parseViews(_attr(durChunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
 
-        // Hover-preview mp4 — every pornve card carries data-preview="…_preview.mp4/".
-        var preview = _attr(chunk, /data-preview="([^"]+\.mp4[^"]*)"/i);
+        // Hover-preview mp4 — every pornve card carries data-preview="…_preview.mp4/", but on the
+        // /latest-updates/ feed it sits ~+536..+609 from the href, right at the 600-char chunk edge
+        // (→ flaky 10-85% extraction). Read the wider durChunk (+1200) so it's captured reliably.
+        var preview = _attr(durChunk, /data-preview="([^"]+\.mp4[^"]*)"/i);
 
         if (title || thumb) {
             items.push({ id: id, source: 'pornve', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views, preview: preview || undefined });

@@ -2497,6 +2497,15 @@ describe('duration extraction (shipped parsers vs real markup)', function () {
     const items = _pornveCards(html);
     expect(items[0].duration).toBe(670);
   });
+  it('pornve: preview captured when data-preview sits past the +600 chunk edge (durChunk)', function () {
+    const _pornveCards = load('_pornveCards');
+    // data-preview at ~+640 from the href — beyond the old 600 forward window, inside durChunk (1200)
+    const html = '<a href="https://pornve.com/video/546752/x/" title="X">' +
+      '<img src="https://cdn.pornve.com/contents/videos_screenshots/546000/546752/745x420/1.jpg" alt="X">' +
+      ''.padEnd(600, ' ') + '<video data-preview="https://cdn.pornve.com/get_file/1/x/546752_preview.mp4/"></video></a>';
+    const items = _pornveCards(html);
+    expect(items[0].preview).toBe('https://cdn.pornve.com/get_file/1/x/546752_preview.mp4/');
+  });
 
   it('porndig: <div class="bubble bubble_duration"><span>08:00</span> (inner span, far past href)', function () {
     const _porndigCards = load('_porndigCards');
