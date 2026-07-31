@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.10';
+  var CHERRY_VERSION = '0.13.11';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -2767,8 +2767,19 @@ SOURCES.push({
   host: 'pornhub.com',
 
   _mapVideo: function(v) {
+    // The webmasters API hands back the SAME frame under two signings: hash&validto
+    // (host pix-cdn77) and hdnea (Akamai token, host pix-fl). hash&validto URLs are
+    // IP-bound to the fetching host (our proxy), so they 404 in the device's <img>
+    // (blank card); hdnea URLs are time-tokened and render from any IP. Pick the
+    // first hdnea candidate across thumb/default_thumb/thumbs — verified 30/30 loads
+    // on-device (was v.thumbs[last], an always-hash&validto URL → ~40% blank).
     var thumb = '';
-    if (v.thumbs && v.thumbs.length) thumb = v.thumbs[v.thumbs.length - 1].src || v.thumbs[0].src || '';
+    var cands = [];
+    if (v.thumb) cands.push(v.thumb);
+    if (v.default_thumb) cands.push(v.default_thumb);
+    if (v.thumbs && v.thumbs.length) v.thumbs.forEach(function (t) { if (t && t.src) cands.push(t.src); });
+    for (var ci = 0; ci < cands.length; ci++) { if (cands[ci].indexOf('hdnea=') !== -1) { thumb = cands[ci]; break; } }
+    if (!thumb) thumb = cands[0] || '';
     // Extract video ID from URL for stable id
     var idMatch = (v.url || '').match(/viewkey=([a-z0-9]+)/i);
     var id = idMatch ? idMatch[1] : (v.video_id ? String(v.video_id) : String(Math.random()));
@@ -3080,6 +3091,11 @@ SOURCES.push({
 
       var thumbMatch = block.match(/data-src="([^"]+)"/) || block.match(/src="([^"]+\.jpg[^"]*)"/);
       var thumb = thumbMatch ? thumbMatch[1] : '';
+      // The listing <img data-src> may hold the unsubstituted hover-frame template
+      // (…/xv_THUMBNUM_t.jpg); the site's JS swaps THUMBNUM→frame index at runtime.
+      // Left literal it 404s as a static poster (blank card), so mirror the site's
+      // default and pin frame 1 — verified to load on-device (368×208).
+      if (thumb.indexOf('THUMBNUM') !== -1) thumb = thumb.replace(/THUMBNUM/g, '1');
       // Real preview: the data-pvv attr on the card (a .../preview.mp4 CDN URL).
       // Confirmed via curl on xvideos.com listing markup. No /preview.mp4 guess.
       var pvvMatch = block.match(/data-pvv="([^"]+)"/);
@@ -3334,6 +3350,10 @@ SOURCES.push({
 
       var thumbMatch = block.match(/data-src="([^"]+)"/) || block.match(/src="([^"]+\.jpg[^"]*)"/);
       var thumb = thumbMatch ? thumbMatch[1] : '';
+      // Same hover-frame template as xvideos: data-src can be …/xn_THUMBNUM_t.jpg,
+      // which the site's JS substitutes at runtime. Static, it 404s (blank card) —
+      // pin frame 1 to mirror the default view. Verified to load on-device (368×208).
+      if (thumb.indexOf('THUMBNUM') !== -1) thumb = thumb.replace(/THUMBNUM/g, '1');
       // Real preview: the data-pvv attr on the card (a .../preview.mp4 CDN URL).
       // Confirmed via curl on xnxx.com/search listing markup. No /preview.mp4 guess.
       var pvvMatch = block.match(/data-pvv="([^"]+)"/);
