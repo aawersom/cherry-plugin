@@ -1806,11 +1806,15 @@ describe('Phase 3 A3(b): all_sources per-source title-match filter before slice'
     expect(sliceIdx).toBeGreaterThan(filterIdx);
   });
 
-  it('non-ASCII (Cyrillic) queries skip the word filter', () => {
+  it('Cyrillic queries are RU→EN routed + build bilingual groups (no longer skipped)', () => {
     var at = SRC.indexOf('All-sources search');
     var body = SRC.slice(at, at + 5000);
-    expect(body).toMatch(/isLatin\s*=\s*\/\^\[\\x00-\\x7F\]\*\$\/\.test/);
-    expect(body).toMatch(/groups\s*=\s*\(object\.query\s*&&\s*isLatin\)/);
+    // groups are built for ANY query now (bilingual RU→EN), not gated on isLatin
+    expect(body).toMatch(/groups\s*=\s*object\.query\s*\?\s*_searchGroups\(object\.query\)/);
+    expect(body).not.toMatch(/isLatin/);
+    // English-title sources get the translated query; RU-title sources keep the original
+    expect(body).toMatch(/_enQuery\s*=\s*_isSearch\s*\?\s*_translateQuery\(object\.query\)/);
+    expect(body).toMatch(/\(_enQuery\s*&&\s*!_RU_SOURCES\[src\.id\]\)\s*\?\s*_enQuery\s*:\s*object\.query/);
   });
 
   it('keeps a source unfiltered top-N when its filtered slice is empty', () => {
@@ -1828,10 +1832,13 @@ describe('Phase 3 A3(b): all_sources per-source title-match filter before slice'
     expect(body).toMatch(/_normText\(v\.title\)\.slice\(0,\s*40\)/);
   });
 
-  it('exposes _searchGroups + _normText + a synonym map for global search', () => {
+  it('exposes _searchGroups + _normText + synonym + RU→EN maps for global search', () => {
     expect(SRC).toMatch(/function _searchGroups/);
     expect(SRC).toMatch(/function _normText/);
     expect(SRC).toMatch(/_SEARCH_SYN/);
+    expect(SRC).toMatch(/var _RU_EN\s*=/);
+    expect(SRC).toMatch(/function _translateQuery/);
+    expect(SRC).toMatch(/var _RU_SOURCES\s*=/);
   });
 });
 
@@ -1843,10 +1850,10 @@ describe('all_sources pagination wiring', () => {
     return SRC.slice(at, at + 6500);
   }
 
-  it('queries every source for the requested page (not hardcoded 1)', () => {
+  it('queries every source for the requested page (not hardcoded 1); RU→EN-routed query', () => {
     var body = allSourcesBody();
-    expect(body).toMatch(/src\.search\(object\.query,\s*page\)/);
-    expect(body).not.toMatch(/src\.search\(object\.query,\s*1\)/);
+    expect(body).toMatch(/src\.search\(_q,\s*page\)/);       // _q = per-source routed query
+    expect(body).not.toMatch(/src\.search\([^,]*,\s*1\)/);
   });
 
   it('tracks a full batch (>=10) to know another page exists', () => {
@@ -1925,9 +1932,9 @@ describe('«Все видео» — unified all-channel latest feed (all_videos)
   });
   it('the fan-out branch also fires for all_videos and browses (no query) per source', () => {
     var at = SRC.indexOf('All-sources search');
-    var body = SRC.slice(at, at + 1200);
+    var body = SRC.slice(at, at + 2000);
     expect(body).toMatch(/object\.all_sources\s*&&\s*object\.query\)\s*\|\|\s*object\.all_videos/);
-    expect(body).toMatch(/_isSearch\s*\?\s*src\.search\(object\.query,\s*page\)/);
+    expect(body).toMatch(/_isSearch\s*\?\s*src\.search\(_q,\s*page\)/);
     expect(body).toMatch(/:\s*src\.browse\(''\s*,\s*page/);
   });
   it('all_videos grid offers guaranteed client sort (not server sort/cats)', () => {

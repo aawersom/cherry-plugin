@@ -236,12 +236,27 @@ and 6 `Lampa.Template.add` registrations (`cherry_main`, `cherry_source_card`,
 > a desktop-browser fallback (gated on `getUserMedia`). The «🎤 Голосом» picker item shows
 > when `_voiceAvailable()` (native OR a real-mic browser), not on the bare constructor.
 
-**all_sources mechanics** (`_gridLoad`, `plugin.js:477`): runs `src.search(query, page)`
-over every adapter in parallel (`Promise.all`, per-source failures swallowed). For Latin
-queries a per-source title-match filter is applied *before* `slice(0,10)` (Cyrillic queries
-skip the filter — scraped titles are mostly English). Results are concatenated per source.
-The page paginates: if any source returns a full raw batch (≥10) the next page is offered.
-An optional client-side `duration` sort (`client_sort`) can be applied per page.
+**all_sources mechanics** (`_gridLoad`): runs `src.search(_q, page)` over every adapter in
+parallel (`Promise.all`, per-source failures swallowed), then filters + ranks + dedups.
+
+> **RU→EN search (v0.13.10)** — the user searches mostly in Russian but ~18/24 sites have
+> ENGLISH titles, so a Cyrillic query sent verbatim returned garbage there. Now:
+> - `_translateQuery(q)` maps a Cyrillic query to English via `_RU_EN` (greedy phrase-first, e.g.
+>   «большие сиськи»→"big tits", «мамка»→"milf"). English-title sources get the translated query;
+>   Russian-title sources (`_RU_SOURCES`: tizam/lenporno/24rolika/ebun/jopaonline/pornobolt/crocotube)
+>   get the ORIGINAL — so `_q` is chosen per source.
+> - `_searchGroups` is now **bilingual** (a RU word expands to `[ru, …EN]`), so the per-source
+>   title-match filter + relevance ranking work for Cyrillic too (the old `isLatin` skip is gone).
+> - Stand-verified: RU query top-20 relevance ~0-40% → **100%**.
+
+For each query a per-source title-match filter runs *before* `slice(0,10)` (empty filter → falls
+back to that source's top-N). Merged set is ranked by matched-group count + exact-phrase boost,
+then cross-source deduped (normalized title + bucketed duration). The page paginates: any full raw
+batch (≥10) offers the next page. A guaranteed client-side sort (`client_sort` duration/title)
+is available in every mode — the mitigation for sites whose server sort is a no-op.
+
+> **KVS search URL (v0.13.10):** xozilla/analdin search is the `/search/{q}/` PATH — the old `?s=`
+> query param was ignored (returned the homepage feed → irrelevant). Fixed → query honored.
 
 ---
 

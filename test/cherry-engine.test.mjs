@@ -3702,3 +3702,46 @@ describe('device bug fixes (8)', function () {
     expect(/total_pages: 1/.test(catBranch)).toBe(false);
   });
 });
+
+// =============================================================================
+// describe: RU→EN search translation (functional) — v0.13.10
+// =============================================================================
+describe('RU→EN search translation', function () {
+  const PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+  function balanced(startIdx) {
+    let depth = 0;
+    for (let k = PLUGIN.indexOf('{', startIdx); k < PLUGIN.length; k++) {
+      if (PLUGIN[k] === '{') depth++;
+      else if (PLUGIN[k] === '}' && --depth === 0) return k;
+    }
+    throw new Error('unbalanced from ' + startIdx);
+  }
+  function grabFn(name) { const i = PLUGIN.indexOf('function ' + name + '('); return PLUGIN.slice(i, balanced(i) + 1); }
+  function grabVar(name) { const i = PLUGIN.indexOf('var ' + name + ' ='); return PLUGIN.slice(i, balanced(i) + 1) + ';'; }
+  const ctx = [grabVar('_SEARCH_SYN'), grabVar('_RU_EN'), grabVar('_RU_SOURCES'), grabFn('_normText'), grabFn('_translateQuery'), grabFn('_searchGroups')].join('\n');
+  const M = new Function(ctx + '\nreturn {_translateQuery:_translateQuery,_searchGroups:_searchGroups,_RU_SOURCES:_RU_SOURCES};')();
+
+  it('translates Russian concept queries to English (greedy phrase first)', function () {
+    expect(M._translateQuery('большие сиськи')).toBe('big tits');
+    expect(M._translateQuery('мамка')).toBe('milf');
+    expect(M._translateQuery('молодая блондинка')).toBe('teen blonde');
+    expect(M._translateQuery('зрелая')).toBe('mature');
+  });
+  it('returns "" for an already-Latin query (no translation needed)', function () {
+    expect(M._translateQuery('milf')).toBe('');
+    expect(M._translateQuery('big tits')).toBe('');
+  });
+  it('builds BILINGUAL groups so a Russian word matches English titles', function () {
+    const g = M._searchGroups('мамка');
+    expect(g[0]).toContain('мамка');
+    expect(g[0]).toContain('milf');
+    const g2 = M._searchGroups('blonde milf');
+    expect(g2.length).toBe(2);
+    expect(g2[1]).toContain('mature'); // milf synonyms
+  });
+  it('tags the Russian-title sources for query routing', function () {
+    expect(M._RU_SOURCES.tizam).toBeTruthy();
+    expect(M._RU_SOURCES.lenporno).toBeTruthy();
+    expect(M._RU_SOURCES.xvideos).toBeFalsy();
+  });
+});
