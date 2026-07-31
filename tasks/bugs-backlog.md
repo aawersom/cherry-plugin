@@ -197,3 +197,23 @@ lenporno) физически не отдают hover-клип (API/размет�
   `_searchKeywords` уже дропает порно-филлеры (video/scene/hd/…), не менялся.
 - «Похожие» (getRelated+фид) — не query-based, не трогали.
 vitest 736 pass (+RU→EN функциональные + анти-дрейф). vitest/эмулятор без регрессий.
+
+## 2026-07-31 — Blank posters (~30% in «Все видео») — RESOLVED (v0.13.11)
+
+**Symptom (owner):** «нет некоторых превью (30% нет вообще) в разделе "все видео" и почти во
+всех каналах». The visible card image is `v.img = v.thumb`; the thumb *string* was present on
+100% of cards (old audits passed) but the `<img>` failed to render → blank card.
+
+**Root cause (emulator, real `Image()` load test):**
+- xvideos/xnxx: listing `data-src` sometimes holds the unsubstituted hover template
+  `xv_THUMBNUM_t.jpg` / `xn_THUMBNUM_t.jpg` → 404 as static poster (xv 5/27, xn 36/47 bad).
+- pornhub: `_mapVideo` picked `v.thumbs[last].src` = a `hash&validto` (pix-cdn77) URL that is
+  IP-bound to the fetching host → 404 in the device `<img>` (~18/30 blank). The API also ships an
+  `hdnea` (pix-fl, Akamai token) variant that renders from any IP.
+
+**Fix:** xv/xn `_parseCards` substitute `THUMBNUM`→`1`; pornhub `_mapVideo` prefers the first
+`hdnea`-signed candidate across `thumb`/`default_thumb`/`thumbs[]`.
+
+**Verification (emulator):** `test/tv-thumb-load-all.mjs` browse/cat/search/model/related = 100%
+for all 24 channels (24rolika down = HTTP 530 site outage, unfixable). «Все видео» merged feed:
+230/230 cards loaded = 100%, zero blanks. vitest 743 pass (+8 new regression tests).

@@ -1715,6 +1715,7 @@ function xvParseCards(html) {
     var videoUrl = 'https://www.xvideos2.com' + href;
     var thumbMatch = block.match(/data-src="([^"]+)"/) || block.match(/src="([^"]+\.jpg[^"]*)"/);
     var thumb = thumbMatch ? thumbMatch[1] : '';
+    if (thumb.indexOf('THUMBNUM') !== -1) thumb = thumb.replace(/THUMBNUM/g, '1');
     var pvvMatch = block.match(/data-pvv="([^"]+)"/);
     var preview = pvvMatch ? pvvMatch[1].replace(/\\\//g, '/') : '';
     var titleMatch = block.match(/<p[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)/) ||
@@ -1893,6 +1894,7 @@ function xnxxParseCards(html) {
     var videoUrl = 'https://www.xnxx.com' + href;
     var thumbMatch = block.match(/data-src="([^"]+)"/) || block.match(/src="([^"]+\.jpg[^"]*)"/);
     var thumb = thumbMatch ? thumbMatch[1] : '';
+    if (thumb.indexOf('THUMBNUM') !== -1) thumb = thumb.replace(/THUMBNUM/g, '1');
     var pvvMatch = block.match(/data-pvv="([^"]+)"/);
     var preview = pvvMatch ? pvvMatch[1].replace(/\\\//g, '/') : '';
     var titleMatch = block.match(/class="title"[^>]*>([^<]+)/) ||
@@ -2865,6 +2867,86 @@ describe('S4 pornhub _mapVideo model field', function () {
     expect(body).toMatch(/replace\(\/\[-_\]\+\/g, ' '\)/);               // slug → name
     expect(body).toMatch(/this\.search\(name, p, 'mostrecent'\)/);       // API search by name
     expect(body).not.toMatch(/_parseHtmlCards/);                          // no more HTML scrape here
+  });
+});
+
+// ============================================================
+// v0.13.11 — thumb (poster) LOAD fixes: the card image is v.img = v.thumb, so a
+// thumb URL that does not render as <img> yields a BLANK card. String-present was
+// already 100%; these three parsers emitted URLs that 404 in the device's <img>.
+// ============================================================
+describe('thumb LOAD fixes (v0.13.11)', function () {
+  // xvideos/xnxx listings sometimes ship the unsubstituted hover-frame template
+  // …/xv_THUMBNUM_t.jpg (the site JS swaps THUMBNUM→frame index at runtime). As a
+  // static poster it 404s. Both parsers now pin frame 1 (verified to load on-device).
+  var XV_UUID = 'bea1e4dc-c3a1-45c0-a60d-481dcde82ed8';
+  it('xvideos _parseCards substitutes THUMBNUM→1 in the poster', function () {
+    var html = '<div class="thumb-block ">' +
+      '<a href="/video.abc123/some-slug">x</a>' +
+      '<img src="https://www.xvideos2.com/static-files/img/lightbox/lightbox-blank.gif" ' +
+      'data-src="https://thumb-cdn77.xvideos-cdn.com/' + XV_UUID + '/5/xv_THUMBNUM_t.jpg">' +
+      '<p class="title">A</p></div>';
+    var items = xvParseCards(html);
+    expect(items.length).toBe(1);
+    expect(items[0].thumb).toBe('https://thumb-cdn77.xvideos-cdn.com/' + XV_UUID + '/5/xv_1_t.jpg');
+    expect(items[0].thumb.indexOf('THUMBNUM')).toBe(-1);
+  });
+  it('xvideos keeps a real frame number untouched', function () {
+    var html = '<div class="thumb-block ">' +
+      '<a href="/video.def456/slug">x</a>' +
+      '<img data-src="https://thumb-cdn77.xvideos-cdn.com/' + XV_UUID + '/5/xv_24_t.jpg">' +
+      '<p class="title">B</p></div>';
+    expect(xvParseCards(html)[0].thumb).toMatch(/xv_24_t\.jpg$/);
+  });
+  it('xnxx _parseCards substitutes THUMBNUM→1 in the poster', function () {
+    var html = '<div class="mozaique"><div class="thumb-block ">' +
+      '<a href="/video-xyz789/slug">x</a>' +
+      '<img data-src="https://thumb-cdn77.xnxx-cdn.com/' + XV_UUID + '/5/xn_THUMBNUM_t.jpg">' +
+      '<p class="title">C</p></div></div>';
+    var items = xnxxParseCards(html);
+    expect(items.length).toBe(1);
+    expect(items[0].thumb).toBe('https://thumb-cdn77.xnxx-cdn.com/' + XV_UUID + '/5/xn_1_t.jpg');
+    expect(items[0].thumb.indexOf('THUMBNUM')).toBe(-1);
+  });
+
+  // pornhub webmasters API returns the same frame under two signings: hash&validto
+  // (pix-cdn77, IP-bound to our fetch host → 404 in the device <img>) and hdnea
+  // (Akamai token, pix-fl → renders from any IP). _mapVideo now prefers hdnea.
+  function phPickThumb(v) {
+    var thumb = '';
+    var cands = [];
+    if (v.thumb) cands.push(v.thumb);
+    if (v.default_thumb) cands.push(v.default_thumb);
+    if (v.thumbs && v.thumbs.length) v.thumbs.forEach(function (t) { if (t && t.src) cands.push(t.src); });
+    for (var ci = 0; ci < cands.length; ci++) { if (cands[ci].indexOf('hdnea=') !== -1) { thumb = cands[ci]; break; } }
+    if (!thumb) thumb = cands[0] || '';
+    return thumb;
+  }
+  var HASH = 'https://pix-cdn77.phncdn.com/a/orig.mp4/plain/rs:fit:240:135?hash=X=&validto=1';
+  var HDNEA = 'https://pix-fl.phncdn.com/a/orig.mp4/plain/rs:fit:240:135?hdnea=st=1~exp=2~hmac=Y';
+  it('pornhub prefers an hdnea-signed thumb over hash&validto (any field)', function () {
+    // v.thumb is the IP-bound kind; the loadable hdnea URL is buried in thumbs[]
+    var v = { thumb: HASH, default_thumb: HASH, thumbs: [{ src: HASH }, { src: HDNEA }, { src: HASH }] };
+    expect(phPickThumb(v)).toBe(HDNEA);
+  });
+  it('pornhub uses v.thumb when it is already hdnea', function () {
+    expect(phPickThumb({ thumb: HDNEA, thumbs: [{ src: HASH }] })).toBe(HDNEA);
+  });
+  it('pornhub falls back to first candidate when nothing is hdnea', function () {
+    expect(phPickThumb({ thumb: HASH, thumbs: [{ src: HASH }] })).toBe(HASH);
+  });
+
+  it('anti-drift: both listing parsers de-template THUMBNUM, and _mapVideo prefers hdnea', function () {
+    var PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+    // THUMBNUM→1 guard present in the xvideos AND xnxx parser slices
+    var xv = PLUGIN.slice(PLUGIN.indexOf("id: 'xvideos'"), PLUGIN.indexOf("id: 'xnxx'"));
+    var xn = PLUGIN.slice(PLUGIN.indexOf("id: 'xnxx'"), PLUGIN.indexOf("id: 'eporner'"));
+    expect(/THUMBNUM[^]{0,40}replace\(\/THUMBNUM\/g, '1'\)/.test(xv)).toBe(true);
+    expect(/THUMBNUM[^]{0,40}replace\(\/THUMBNUM\/g, '1'\)/.test(xn)).toBe(true);
+    // pornhub _mapVideo prefers an hdnea-signed candidate
+    var ph = PLUGIN.slice(PLUGIN.indexOf("id: 'pornhub'"), PLUGIN.indexOf('_sortParams'));
+    expect(ph.indexOf("indexOf('hdnea=')")).toBeGreaterThan(-1);
+    expect(/for \(var ci = 0; ci < cands\.length/.test(ph)).toBe(true);
   });
 });
 

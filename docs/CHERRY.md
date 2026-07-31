@@ -161,6 +161,21 @@ Overrides (everything else is inherited from the base class):
 `toCard(v)` `plugin.js:434` maps a `VideoCard` to the base renderer's card_data in place
 (sets `v.img`/`v.poster` from `v.thumb`, composes the `quality` slot, guarantees `v.source`).
 
+**Poster must LOAD, not just be present (v0.13.11).** The visible card image is `v.img = v.thumb`,
+so a `thumb` URL that is present but fails to render as `<img>` yields a *blank* card. Coverage
+audits that only check "thumb string is non-empty" report 100% while the user sees ~30% blanks in
+«Все видео» (the aggregate of the worst channels). Three parsers emitted non-rendering posters and
+are now fixed — verified by loading each thumb as a real `Image()` on the Google-TV emulator
+(`test/tv-thumb-load-all.mjs`, all modes → 100%):
+- **xvideos / xnxx** — the listing `<img data-src>` can carry the unsubstituted hover-frame template
+  `…/xv_THUMBNUM_t.jpg` (`xn_THUMBNUM_t.jpg`); the site's JS swaps `THUMBNUM`→frame index at runtime.
+  As a static poster it 404s, so both `_parseCards` now pin frame 1 (`THUMBNUM`→`1`).
+- **pornhub** — the webmasters API returns the same frame under two signings: `hash&validto`
+  (host `pix-cdn77`, IP-bound to our fetch host → 404 in the device `<img>`) and `hdnea` (Akamai
+  time-token, host `pix-fl` → renders from any IP). `_mapVideo` previously picked `v.thumbs[last]`
+  (always the `hash&validto` kind → ~40% blank); it now prefers the first `hdnea`-signed candidate
+  across `thumb`/`default_thumb`/`thumbs[]` (verified 30/30 load).
+
 **Activity params consumed:**
 
 | param | type | meaning |
