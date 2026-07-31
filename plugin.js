@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.9';
+  var CHERRY_VERSION = '0.13.10';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -1063,9 +1063,13 @@
         // block the whole page. Each source races against a hard cap, resolving to
         // an empty batch on timeout so Promise.all settles in ≤cap.
         var ALL_SRC_TIMEOUT_MS = 7000;
+        // RU→EN routing: a Cyrillic query is translated for English-title sources (they can't match
+        // Cyrillic), while Russian-title sources keep the original. No-op for Latin queries.
+        var _enQuery = _isSearch ? _translateQuery(object.query) : '';
         var promises = SOURCES.map(function (src) {
+          var _q = (_enQuery && !_RU_SOURCES[src.id]) ? _enQuery : object.query;
           var fetch = (_isSearch
-            ? src.search(object.query, page)
+            ? src.search(_q, page)
             : src.browse('', page, (src.cfg && src.cfg.sorts && src.cfg.sorts[0] && src.cfg.sorts[0].id) || '')
           ).then(function (r) {
             r = r || { items: [] };
@@ -1093,12 +1097,11 @@
           // queries — scraped titles are often English so a Cyrillic substring would
           // wrongly empty every source. If a source's filtered slice is empty, fall
           // back to its unfiltered top-N (don't drop a whole source).
-          var isLatin = /^[\x00-\x7F]*$/.test((object.query || '').toLowerCase());
-          // Synonym-expanded word GROUPS (AND match): "blonde milf" must hit both groups; a
-          // group hits if the title contains any synonym (milf↔mom↔mature). Normalized text
-          // (ё→е, punctuation-insensitive) handles light typos. Cyrillic queries skip the
-          // filter (scraped titles are usually English → a Cyrillic substring empties sources).
-          var groups = (object.query && isLatin) ? _searchGroups(object.query) : [];
+          // Synonym-expanded word GROUPS (AND match): "blonde milf" must hit both groups; a group
+          // hits if the title contains any member. BILINGUAL: a Russian word expands to [ru,…EN]
+          // (via _RU_EN) so the same groups filter+rank BOTH Russian-title and English-title results
+          // — Cyrillic queries are no longer skipped. Per-source empty filter → falls back to top-N.
+          var groups = object.query ? _searchGroups(object.query) : [];
           var phrase = _normText(object.query || '');
           function _groupHits(title) {
             var t = _normText(title), n = 0;
@@ -2498,14 +2501,71 @@ var _SEARCH_SYN = {
     anal: ['anal', 'ass'],
     lesbian: ['lesbian', 'lesbians']
 };
-// Turn a query into synonym-expanded word groups: [[w1,syn…],[w2,syn…]]. A title "hits" a
-// group if it contains any member. Used for AND-matching + relevance scoring in global search.
+// Russian → English concept map. The user searches in Russian but ~18/24 sites have ENGLISH
+// titles, so a Cyrillic query sent verbatim returns garbage there. Each RU term maps to its EN
+// equivalents (first = primary, used to build the translated site query). Multi-word RU phrases
+// are matched greedily BEFORE single words (see _translateQuery) so "большие сиськи" → "big tits".
+var _RU_EN = {
+    'большие сиськи': ['big tits', 'tits', 'busty'], 'большие титьки': ['big tits', 'tits'],
+    'большая грудь': ['big tits', 'busty'], 'большая жопа': ['big ass', 'ass'],
+    'большая попа': ['big ass', 'ass'], 'первый раз': ['first time', 'defloration'],
+    'молодая мама': ['young mom', 'milf'], 'на публике': ['public'],
+    'мама': ['mom', 'milf'], 'мамка': ['milf', 'mom'], 'мамочка': ['milf', 'mom'], 'мать': ['mom', 'milf'],
+    'зрелая': ['mature', 'milf'], 'зрелые': ['mature', 'milf'], 'молодая': ['teen', 'young'],
+    'молоденькая': ['teen', 'young'], 'молодые': ['teen', 'young'], 'девушка': ['girl'], 'девушки': ['girls'],
+    'жена': ['wife'], 'сестра': ['sister', 'stepsister'], 'сестренка': ['sister'], 'мачеха': ['stepmom', 'milf'],
+    'брат': ['brother'], 'минет': ['blowjob'], 'отсос': ['blowjob'], 'анал': ['anal'], 'анальный': ['anal'],
+    'сиськи': ['tits', 'boobs'], 'титьки': ['tits'], 'грудь': ['tits'], 'жопа': ['ass', 'butt'], 'попа': ['ass', 'butt'],
+    'задница': ['ass'], 'блондинка': ['blonde'], 'брюнетка': ['brunette'], 'рыжая': ['redhead'],
+    'азиатка': ['asian'], 'японка': ['japanese'], 'негритянка': ['ebony'], 'латинка': ['latina'],
+    'лесбиянки': ['lesbian'], 'лесби': ['lesbian'], 'массаж': ['massage'], 'любительское': ['amateur'],
+    'домашнее': ['homemade', 'amateur'], 'компиляция': ['compilation'], 'кастинг': ['casting'],
+    'чулки': ['stockings'], 'колготки': ['pantyhose'], 'госпожа': ['femdom', 'mistress'], 'игрушки': ['toys'],
+    'сквирт': ['squirt'], 'камшот': ['cumshot'], 'групповуха': ['gangbang', 'group'], 'втроем': ['threesome'],
+    'волосатая': ['hairy'], 'беременная': ['pregnant'], 'медсестра': ['nurse'], 'учительница': ['teacher'],
+    'училка': ['teacher'], 'секретарша': ['secretary'], 'горничная': ['maid'], 'толстая': ['bbw'],
+    'пышка': ['bbw'], 'худая': ['skinny'], 'жесткое': ['hardcore'], 'измена': ['cheating'],
+    'инцест': ['taboo', 'family'], 'пикап': ['pickup'], 'русская': ['russian'], 'русское': ['russian']
+};
+// Known RUSSIAN-title sources — they should receive the ORIGINAL Cyrillic query, not the
+// translated one (their catalog is in Russian). Everything else defaults to English-title.
+var _RU_SOURCES = { tizam: 1, lenporno: 1, '24rolika': 1, ebun: 1, jopaonline: 1, pornobolt: 1, crocotube: 1 };
+
+// Translate a Cyrillic query to English for English-title sites. Greedy multi-word phrase match
+// first, then single words; untranslatable words are dropped. Returns '' if nothing translated
+// (caller then keeps the original query).
+function _translateQuery(query) {
+    var q = _normText(query);
+    if (/^[\x00-\x7f]*$/.test(q)) return '';            // already Latin
+    var out = [], used = false;
+    // try 2-word phrases first
+    var words = q.split(' ').filter(Boolean);
+    for (var i = 0; i < words.length; ) {
+        var two = (i + 1 < words.length) ? (words[i] + ' ' + words[i + 1]) : '';
+        if (two && _RU_EN[two]) { out.push(_RU_EN[two][0]); used = true; i += 2; continue; }
+        if (_RU_EN[words[i]]) { out.push(_RU_EN[words[i]][0]); used = true; }
+        i += 1;
+    }
+    return used ? out.join(' ') : '';
+}
+
+// Turn a query into synonym-expanded word groups: [[w1,syn…],[w2,syn…]]. A title "hits" a group
+// if it contains any member. Bilingual: a Russian word expands to [ru, …EN equivalents] so the
+// same groups filter+rank both English-title and Russian-title results. Used in global search.
 function _searchGroups(query) {
-    var words = _normText(query).split(' ').filter(Boolean);
-    return words.map(function (w) {
-        var syn = _SEARCH_SYN[w];
-        return syn ? syn.slice() : [w];
-    });
+    var q = _normText(query);
+    var out = [];
+    var words = q.split(' ').filter(Boolean);
+    for (var i = 0; i < words.length; ) {
+        var two = (i + 1 < words.length) ? (words[i] + ' ' + words[i + 1]) : '';
+        if (two && _RU_EN[two]) { out.push([two].concat(_RU_EN[two])); i += 2; continue; }
+        var w = words[i];
+        if (_RU_EN[w]) out.push([w].concat(_RU_EN[w]));
+        else if (_SEARCH_SYN[w]) out.push(_SEARCH_SYN[w].slice());
+        else out.push([w]);
+        i += 1;
+    }
+    return out;
 }
 
 // Popular search terms — quick picks so the user rarely has to type on a D-pad.
@@ -4682,7 +4742,11 @@ SOURCES.push(_kvsEngine({
     categories: _cats('amateur:Amateur,anal:Anal,asian:Asian,bbw:BBW,big-tits:Big Tits,blonde:Blonde,blowjob:Blowjob,creampie:Creampie,hairy:Hairy,hardcore:Hardcore,indian:Indian,interracial:Interracial,japanese:Japanese,lesbian:Lesbian,milf:MILF,pov:POV,stockings:Stockings,teen:Teen,threesome:Threesome,mature:Mature,granny-anal:Granny Anal,russian-anal:Russian Anal,russian-teens:Russian Teens 18+,teen-girls-18:Teen Girls 18+,muslim:Muslim,hijab:Hijab,top-rated:Top Rated,classic:Classic,milf-creampie:MILF Creampie'),
     sorts: _cats('post_date:Свежее,video_viewed:По популярности,video_viewed_today:Популярное за день,video_viewed_week:Популярное за неделю,video_viewed_month:Популярное за месяц,rating_week:Рейтинг за неделю,rating:По рейтингу,duration:Длинные,most_commented:По комментариям'),
     searchUrl: function(query, page) {
-        return 'https://xozilla.com/?s=' + encodeURIComponent(query) + '&p=' + page;
+        // KVS search is the /search/{q}/ PATH — the ?s= query param is ignored (returns the
+        // homepage feed → irrelevant results). page 1 omits the number; page>1 → /{q}/{p}/.
+        var q = encodeURIComponent(query);
+        return page > 1 ? 'https://www.xozilla.com/search/' + q + '/' + page + '/'
+                        : 'https://www.xozilla.com/search/' + q + '/';
     },
     browseUrl: function(page) {
         return page > 1
@@ -4887,7 +4951,10 @@ SOURCES.push(_kvsEngine({
     categories: _cats('sex:Sex,blowjobs:Blowjobs,hot:Hot,pussy:Pussy,ass:Ass,sexy:Sexy,hardcore:Hardcore,babes:Babes,big-tits:Big Tits,tits:Tits,brunettes:Brunettes,teens:Teens 18+,big-ass:Big Ass,amateurs:Amateurs,blondes:Blondes,doggy-style:Doggy Style,anal:Anal,big-cock:Big Cock,cumshots:Cumshots,sluts:Sluts,pussy-licking:Pussy Licking,crazy:Crazy,pornstars:Pornstars,masturbation:Masturbation,young:Young,cowgirl:Cowgirl,oral:Oral,milfs:MILFs,pov:POV,hd:HD,small-tits:Small Tits,tattoos:Tattoos,lesbians:Lesbians,homemade:Homemade,interracial:Interracial,busty:Busty,natural-tits:Natural Tits,reverse-cowgirl:Reverse Cowgirl,facial:Facial,mature:Mature'),
     sorts: _cats('post_date:Свежее,video_viewed:По популярности,video_viewed_today:Популярное за день,video_viewed_week:Популярное за неделю,video_viewed_month:Популярное за месяц,rating_week:Рейтинг за неделю,rating:По рейтингу,duration:Длинные'),
     searchUrl: function(query, page) {
-        return 'https://analdin.com/?s=' + encodeURIComponent(query) + '&p=' + page;
+        // KVS search = /search/{q}/ PATH (the ?s= param is ignored → homepage feed).
+        var q = encodeURIComponent(query);
+        return page > 1 ? 'https://www.analdin.com/search/' + q + '/' + page + '/'
+                        : 'https://www.analdin.com/search/' + q + '/';
     },
     browseUrl: function(page) {
         return page > 1
