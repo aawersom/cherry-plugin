@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.16';
+  var CHERRY_VERSION = '0.13.17';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -437,8 +437,12 @@
 
     /** @returns {VideoCard[]} ACTIVE records mapped to the card shape. */
     all: function () {
+      // Newest first by `added`, regardless of how a record arrived: local toggles unshift,
+      // but _merge APPENDS records pulled from another device — without this sort a video
+      // favorited elsewhere landed at the very bottom of the grid ("не появился").
       return this._records()
         .filter(function (r) { return r.added > r.deleted; })
+        .sort(function (a, b) { return (b.added || 0) - (a.added || 0); })
         .map(function (r) {
           return {
             id:       r.id,
@@ -1002,10 +1006,19 @@
     }
 
     function _gridLoad(object, page, resolve, reject) {
-      // Favorites — single page, no paging.
+      // Favorites — single page, no paging. Pull the shared bucket FIRST (capped at 2.5 s) so
+      // a video favorited on another device shows up on THIS open, not the next one; no PIN
+      // or a network failure → the local list, immediately. Resolving on a later tick also
+      // lets the empty-state box mount (the activity is registered by then).
       if (object.is_favorites) {
-        var favs = Fav.all().map(toCard);
-        resolve(favs, 1);
+        var _favDone = false;
+        var _favRender = function () {
+          if (_favDone) return;
+          _favDone = true;
+          resolve(Fav.all().map(toCard), 1);
+        };
+        try { Promise.resolve(Sync.run()).then(_favRender, _favRender); } catch (e) { _favRender(); }
+        setTimeout(_favRender, 2500);
         return;
       }
 
