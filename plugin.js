@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.17';
+  var CHERRY_VERSION = '0.13.18';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -2658,7 +2658,7 @@ var _RU_EN = {
 };
 // Known RUSSIAN-title sources — they should receive the ORIGINAL Cyrillic query, not the
 // translated one (their catalog is in Russian). Everything else defaults to English-title.
-var _RU_SOURCES = { tizam: 1, lenporno: 1, '24rolika': 1, ebun: 1, jopaonline: 1, pornobolt: 1, crocotube: 1 };
+var _RU_SOURCES = { tizam: 1, lenporno: 1, '24rolika': 1, ebun: 1, jopaonline: 1, pornobolt: 1 };  // crocotube: English titles (stand-verified) — a Cyrillic query there returns 0
 
 // Translate a Cyrillic query to English for English-title sites. Greedy multi-word phrase match
 // first, then single words; untranslatable words are dropped. Returns '' if nothing translated
