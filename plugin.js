@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.19';
+  var CHERRY_VERSION = '0.13.20';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -52,7 +52,14 @@
     'mydaddy.cc': 1,
     // bigcdn.cc all subdomains covered by /\.bigcdn\.cc$/ regex in buildProxyUrl
     // perfektdamen KVS CDN — IP-bound tokens require consistent egress IP
-    'www.perfektdamen.co': 1
+    'www.perfektdamen.co': 1,
+    // ebun's player embed + stream host: the get_file v-acctoken is bound to the IP that
+    // fetched the EMBED, and the CDN rejects any foreign Referer (403 for the WebView's
+    // lampa.mx). VPS = one stable IP for embed + stream, and the proxy sends no Referer.
+    '666-emded.com': 1,
+    // huyamba: mobile UAs are 302'd into a dead mobile mirror (rt.huyamba.xyz) — the VPS
+    // fetches with a desktop UA. Its get_file token is NOT IP-bound (stream stays raw).
+    'play.huyamba.mobi': 1
     // NB: hellporno stays on CF (Deno returns 0 cards for it even when up; CF gives 60).
     // hqporner is blocked on CF datacenter IPs and Deno doesn't help — it needs a
     // residential route (PROXY_URL_3). Neither is routed to Deno.
@@ -130,6 +137,14 @@
     // not IP-bound) so playback still works.
     'www.lenporno.net': 1, 'lenporno.net': 1,
     'www.eporner.com': 1, 'eporner.com': 1,
+    // ebun: the 666-emded.com embed issues an IP-bound stream token and its CDN rejects
+    // foreign Referers — the inner WebView player (Referer lampa.mx) got 403 while the
+    // external player played. Forcing embed + get_file through the proxy (→ VPS) gives one
+    // IP for both and a Referer-less fetch. Stand: inner player currentTime > 0.
+    '666-emded.com': 1,
+    // huyamba: the device (mobile UA) is redirected to the dead rt.huyamba.xyz → 0 cards
+    // natively; via the proxy (desktop UA) the listing loads. Stream token not IP-bound.
+    'play.huyamba.mobi': 1,
     // spankbang: Cloudflare challenges the device home IP too → force the page through
     // the proxy (routes to Val.town via PROXY_URL_VT, which passes the challenge).
     'ru.spankbang.com': 1, 'spankbang.com': 1, 'www.spankbang.com': 1,
@@ -770,6 +785,13 @@
     return null;
   }
 
+  // Sources offered to the user — tiles, «Все видео» / global search fan-out, health dots.
+  // A `disabled: true` adapter (site down) stays registered so favorites/history/related
+  // for its cards still resolve through sourceById, but it is not shown as a channel.
+  function _activeSources() {
+    return SOURCES.filter(function (s) { return !s.disabled; });
+  }
+
   /**
    * Resolve stream for a video and hand off to Lampa.Player,
    * showing a quality picker when multiple streams exist.
@@ -1085,7 +1107,8 @@
       //     mixed LATEST feed across every channel (the unified «Все видео» tab). No word filter.
       // Paginates: each source uses the SAME `page`; any full batch ⇒ more pages.
       if ((object.all_sources && object.query) || object.all_videos) {
-        if (!SOURCES.length) { resolve([], 1); return; }
+        var _act = _activeSources();
+        if (!_act.length) { resolve([], 1); return; }
         var _isSearch = !!object.query;
         // First-screen-fast: one slow/hung source (or a stalled proxy) must NOT
         // block the whole page. Each source races against a hard cap, resolving to
@@ -1094,7 +1117,7 @@
         // RU→EN routing: a Cyrillic query is translated for English-title sources (they can't match
         // Cyrillic), while Russian-title sources keep the original. No-op for Latin queries.
         var _enQuery = _isSearch ? _translateQuery(object.query) : '';
-        var promises = SOURCES.map(function (src) {
+        var promises = _act.map(function (src) {
           var _q = (_enQuery && !_RU_SOURCES[src.id]) ? _enQuery : object.query;
           var fetch = (_isSearch
             ? src.search(_q, page)
@@ -1872,8 +1895,9 @@
     }
     function _healthRefresh() {
       var cache = _healthGet(), now = Date.now();
-      SOURCES.forEach(function (s) { var e = cache[s.id]; _paintDot(s.id, e ? !!e.ok : null); });
-      var stale = SOURCES.filter(function (s) { var e = cache[s.id]; return !e || (now - e.t) > _HEALTH_TTL; });
+      var _act = _activeSources();
+      _act.forEach(function (s) { var e = cache[s.id]; _paintDot(s.id, e ? !!e.ok : null); });
+      var stale = _act.filter(function (s) { var e = cache[s.id]; return !e || (now - e.t) > _HEALTH_TTL; });
       var i = 0, running = 0, LIMIT = 4;
       function next() {
         while (running < LIMIT && i < stale.length) {
@@ -1912,8 +1936,9 @@
       results.push({ title: Lampa.Lang.translate('cherry_favorites'), img: '', _kind: 'favorites', _initial: '♥', _action: true });
       // 3) Sync entry — set the cross-device PIN; opening Cherry also auto-syncs.
       results.push({ title: Lampa.Lang.translate('cherry_sync'), img: '', _kind: 'sync', _initial: '⟲', _action: true });
-      // 4) One card per registered source — stable brand colour + first letter.
-      SOURCES.forEach(function (src) {
+      // 4) One card per ACTIVE source (disabled = site down, see _activeSources) — stable
+      //    brand colour + first letter.
+      _activeSources().forEach(function (src) {
         results.push({
           title:      src.name,
           img:        '',
@@ -2665,7 +2690,7 @@ var _RU_EN = {
 };
 // Known RUSSIAN-title sources — they should receive the ORIGINAL Cyrillic query, not the
 // translated one (their catalog is in Russian). Everything else defaults to English-title.
-var _RU_SOURCES = { tizam: 1, lenporno: 1, '24rolika': 1, ebun: 1, jopaonline: 1, pornobolt: 1 };
+var _RU_SOURCES = { tizam: 1, lenporno: 1, '24rolika': 1, ebun: 1, jopaonline: 1, pornobolt: 1, huyamba: 1 };
 // Sources whose SEARCH matches by site TAGS, not title words (stand-measured share of 'blonde'
 // results with the word in the title: hqporner 0%, perfektdamen 5%, porndig 17%, eporner/pornhub
 // 23%, analdin 26%, xozilla 39% — yet each honours the query). Their results are site-relevant even
@@ -4777,11 +4802,15 @@ function _porntrexPages(html, page, itemsLen) {
       // free) over the visible text — some KVS skins render the text localized
       // (e.g. pornobolt "13 мин", which parseDur can't read). Fall back to the
       // class="duration|time" text for skins that omit the itemprop.
-      var durStr   = _attr(chunk, /itemprop="duration"[^>]*content="([^"]+)"/i) ||
+      // A per-site cfg.durationRx / cfg.viewsRx wins (skins without duration/views classes,
+      // e.g. huyamba's <div class="box">1:41:31</div> + icon-eye <span>92K</span>).
+      var durStr   = (cfg.durationRx && _attr(chunk, cfg.durationRx)) ||
+                     _attr(chunk, /itemprop="duration"[^>]*content="([^"]+)"/i) ||
                      _attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</);
       var duration = parseDur(durStr);
 
-      var viewsStr = _attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</);
+      var viewsStr = (cfg.viewsRx && _attr(chunk, cfg.viewsRx)) ||
+                     _attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</);
       var views    = parseViews(viewsStr);
 
       // HD/4K badge — KVS listing cards expose a per-card quality marker.
@@ -6267,69 +6296,63 @@ SOURCES.push(_kvsEngine({
     }
 }));
 
-// ---- 9. Huyamba — DISABLED (fuq.huyamba.mobi returns 404, site dead as of 2026-06) ----
-// SOURCES.push({
-//     id: 'huyamba',
-//     name: 'Huyamba',
-//     host: 'fuq.huyamba.mobi',
-//
-//     search: function (query, page) {
-//         var url = 'https://fuq.huyamba.mobi/search/' + encodeURIComponent(query) + '/';
-//         return cherryFetch(url).then(function (html) {
-//             return { items: _huyambaCards(html), total_pages: 1 };
-//         }).catch(function () { return { items: [], total_pages: 0 }; });
-//     },
-
-//     browse: function (category, page) {
-//         var url = 'https://fuq.huyamba.mobi/videos/?by=post_date&page=' + page;
-//         return cherryFetch(url).then(function (html) {
-//             return { items: _huyambaCards(html), total_pages: _huyambaPages(html) };
-//         }).catch(function () { return { items: [], total_pages: 0 }; });
-//     },
-//
-//     getStream: function (video) {
-//         return cherryFetch(video.url).then(function (html) {
-//             return extractStreams(html);
-//         }).catch(function () { return { url: '', quality: {} }; });
-//     }
-// });
-
-function _huyambaCards(html) {
-    var items = [];
-    var hrefRx = /href="(https?:\/\/fuq\.huyamba\.mobi\/video\/(\d+)\/)"/g;
-    var seen = {};
-    var m;
-    while ((m = hrefRx.exec(html)) !== null) {
-        var videoUrl = m[1];
-        var id = m[2];
-        if (seen[id]) continue;
-        seen[id] = true;
-
-        // Forward-only: title is in title="" on the <a> tag, thumb in data-original
-        var chunk = html.slice(m.index, m.index + 1000);
-
-        var thumb = _attr(chunk, /(?:data-original|data-webp|data-src|src)="([^"?#]+\.jpe?g)/i) ||
-                    _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.(?:webp|png))/i);
-
-        var title = _decodeHtml(
-            _attr(chunk, /title="([^"]+)"/) ||
-            _attr(chunk, /alt="([^"]+)"/) ||
-            _attr(chunk, /<h\d[^>]*>([^<]+)<\/h\d>/)
-        );
-
-        var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
-        var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
-
-        if (title || thumb) {
-            items.push({ id: id, source: 'huyamba', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
-        }
+// ---- 9. Huyamba — revived 2026-09-04 on the live mirror play.huyamba.mobi (fuq.huyamba.mobi
+// is 404, huyamba.mobi leaks raw PHP). Plain KVS: listing /videos/?by={sort}&from={p} (`page=`
+// is IGNORED — every page repeats page 1; only `from=` paginates), categories
+// /categories/{slug}/videos/?from={p}, search /search/{q}/?from_videos={p}, hover clip in
+// data-preview (webm). Stream = flashvars video_url/alt/alt2 = 480/720/1080; the v-acctoken
+// is NOT IP-bound (device-issued token fetched via the VPS → 206). Mobile UAs are 302'd into
+// the dead rt.huyamba.xyz, so the page is force-proxied on Android (see _ANDROID_FORCE_PROXY).
+// All six sorts verified to reorder the feed and to apply inside categories (&by=). ----
+SOURCES.push(_kvsEngine({
+    id: 'huyamba',
+    name: 'Huyamba',
+    host: 'play.huyamba.mobi',
+    categoryFmt: 'https://play.huyamba.mobi/categories/{slug}/videos/?from={page}',
+    catPageBase: 1, catPage1Omit: false,
+    sortParam: 'by',
+    categories: _cats('russian-porn:Русское,porno-s-russkim-perevodom:С переводом,homemade-porn-videos:Домашнее,teen-porn-videos:Молодые,anal-porn-videos:Анал,blowjob-porn-videos:Минет,granny-porn-videos:Зрелые,group-porn-videos:Групповое,lesbians-porn-videos:Лесбиянки,asian-porn-videos:Азиатки,interracial-porn-videos:Межрассовое,big-dick-porn-videos:Большие члены,tolstushki-porn-videos:Толстушки,skinny-porn-videos:Худые,solo-porn:Соло,sperm-squirt-porn-videos:Сперма и сквирт,cuckold-porn:Куколд,bdsm-porn-videos:БДСМ,fisting-porn-videos:Фистинг,sex-toys-porn-videos:Игрушки,oral-porn-videos:Орал,public-porn-videos:На публике,hidden-cameras-porn-videos:Скрытая камера,full-length-porn-movies:Полнометражные,russian-porn-movies:Русские фильмы,classic-porn:Классика,celebrities-porn-videos:Знаменитости,xxx-porn-parody:Пародии,eroticheskie-filmy:Эротика,vr-porn-videos:VR,horror:Ужасы,sex-mashines-porn-videos:Секс-машины'),
+    sorts: _cats('video_viewed:По популярности,post_date:Свежее,video_viewed_week:Популярное за неделю,rating_week:Рейтинг за неделю,rating:По рейтингу,duration:Длинные'),
+    searchUrl: function (query, page) {
+        var q = encodeURIComponent(query);
+        return page > 1 ? 'https://play.huyamba.mobi/search/' + q + '/?from_videos=' + page
+                        : 'https://play.huyamba.mobi/search/' + q + '/';
+    },
+    browseUrl: function (page) { return 'https://play.huyamba.mobi/videos/?from=' + (page || 1); },
+    hrefRxSrc: 'href="(https?://play\\.huyamba\\.mobi/video/(\\d+)/)"',
+    idFromUrl: function (url, m) { return 'huy-' + m[2]; },
+    // Card = <a class="card" href=… title=…><img data-original=… data-preview=…><div class="sticky">
+    // <div class="box">1:41:31</div>…<div class="title">…</div><ul><li><svg #icon-eye/><span>92K</span>
+    chunkWindow: { before: 0, after: 1400 },
+    stripBase64: true,
+    thumbRx: [/data-original="([^"?#]+\.jpe?g)/i, /data-webp="([^"?#]+)"/i],
+    titleRx: [/^href="[^"]+"\s+title="([^"]+)"/, /<div class="title">([^<]+)</],
+    previewRx: /data-preview="([^"]+\.webm[^"]*)"/i,
+    durationRx: /<div class="box">\s*([\d:]+)\s*</,
+    viewsRx: /#icon-eye"><\/use>\s*<\/svg>\s*<span>([^<]+)</,
+    // KVS ajax pager: data-parameters="sort_by:…;from:N" — the largest N is the last page.
+    pagesRx: function (html) {
+        var rx = /data-parameters="[^"]*from:(\d+)"/g, m, max = 0;
+        while ((m = rx.exec(html)) !== null) max = Math.max(max, parseInt(m[1], 10) || 0);
+        return max;
+    },
+    getStream: function (video) {
+        return cherryFetch(video.url).then(_kvsFlashvarsQuality)
+            .catch(function () { return { url: '', quality: {} }; });
     }
-    return items;
-}
+}));
 
-function _huyambaPages(html) {
-    var m = /[?&]page=(\d+)["'][^>]*(?:last|>>)/i.exec(html);
-    return m ? (parseInt(m[1], 10) || 10) : 10;
+// KVS flashvars → {url, quality}: video_url / video_alt_url / video_alt_url2 are the
+// 480p / 720p / 1080p files (labels verified against *_text on huyamba). Falls back to
+// the generic extractStreams when a skin has no flashvars.
+function _kvsFlashvarsQuality(html) {
+    var varM = /(video_url|video_alt_url2|video_alt_url)\s*[=:]\s*['"]([^'"]+)['"]/g;
+    var labels = { video_url: '480p', video_alt_url: '720p', video_alt_url2: '1080p' };
+    var quality = {}, fm;
+    while ((fm = varM.exec(html)) !== null) quality[labels[fm[1]] || fm[1]] = fm[2];
+    var best = quality['1080p'] || quality['720p'] || quality['480p'] || '';
+    if (best) return { url: best, quality: quality };
+    return extractStreams(html);
 }
 
 // VePorn removed — veporn.net returns 504 (site dead)
@@ -6595,6 +6618,11 @@ SOURCES.push({
     id: '24rolika',
     name: '24Rolika',
     host: 'w2.huyalkino.com',
+    // 2026-09-04: w2.huyalkino.com answers 200 with an EMPTY body on every path (EE/VPS/CF/
+    // device) and the whois "current address" love.24rolika.ru has no DNS. Hidden from the
+    // tiles / «Все видео» / health probes (see _activeSources); the adapter stays registered
+    // so old favorites still resolve. Flip to false when the site is back.
+    disabled: true,
     cfg: { categories: _cats('russia:Русское порно,russian:С переводом,gopa:Анал,retro:Ретро,asian-girl:Азиатки,bdsm:БДСМ,big-cock:Большие члены,big-tits:Большие сиськи,group:Групповуха,lesbi:Лесбиянки,teen:Молодые девушки,solo:Женская мастурбация,beautiful:Красивый секс,black:Межрасовое,homemade:Домашнее,incest:Инцест,orgasms:Оргазмы,movie:Порно фильмы,ok:Одноклассники,youtube-porno:Ютуб'), sorts: [] /* sort not URL-addressable (DLE/AJAX POST) */ },
 
     search: function (query, page) {
