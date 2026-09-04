@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.21';
+  var CHERRY_VERSION = '0.13.22';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -152,6 +152,12 @@
     // xhamster: native listing fetch fails intermittently (HTTP 103 Early Hints surfaces as an
     // error) → page via the proxy (VPS). HLS stream host stays raw (token not IP-bound).
     'ru.xhamster.com': 1,
+    // ebalovo: the brand domain 301s mobile UAs to a mobile mirror whose stream tokens 404, and
+    // even desktop-mirror tokens are UA-bound (404 with the WebView/ExoPlayer UA). All page
+    // fetches are on the brand domain (cards are normalised to it) → proxied here with a
+    // desktop UA; the stream itself is proxied via the adapter's `androidProxyStream` flag
+    // (the mirror host rotates, so no host entry can name it).
+    'www.ebalovo.porn': 1,
     // spankbang: Cloudflare challenges the device home IP too → force the page through
     // the proxy (routes to Val.town via PROXY_URL_VT, which passes the challenge).
     'ru.spankbang.com': 1, 'spankbang.com': 1, 'www.spankbang.com': 1,
@@ -834,7 +840,10 @@
         // IP-bound CDN tokens (KVS get_file) stay valid with NO proxy → hand raw URL.
         // EXCEPT force-proxy hosts (device IP blocked): proxy the stream so it
         // co-locates with the proxied page on the same egress IP.
-        if (_isAndroid()) return _forceProxyAndroid(u) ? buildProxyUrl(u) : u;
+        // An adapter may also declare `androidProxyStream: true` when its stream tokens are
+        // UA-bound (desktop UA only) on a rotating mirror host that no host map can name
+        // (ebalovo): the proxy fetches with a desktop UA, so the token stays valid.
+        if (_isAndroid()) return (_forceProxyAndroid(u) || source.androidProxyStream) ? buildProxyUrl(u) : u;
         return buildProxyUrl(u);
       }
       var proxiedQuality = {};
@@ -2697,7 +2706,7 @@ var _RU_EN = {
 };
 // Known RUSSIAN-title sources — they should receive the ORIGINAL Cyrillic query, not the
 // translated one (their catalog is in Russian). Everything else defaults to English-title.
-var _RU_SOURCES = { tizam: 1, lenporno: 1, '24rolika': 1, ebun: 1, jopaonline: 1, pornobolt: 1, huyamba: 1, xhamster: 1 };  // xhamster: RU-localised titles, site search takes RU or EN as typed
+var _RU_SOURCES = { tizam: 1, lenporno: 1, '24rolika': 1, ebun: 1, jopaonline: 1, pornobolt: 1, huyamba: 1, xhamster: 1, ebalovo: 1 };  // xhamster: RU-localised titles, site search takes RU or EN as typed
 // Sources whose SEARCH matches by site TAGS, not title words (stand-measured share of 'blonde'
 // results with the word in the title: hqporner 0%, perfektdamen 5%, porndig 17%, eporner/pornhub
 // 23%, analdin 26%, xozilla 39% — yet each honours the query). Their results are site-relevant even
@@ -6531,6 +6540,100 @@ function _kvsFlashvarsQuality(html) {
     if (best) return { url: best, quality: quality };
     return extractStreams(html);
 }
+
+// ---- 9b. Ebalovo (added v0.13.22) ----
+// RU classic (also in Lampac/xsena). The brand domain www.ebalovo.porn 301s to the current
+// mirror (wec.epalovo.com today) and every proxy/native fetch follows it, so URLs are built on
+// the brand domain — a mirror move needs no code change; card links come back absolute on the
+// mirror. Cards: <a href="…/video/{slug}/" data-eb="MM:SS;…"><img alt src=img.ebacdn.com…>
+// <div class="item-title">. Sorts are path roots (/xxx-top/, /porno-online/, / = newest); inside
+// a category the popular/best orders are a "-rating" slug suffix (/porno/{slug}-rating/{p}/).
+// Search /search/{q}/{p}/ takes RU or EN. Stream = flashvars video_url/video_alt_url (480/720p)
+// on video_file/…?v-acctoken (302 → *.ebacdn.com) — NOT IP-bound, no Referer check, but
+// UA-BOUND: a token minted for a desktop UA 404s when fetched with the Android WebView UA, and
+// the mobile mirror (mod.*, where the brand domain sends mobile UAs) mints tokens that 404
+// outright. Hence on Android the page goes through the proxy (desktop UA) and the stream too
+// (`androidProxyStream`); card/model URLs are normalised to the brand domain so every fetch hits
+// the force-proxied host. No hover clips on the site. No pager markup → pages derive from fullness.
+var _EB_BASE = 'https://www.ebalovo.porn';
+var _EB_CARDS = {
+    id: 'ebalovo',
+    hrefRxSrc: 'href="(https?://[a-z0-9.-]+/video/([a-z0-9_-]+)/)"',
+    // Mirror host → brand domain: mirror-proof favorites/history, and one host to force-proxy.
+    normalizeUrl: function (raw) { return raw.replace(/^https?:\/\/[^/]+/, _EB_BASE); },
+    idFromUrl: function (url, m) { return 'eb-' + m[2]; },
+    chunkWindow: { before: 0, after: 900 },
+    thumbRx: [/src="(https?:\/\/img\.ebacdn\.com\/[^"]+\.jpe?g)"/i],
+    titleRx: [/<div class="item-title">\s*([^<]+?)\.?\s*<\/div>/, /alt="([^"]+)"/],
+    durationRx: /data-eb="(\d+:[\d:]+);/
+};
+function _ebCards(html) { return _kvsParseCards(html, _EB_CARDS); }
+
+function _ebUrl(category, page, sort) {
+    var p = page || 1, s = sort || 'xxx-top', pg = p > 1 ? p + '/' : '';
+    if (category) return _EB_BASE + '/porno/' + category + (s === 'latest' ? '' : '-rating') + '/' + pg;
+    return _EB_BASE + (s === 'latest' ? '/' : '/' + s + '/') + pg;
+}
+
+SOURCES.push({
+    id: 'ebalovo',
+    name: 'Ebalovo',
+    host: 'www.ebalovo.porn',
+    // Stream tokens are UA-bound (desktop only) on a rotating mirror host → px() proxies the
+    // stream on Android (see playVideo). The page is force-proxied via _ANDROID_FORCE_PROXY.
+    androidProxyStream: true,
+    cfg: { categories: _cats('a1-russian:Русское порно,a1-russian-amateur:Русское домашнее порно,a1-amateur:Домашнее порно,milfs:Зрелые,teen:Молодые,anal-videos:Анал,blowjob:Минет,big-tits:Большие сиськи,ass:Красивые попки,big-cock:Большой член,a1-stepmom:Мамки,group-porno:Групповой секс,a1-threesome:ЖМЖ,a1-2man-woman:МЖМ,gangbang:Ганг банг,lesbi-porno:Лесби,castings:Кастинг,pickups:Порно пикап,massage:Массаж,b1-masturbation:Мастурбация,b1-solo:Соло,a1-orgasm:Оргазм,cunni:Куни,handjob:Дрочка,hairy:Волосатые,stockings:В чулках,asian-porno:Азиатки,black:Негры,czech-porn:Чешское порно,bdsm-porn:БДСМ,rough-sex:Жёсткий секс,a1-sex-toys:Секс игрушки,pov:pov,webcam:Вебкамера,beautiful:Красивый секс,closeup:Крупным планом,a1-brunette:Брюнетки,a1-babe:Красивые,a1-natural-tits:Натуральные сиськи,a1-europe:Евро,a1-erotic:Эротика,big:Толстые,fun:Жесть'),
+           sorts: _cats('xxx-top:По популярности,latest:Свежее,porno-online:Лучшее') },
+
+    search: function (query, page) {
+        var p = page || 1;
+        var url = _EB_BASE + '/search/' + encodeURIComponent(query) + '/' + (p > 1 ? p + '/' : '');
+        return cherryFetch(url).then(function (html) {
+            var items = _ebCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 24) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    browse: function (category, page, sortId) {
+        var p = page || 1;
+        return cherryFetch(_ebUrl(category, p, sortId)).then(function (html) {
+            var items = _ebCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 24) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    // «Похожие»: the video page renders a related block in the listing card markup.
+    getRelated: _relatedFrom(_ebCards),
+
+    getStream: function (video) {
+        return cherryFetch(video.url).then(_kvsFlashvarsQuality)
+            .catch(function () { return { url: '', quality: {} }; });
+    },
+
+    // Models: /female-models/{p}/ index (30/page) — <a href="…/models/{slug}/" title=RU-name>
+    // <img data-srcset=avatar alt=Name>; a model's videos are listing-identical cards at /models/{slug}/{p}/.
+    getModels: function (page) {
+        var p = page || 1;
+        return cherryFetch(_EB_BASE + '/female-models/' + (p > 1 ? p + '/' : '')).then(function (html) {
+            return _parseModelIndex(html, {
+                window: 700,
+                hrefRx: /href="(https?:\/\/[a-z0-9.-]+\/models\/[a-z0-9_-]+\/)"/g,
+                normalizeUrl: _EB_CARDS.normalizeUrl,
+                nameRx: [/alt="([^"]+)"/, /title="([^"]+)"/],
+                thumbRx: [/data-srcset="(https?:\/\/[^"\s]+)"/, /data-src="(https?:\/\/[^"]+)"/]
+            });
+        }).catch(function () { return []; });
+    },
+
+    browseByModel: function (modelUrl, page) {
+        var p = page || 1;
+        var url = modelUrl.replace(/\/+$/, '') + '/' + (p > 1 ? p + '/' : '');
+        return cherryFetch(url).then(function (html) {
+            var items = _ebCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 24) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    }
+});
 
 // VePorn removed — veporn.net returns 504 (site dead)
 
