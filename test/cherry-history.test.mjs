@@ -236,8 +236,8 @@ describe('plugin.js source assertions (anti-drift)', () => {
     expect(SRC).toMatch(/cherry_continue:\s*\{\s*ru:\s*'RP',\s*en:\s*'Continue'/);
   });
 
-  it('history tile («РП») is placed LAST — after the SOURCES.forEach loop', () => {
-    const sourcesAt = SRC.indexOf('SOURCES.forEach(function (src) {');
+  it('history tile («РП») is placed LAST — after the _activeSources().forEach loop', () => {
+    const sourcesAt = SRC.indexOf('_activeSources().forEach(function (src) {');
     const continueAt = SRC.indexOf("_kind: 'continue'");
     expect(sourcesAt).toBeGreaterThan(-1);
     expect(continueAt).toBeGreaterThan(sourcesAt); // continue tile pushed after sources

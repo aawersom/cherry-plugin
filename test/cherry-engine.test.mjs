@@ -168,12 +168,14 @@ function _kvsParseCards(html, cfg) {
 
     // duration — prefer schema.org itemprop="duration" content="PT…S" (locale-free)
     // over the visible text; fall back to the class="duration|time" text. IN SYNC w/ plugin.js.
-    var durStr   = _attr(chunk, /itemprop="duration"[^>]*content="([^"]+)"/i) ||
+    var durStr   = (cfg.durationRx && _attr(chunk, cfg.durationRx)) ||
+                   _attr(chunk, /itemprop="duration"[^>]*content="([^"]+)"/i) ||
                    _attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</);
     var duration = parseDur(durStr);
 
     // views
-    var viewsStr = _attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</);
+    var viewsStr = (cfg.viewsRx && _attr(chunk, cfg.viewsRx)) ||
+                   _attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</);
     var views    = parseViews(viewsStr);
 
     // HD/4K badge (mirror plugin.js)
@@ -4102,5 +4104,110 @@ describe('global ranking: tag-search sources get a site-relevant baseline (v0.13
     expect(PLUGIN).toContain('if (v._siteRelevant) s = Math.max(s, groups.length * 10);');
     expect(PLUGIN).toContain('picked.slice(0, 10).forEach(function (v, k) { v._srcRank = k; });');
     expect(PLUGIN).toContain("((a.v._srcRank || 0) - (b.v._srcRank || 0)) || a.i - b.i");
+  });
+});
+
+// ── v0.13.20: channels batch — ebun Referer route, huyamba revival, 24rolika hidden ──
+describe('v0.13.20 channels: ebun route, huyamba revival (play.huyamba.mobi), 24rolika hidden', function () {
+  const PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+  function grab(name) {
+    const i = PLUGIN.indexOf('function ' + name + '(');
+    expect(i).toBeGreaterThan(-1);
+    let depth = 0;
+    for (let k = PLUGIN.indexOf('{', i); k < PLUGIN.length; k++) {
+      if (PLUGIN[k] === '{') depth++;
+      else if (PLUGIN[k] === '}' && --depth === 0) return PLUGIN.slice(i, k + 1);
+    }
+    throw new Error('unbalanced ' + name);
+  }
+  function block(startMarker, endMarker) {
+    const a = PLUGIN.indexOf(startMarker); expect(a).toBeGreaterThan(-1);
+    const b = PLUGIN.indexOf(endMarker, a); expect(b).toBeGreaterThan(a);
+    return PLUGIN.slice(a, b);
+  }
+
+  it('ebun embed/stream host 666-emded.com is VPS-routed AND force-proxied on Android', function () {
+    expect(block('var PROXY_URL_2_HOSTS = {', '};')).toContain("'666-emded.com': 1");
+    expect(block('var _ANDROID_FORCE_PROXY = {', '};')).toContain("'666-emded.com': 1");
+  });
+
+  it('huyamba page host is VPS-routed + force-proxied (mobile UA → dead mirror); stream stays raw', function () {
+    expect(block('var PROXY_URL_2_HOSTS = {', '};')).toContain("'play.huyamba.mobi': 1");
+    expect(block('var _ANDROID_FORCE_PROXY = {', '};')).toContain("'play.huyamba.mobi': 1");
+  });
+
+  it('huyamba is a live _kvsEngine adapter (no commented block, dead helpers removed, RU-routed)', function () {
+    expect(PLUGIN).toMatch(/SOURCES\.push\(_kvsEngine\(\{\s*id: 'huyamba'/);
+    expect(PLUGIN).not.toContain('_huyambaCards');
+    expect(PLUGIN).not.toContain('// SOURCES.push({');
+    expect(PLUGIN).toMatch(/var _RU_SOURCES = \{[^}]*huyamba: 1/);
+  });
+
+  // Real adapter config pulled from plugin.js and run through the (verbatim) parser copy.
+  function huyambaCfg() {
+    const a = PLUGIN.indexOf("_kvsEngine({\n    id: 'huyamba'");
+    expect(a).toBeGreaterThan(-1);
+    const b = PLUGIN.indexOf('}));', a);
+    const literal = PLUGIN.slice(a, b + 2); // "_kvsEngine({ ... })"
+    const _cats = new Function(grab('_cats') + '\nreturn _cats;')();
+    // eslint-disable-next-line no-new-func
+    return new Function('_kvsEngine', '_cats', 'cherryFetch', '_kvsFlashvarsQuality', 'return ' + literal + ';')(
+      function (c) { return c; }, _cats, function () {}, function () {});
+  }
+
+  it('huyamba listing fixture (play.huyamba.mobi): ≥20 cards, all with https thumb, RU title, duration, webm hover clip', function () {
+    const cfg = huyambaCfg();
+    const items = _kvsParseCards(fixture('huyamba-listing.html'), cfg);
+    expect(items.length).toBeGreaterThanOrEqual(20);
+    expect(items.every(function (v) { return /^https:\/\/play\.huyamba\.mobi\/contents\/.*\.jpg$/.test(v.thumb); })).toBe(true);
+    expect(items.every(function (v) { return /[А-Яа-яЁё]/.test(v.title); })).toBe(true);
+    expect(items.filter(function (v) { return v.duration > 0; }).length / items.length).toBeGreaterThanOrEqual(0.9);
+    expect(items.filter(function (v) { return /\.webm\/?$/.test(v.preview || ''); }).length / items.length).toBeGreaterThanOrEqual(0.9);
+    expect(items.filter(function (v) { return v.views > 0; }).length / items.length).toBeGreaterThanOrEqual(0.5);
+    expect(items[0].id).toMatch(/^huy-\d+$/);
+    expect(items[0].source).toBe('huyamba');
+  });
+
+  it('huyamba URLs: `from=` paging (page= is ignored by the site), sort via ?by=, search ?from_videos=', function () {
+    const cfg = huyambaCfg();
+    expect(cfg.browseUrl(1)).toBe('https://play.huyamba.mobi/videos/?from=1');
+    expect(cfg.browseUrl(3)).toBe('https://play.huyamba.mobi/videos/?from=3');
+    expect(cfg.sortParam).toBe('by');
+    expect(cfg.searchUrl('блондинка', 1)).toBe('https://play.huyamba.mobi/search/%D0%B1%D0%BB%D0%BE%D0%BD%D0%B4%D0%B8%D0%BD%D0%BA%D0%B0/');
+    expect(cfg.searchUrl('teen', 2)).toBe('https://play.huyamba.mobi/search/teen/?from_videos=2');
+    expect(cfg.categoryFmt).toBe('https://play.huyamba.mobi/categories/{slug}/videos/?from={page}');
+    // Only the category/listing pages carry the KVS ajax pager (data-parameters="…from:N");
+    // the home page has none → 0 → _kvsPages falls back to _derivePages (stand: p2 100% new).
+    expect(cfg.pagesRx(fixture('huyamba-category.html'))).toBeGreaterThanOrEqual(2);
+    expect(cfg.pagesRx(fixture('huyamba-listing.html'))).toBe(0);
+    expect(cfg.sorts[0].id).toBe('video_viewed'); // «По популярности» default, site-verified
+  });
+
+  it('_kvsFlashvarsQuality: huyamba video page → 480p/720p/1080p, best = 1080p', function () {
+    const fn = new Function('extractStreams', grab('_kvsFlashvarsQuality') + '\nreturn _kvsFlashvarsQuality;')(
+      function () { return { url: '', quality: {} }; });
+    const r = fn(fixture('huyamba-video.html'));
+    expect(Object.keys(r.quality).sort()).toEqual(['1080p', '480p', '720p']);
+    expect(r.url).toBe(r.quality['1080p']);
+    expect(r.url).toMatch(/^https:\/\/play\.huyamba\.mobi\/get_file\/.*hd\.mp4\/\?v-acctoken=/);
+  });
+
+  it('_kvsParseCards honours cfg.durationRx / cfg.viewsRx before the generic class regexes', function () {
+    const html = '<a href="https://x.test/videos/1/" title="T"><div class="box">12:34</div><i class="icon-eye"></i><span>15K</span></a>';
+    const cfg = { hrefRxSrc: 'href="(https?://x\\.test/videos/\\d+/)"', idFromUrl: function (u) { return u; },
+      durationRx: /class="box">([\d:]+)</, viewsRx: /icon-eye"><\/i><span>([^<]+)</, titleRx: [/title="([^"]+)"/], thumbRx: [] };
+    const items = _kvsParseCards(html, cfg);
+    expect(items.length).toBe(1);
+    expect(items[0].duration).toBe(754);
+    expect(items[0].views).toBe(15000);
+  });
+
+  it('_activeSources hides disabled adapters; 24rolika is disabled; tiles/fan-out/health use it', function () {
+    const act = new Function('SOURCES', grab('_activeSources') + '\nreturn _activeSources();')(
+      [{ id: 'a' }, { id: 'b', disabled: true }, { id: 'c' }]);
+    expect(act.map(function (s) { return s.id; })).toEqual(['a', 'c']);
+    expect(block("id: '24rolika',", 'search:')).toContain('disabled: true');
+    expect((PLUGIN.match(/_activeSources\(\)/g) || []).length).toBeGreaterThanOrEqual(3);
+    expect(PLUGIN).toContain('var promises = _act.map(function (src) {');
   });
 });

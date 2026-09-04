@@ -698,10 +698,10 @@ Only safe for plain pass-through proxies that do NOT rewrite M3U8.
 | 18 | `hellporno` | HellPorno | hellporno.com | CF datacenter | KVS `_kvsEngine` | ✅ Working |
 | 19 | `pornobolt` | Pornobolt | sex.pornobolt.in | CF datacenter | KVS pbcdn.tv CDN | ✅ Working |
 | 20 | `crocotube` | CrocoTube | crocotube.com | CF datacenter | KVS alphaxcdn.com CDN | ✅ Working |
-| 21 | `huyamba` | Huyamba | fuq.huyamba.mobi | — | — | ❌ Disabled (site dead 2026-06) |
-| 22 | `ebun` | Ebun | www1.ebun.tv | CF datacenter | HTML scraping | ✅ Working (token may expire) |
+| 21 | `huyamba` | Huyamba | play.huyamba.mobi | VPS (page force-proxied on Android; mobile UA is 302'd to a dead mirror) | KVS `_kvsEngine` — flashvars 480/720/1080 (`_kvsFlashvarsQuality`), token not IP-bound | ✅ Revived 2026-09-04 (v0.13.20) |
+| 22 | `ebun` | Ebun | www1.ebun.tv (cards x.ebun.top, embed 666-emded.com) | CF (listing) + **VPS for 666-emded.com** (embed + get_file co-located; force-proxied on Android) | HTML scraping → 666-emded embed flashvars; CDN rejects foreign Referer → inner player needed the proxy route (v0.13.20) | ✅ Working |
 | 23 | `lenporno` | LenPorno | www.lenporno.net | CF datacenter | Custom CDN path | ✅ Working |
-| 24 | `24rolika` | 24Rolika | w2.huyalkino.com | CF datacenter | DLE + Playerjs (`new Playerjs({file:"url"})`) → videosdrop.com CDN mp4 | ✅ Working |
+| 24 | `24rolika` | 24Rolika | w2.huyalkino.com | CF datacenter | DLE + Playerjs (`new Playerjs({file:"url"})`) → videosdrop.com CDN mp4 | ⏸ `disabled: true` since 2026-09-04 — site answers 0 bytes, love.24rolika.ru has no DNS; hidden from tiles/«Все видео»/health (`_activeSources`), adapter kept for old favorites |
 | 25 | `jopaonline` | JopaOnline | jopaonline.mobi | CF datacenter | DLE + JWPlayer | ✅ Working |
 
 **Proxy tier legend:**
@@ -780,7 +780,7 @@ edge IP rotation. In real Lampa usage (immediate playback after selection), they
 | `ebun` | 30 | KVS signed-token issue |
 | `lenporno` | 24 | Custom CDN, occasionally slow |
 | `perfektdamen` | 60 | KVS signed-token, get_file CDN |
-| `huyamba` | 20 | KVS get_file CDN. **Disabled 2026-06-03**: `fuq.huyamba.mobi` returns 404, site dead. Adapter commented out. |
+| `huyamba` | 20 | KVS get_file. Disabled 2026-06-03 (`fuq.huyamba.mobi` 404); **revived 2026-09-04** on `play.huyamba.mobi` via `_kvsEngine` (`?from=` paging — `page=` is ignored; `?by=` sorts; 33 RU categories; `data-preview` webm hover clip; `durationRx`/`viewsRx` parser hooks). |
 
 ### Browse works, video broken (CDN architecture limitation)
 

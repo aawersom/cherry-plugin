@@ -395,7 +395,7 @@ by construction); its other categories filter normally (25–35% overlap). perfe
 overlap (small site, `hd` ≈ everything) — works. Nothing to fix; cosmetic option: drop `all_sex`.
 
 ## 2026-09-04 (вечер) — аудит мёртвых/убранных каналов (docs/channels-revival-2026-09-04.md)
-- (i) **ebun — видео 403 только во внутреннем плеере (WebView шлёт `Referer: lampa.mx`), внешний играет.** Причина: CDN `666-emded.com`/`nl.videofile.me` режет чужой Referer; токен привязан к IP запросившего embed. Фикс: `'666-emded.com'` → `PROXY_URL_2_HOSTS` + `_ANDROID_FORCE_PROXY` (2 строки). Severity: medium. Статус: ждёт «делай».
+- (i) **ebun — видео 403 только во внутреннем плеере (WebView шлёт `Referer: lampa.mx`), внешний играет.** Причина: CDN `666-emded.com`/`nl.videofile.me` режет чужой Referer; токен привязан к IP запросившего embed. Фикс: `'666-emded.com'` → `PROXY_URL_2_HOSTS` + `_ANDROID_FORCE_PROXY` (2 строки). Severity: medium. **Сделано v0.13.20** (стенд: inner player currentTime 4.2 с).
 - (j) **Харнесс `tv-audit6.page.js` слал Referer страницы в пробе воспроизведения** → ложный `ERR 403` для ebun. Исправлено 2026-09-04: две попытки (без Referer / с Referer страницы), метки `MP4(noref)`/`MP4(ref)`.
-- (k) **24rolika мёртв** (`w2.huyalkino.com` 0 байт, `love.24rolika.ru` DNS не резолвится) — снять плитку, адаптер оставить. Severity: low.
+- (k) **24rolika мёртв** (`w2.huyalkino.com` 0 байт, `love.24rolika.ru` DNS не резолвится) — снять плитку, адаптер оставить. Severity: low. **Сделано v0.13.20** (`disabled: true` + `_activeSources`).
 - (l) **spankbang** — CF managed challenge на всех выходах, включая Val.town. Только FlareSolverr на VPS или снять плитку. Severity: low (решение владельца).

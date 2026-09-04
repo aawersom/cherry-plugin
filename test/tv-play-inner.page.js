@@ -3,7 +3,9 @@
   // element's real outcome (error code / networkState) after 9 s — evidence of hotlink/
   // Referer policies that the external player never hits. Restores the player setting.
   //   node test/tv-page-run.mjs test/tv-play-inner.page.js <sourceId>
-  var C = window.__C, s = C.SOURCES.filter(function (x) { return x.id === arg; })[0];
+  // arg = '<sourceId>' or '<sourceId>:<waitMs>' (default 9000)
+  var parts = String(arg).split(':'), sid = parts[0], waitMs = parseInt(parts[1], 10) || 9000;
+  var C = window.__C, s = C.SOURCES.filter(function (x) { return x.id === sid; })[0];
   var prev = Lampa.Storage.get('player', 'inner');
   try { if (Lampa.Screensaver && Lampa.Screensaver.stop) Lampa.Screensaver.stop(); } catch (e) {}
   try { Lampa.Controller.toggle('content'); } catch (e) {}
@@ -13,7 +15,7 @@
     return s.getStream(v).then(function (st) {
       var url = st.url;
       if (C._forceProxyAndroid(url)) url = C.buildProxyUrl(url);
-      Lampa.Player.play({ url: url, title: v.title || arg });
+      Lampa.Player.play({ url: url, title: v.title || sid });
       return new Promise(function (res) {
         setTimeout(function () {
           var els = Array.prototype.slice.call(document.querySelectorAll('video')).filter(function (x) { return !/apple\.com|sylvan/.test(x.currentSrc || x.src || ''); }); var el = els[els.length - 1];
@@ -22,7 +24,7 @@
           try { Lampa.Player.close && Lampa.Player.close(); } catch (e) {}
           Lampa.Storage.set('player', prev);
           res(out);
-        }, 9000);
+        }, waitMs);
       });
     });
   });

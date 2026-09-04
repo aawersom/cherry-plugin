@@ -1413,8 +1413,9 @@ describe('UX-A: plugin.js source assertions (anti-drift)', () => {
     expect(MAIN).toMatch(/_kind:\s*'source'[\s\S]{0,40}_source_id:\s*src\.id/);
   });
 
-  it('one source entry per registered SOURCE (SOURCES.forEach)', () => {
-    expect(MAIN).toMatch(/SOURCES\.forEach\(/);
+  it('one source entry per ACTIVE source (_activeSources().forEach — disabled sites hidden)', () => {
+    expect(MAIN).toMatch(/_activeSources\(\)\.forEach\(/);
+    expect(MAIN).not.toMatch(/SOURCES\.forEach\(/);
   });
 
   it('cardRender.onEnter routes by element._kind', () => {

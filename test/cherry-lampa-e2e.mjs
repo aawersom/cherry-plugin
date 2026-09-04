@@ -40,6 +40,9 @@ const PROXY_URL_2_HOSTS = {
   // mydaddy.cc: bigcdn tokens IP-bound to mydaddy.cc fetch IP — must match bigcdn proxy
   'mydaddy.cc': 1,
   'www.perfektdamen.co': 1,
+  // ebun embed/stream host + huyamba page (v0.13.20) — see plugin.js comments
+  '666-emded.com': 1,
+  'play.huyamba.mobi': 1,
 };
 const VIDEO_TIMEOUT_MS = 35000;
 const CONCURRENCY      = 3;
