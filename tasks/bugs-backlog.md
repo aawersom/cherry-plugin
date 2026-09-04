@@ -347,3 +347,29 @@ Fix: Fav.all() sorts by added desc; the favorites grid runs Sync.run() first (ca
 no PIN / failure -> local list) and renders on a later tick. Side effect: the empty-favorites
 blank screen (sync resolve before the activity was registered) is gone — the hint box now
 mounts (stand: emptyBox 1, selector 1). Harness: test/tv-fav-order.mjs. vitest 763.
+
+## 2026-09-04 (g) — full 24-channel matrix (test/tv-audit6.mjs) + crocotube RU misclassification (v0.13.18)
+
+Matrix: catalog p1/p2, category set-overlap, search (EN or RU by source) honour/match/p2,
+posters, clip, durations, related, models, device-IP playback, latency. All 22 live channels:
+posters 100%, playback MP4/HLS OK (ebun hotlink 403 = external player only; spankbang CF;
+24rolika down), search honours the query everywhere.
+
+FIXED: crocotube was in _RU_SOURCES but its titles are English (stand: 0 Cyrillic titles;
+search 'blonde' → 60 results 58% match, 'блондинка' → 0). Russian global searches lost the
+channel entirely. Removed from the map.
+
+OPEN (data-backed, for triage):
+- Single-channel SEARCH page 2 broken/absent: xozilla (p2 empty), analdin (10% new), pornve
+  (p2 empty), familyporn / porndig / perfektdamen (p2 == p1). Global search is p1-only so it
+  is unaffected; in-channel search scroll ends after one page there. tizam/pornobolt = known
+  single-page search.
+- Category filter ignored on tizam (100% overlap with the plain feed) and weak on perfektdamen
+  (80%); lenporno 42%, pornve 35%, xozilla 30% (partial).
+- Feed pagination repeats: pornobolt 62% new on p2, tizam 75%, hellporno 85%.
+- pornhub first screen 6.2 s (webmasters API empty-retry loop up to 4×).
+- Tag-based searches (hqporner 0% title match, perfektdamen 5%, porndig 17%, eporner/pornhub
+  23%, analdin 26%, xozilla 39%) are RELEVANT by site tag but the global ranker scores them
+  by title words → they sink to the bottom. Consider a per-source "tag search" baseline.
+- Models index size: crocotube 5679, familyporn 1642 tiles in one grid → paginate/cap.
+- Hover clip absent on 9 channels (inherent, no per-card clip in listings).

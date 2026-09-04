@@ -272,7 +272,7 @@ parallel (`Promise.all`, per-source failures swallowed), then filters + ranks + 
 > ENGLISH titles, so a Cyrillic query sent verbatim returned garbage there. Now:
 > - `_translateQuery(q)` maps a Cyrillic query to English via `_RU_EN` (greedy phrase-first, e.g.
 >   «большие сиськи»→"big tits", «мамка»→"milf"). English-title sources get the translated query;
->   Russian-title sources (`_RU_SOURCES`: tizam/lenporno/24rolika/ebun/jopaonline/pornobolt/crocotube)
+>   Russian-title sources (`_RU_SOURCES`: tizam/lenporno/24rolika/ebun/jopaonline/pornobolt — crocotube removed in v0.13.18: its titles are English, a Cyrillic query there returned 0)
 >   get the ORIGINAL — so `_q` is chosen per source.
 > - `_searchGroups` is now **bilingual** (a RU word expands to `[ru, …EN]`), so the per-source
 >   title-match filter + relevance ranking work for Cyrillic too (the old `isLatin` skip is gone).
