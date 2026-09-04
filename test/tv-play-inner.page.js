@@ -14,7 +14,7 @@
     var v = b.items[0];
     return s.getStream(v).then(function (st) {
       var url = st.url;
-      if (C._forceProxyAndroid(url)) url = C.buildProxyUrl(url);
+      if (C._forceProxyAndroid(url) || s.androidProxyStream) url = C.buildProxyUrl(url); // mirrors px()
       Lampa.Player.play({ url: url, title: v.title || sid });
       return new Promise(function (res) {
         setTimeout(function () {

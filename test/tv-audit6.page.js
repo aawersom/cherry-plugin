@@ -40,7 +40,7 @@
       if (!url) out.play = 'nourl';
       else {
         var u = url.indexOf('//') === 0 ? 'https:' + url : url;
-        var fin = C._forceProxyAndroid(u) ? C.buildProxyUrl(u) : u;
+        var fin = (C._forceProxyAndroid(u) || s.androidProxyStream) ? C.buildProxyUrl(u) : u; // mirrors px()
         out.kind = /m3u8|mpegurl/i.test(u) ? 'hls' : 'mp4';
         // Two passes: no Referer first (what the external/ExoPlayer player sends), then the
         // page Referer (what the inner WebView player effectively sends — foreign referers

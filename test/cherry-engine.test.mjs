@@ -4316,3 +4316,92 @@ describe('v0.13.21 xhamster: JSON cards, paging, URLs, HLS stream, related, mode
     expect(PLUGIN.indexOf("id: 'xhamster'")).toBeGreaterThan(PLUGIN.indexOf("id: 'eporner'"));
   });
 });
+
+// ── v0.13.22: Ebalovo adapter (brand-domain redirect, path sorts, -rating categories, flashvars) ──
+describe('v0.13.22 ebalovo: cards, URLs, stream, models', function () {
+  const PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+  function grab(name) {
+    const i = PLUGIN.indexOf('function ' + name + '(');
+    expect(i).toBeGreaterThan(-1);
+    let depth = 0;
+    for (let k = PLUGIN.indexOf('{', i); k < PLUGIN.length; k++) {
+      if (PLUGIN[k] === '{') depth++;
+      else if (PLUGIN[k] === '}' && --depth === 0) return PLUGIN.slice(i, k + 1);
+    }
+    throw new Error('unbalanced ' + name);
+  }
+  function stmt(startMarker) {
+    const a = PLUGIN.indexOf(startMarker); expect(a).toBeGreaterThan(-1);
+    const b = PLUGIN.indexOf('\n};', a); expect(b).toBeGreaterThan(a);
+    return PLUGIN.slice(a, b + 3);
+  }
+  const baseLine = PLUGIN.slice(PLUGIN.indexOf('var _EB_BASE'), PLUGIN.indexOf(';', PLUGIN.indexOf('var _EB_BASE')) + 1);
+  const deps = ['parseDur', 'parseViews', '_attr', '_decodeHtml', '_titleFromUrl', '_derivePages', '_humanizeName',
+    '_parseModelIndex', '_ebCards', '_ebUrl', '_kvsFlashvarsQuality'].map(grab).join('\n') + '\n' + baseLine + '\n' + stmt('var _EB_CARDS = {');
+  // eslint-disable-next-line no-new-func
+  const M = new Function('_kvsParseCards', 'extractStreams', deps + '\nreturn { _ebCards, _ebUrl, _kvsFlashvarsQuality, _parseModelIndex };')(
+    _kvsParseCards, function () { return { url: '', quality: {} }; });
+
+  it('listing fixture (home): 30 cards — ids, RU titles without trailing dot, ebacdn thumbs, duration from data-eb', function () {
+    const items = M._ebCards(fixture('ebalovo-listing.html'));
+    expect(items.length).toBeGreaterThanOrEqual(30);
+    expect(items[0].id).toMatch(/^eb-[a-z0-9_-]+$/);
+    expect(items[0].source).toBe('ebalovo');
+    // mirror host (wec.epalovo.com in the fixture) is normalised to the brand domain
+    expect(items.every(v => /^https:\/\/www\.ebalovo\.porn\/video\/[a-z0-9_-]+\/$/.test(v.url))).toBe(true);
+    expect(items.every(v => /^https:\/\/img\.ebacdn\.com\//.test(v.thumb))).toBe(true);
+    expect(items.every(v => /[А-Яа-яЁё]/.test(v.title) && !/\.$/.test(v.title))).toBe(true);
+    expect(items.every(v => v.duration > 0)).toBe(true);
+  });
+
+  it('search fixture (/search/blonde/): 36 cards', function () {
+    expect(M._ebCards(fixture('ebalovo-search.html')).length).toBeGreaterThanOrEqual(36);
+  });
+
+  it('_ebUrl: root sorts, newest = site root, categories with -rating suffix, page 1 omitted', function () {
+    expect(M._ebUrl('', 1, '')).toBe('https://www.ebalovo.porn/xxx-top/');
+    expect(M._ebUrl('', 2, 'xxx-top')).toBe('https://www.ebalovo.porn/xxx-top/2/');
+    expect(M._ebUrl('', 1, 'latest')).toBe('https://www.ebalovo.porn/');
+    expect(M._ebUrl('', 3, 'latest')).toBe('https://www.ebalovo.porn/3/');
+    expect(M._ebUrl('', 2, 'porno-online')).toBe('https://www.ebalovo.porn/porno-online/2/');
+    expect(M._ebUrl('blonde', 1, 'latest')).toBe('https://www.ebalovo.porn/porno/blonde/');
+    expect(M._ebUrl('blonde', 2, 'latest')).toBe('https://www.ebalovo.porn/porno/blonde/2/');
+    expect(M._ebUrl('blonde', 1, 'xxx-top')).toBe('https://www.ebalovo.porn/porno/blonde-rating/');
+    expect(M._ebUrl('blonde', 2, 'porno-online')).toBe('https://www.ebalovo.porn/porno/blonde-rating/2/');
+  });
+
+  it('stream: video fixture flashvars → 480p + 720p on video_file/…v-acctoken, best = 720p', function () {
+    const r = M._kvsFlashvarsQuality(fixture('ebalovo-video.html'));
+    expect(Object.keys(r.quality).sort()).toEqual(['480p', '720p']);
+    expect(r.url).toBe(r.quality['720p']);
+    expect(r.url).toMatch(/^https:\/\/[a-z0-9.-]+\/video_file\/.*\.mp4\/\?v-acctoken=/);
+  });
+
+  it('models fixture (/female-models/): 30 models with names + ebacdn avatars', function () {
+    const items = M._parseModelIndex(fixture('ebalovo-models.html'), {
+      window: 700,
+      hrefRx: /href="(https?:\/\/[a-z0-9.-]+\/models\/[a-z0-9_-]+\/)"/g,
+      nameRx: [/alt="([^"]+)"/, /title="([^"]+)"/],
+      thumbRx: [/data-srcset="(https?:\/\/[^"\s]+)"/, /data-src="(https?:\/\/[^"]+)"/]
+    });
+    expect(items.length).toBeGreaterThanOrEqual(30);
+    expect(items[0].name).toBe('Karma RX');
+    expect(items[0].thumb).toMatch(/^https:\/\/img\.ebacdn\.com\/models\//);
+  });
+
+  it('Android: page host force-proxied, stream proxied via the adapter flag honoured by px()', function () {
+    const force = PLUGIN.slice(PLUGIN.indexOf('var _ANDROID_FORCE_PROXY = {'), PLUGIN.indexOf('};', PLUGIN.indexOf('var _ANDROID_FORCE_PROXY = {')));
+    expect(force).toContain("'www.ebalovo.porn': 1");
+    const eb = PLUGIN.slice(PLUGIN.indexOf("id: 'ebalovo'"), PLUGIN.indexOf('search:', PLUGIN.indexOf("id: 'ebalovo'")));
+    expect(eb).toContain('androidProxyStream: true');
+    expect(PLUGIN).toContain('if (_isAndroid()) return (_forceProxyAndroid(u) || source.androidProxyStream) ? buildProxyUrl(u) : u;');
+    expect((PLUGIN.match(/^\s+androidProxyStream: true,/gm) || []).length).toBe(1); // only ebalovo declares it
+  });
+
+  it('registration: RU-titled source, tile right after Huyamba, brand-domain base', function () {
+    expect(PLUGIN).toMatch(/var _RU_SOURCES = \{[^}]*ebalovo: 1/);
+    expect(PLUGIN.indexOf("id: 'ebalovo'")).toBeGreaterThan(PLUGIN.indexOf("id: 'huyamba'"));
+    expect(PLUGIN.indexOf("id: 'ebalovo'")).toBeLessThan(PLUGIN.indexOf("id: 'ebun'"));
+    expect(PLUGIN).toContain("var _EB_BASE = 'https://www.ebalovo.porn';");
+  });
+});

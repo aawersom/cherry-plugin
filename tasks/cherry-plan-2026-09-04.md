@@ -61,4 +61,4 @@
 - **24rolika мёртв** (0 байт / DNS) — снять плитку. **spankbang** — CF challenge везде, включая Val.town → FlareSolverr или снять.
 - **Добавить (Tier A):** xhamster (JSON `window.initials`, HLS не IP-bound, через VPS), ebalovo (`wec.epalovo.com`, KVS), porno666, lenkino, porno365, pornobriz — все проверены нативно со стенда.
 - Порядок: ebun → huyamba → xhamster → ebalovo → RU-пачка → 24rolika с плиток → spankbang (решение владельца).
-- **Сделано вечером:** v0.13.20 (ebun-фикс, huyamba оживлён, 24rolika скрыт), v0.13.21 (xhamster). Осталось из партии каналов: ebalovo → porno666/lenkino/porno365/pornobriz → spankbang (решение владельца).
+- **Сделано вечером:** v0.13.20 (ebun-фикс, huyamba оживлён, 24rolika скрыт), v0.13.21 (xhamster), v0.13.22 (ebalovo; UA-bound токены → `androidProxyStream`). Осталось из партии каналов: porno666/lenkino/porno365/pornobriz → spankbang (решение владельца).
