@@ -42,8 +42,18 @@
         var u = url.indexOf('//') === 0 ? 'https:' + url : url;
         var fin = C._forceProxyAndroid(u) ? C.buildProxyUrl(u) : u;
         out.kind = /m3u8|mpegurl/i.test(u) ? 'hls' : 'mp4';
-        var f = await wt(new Promise(function (res) { var req = new Lampa.Reguest(); req.native(fin, function (d) { req.clear(); res({ ok: true, d: String(d) }); }, function (e) { req.clear(); res({ ok: false, e: String(e && e.status || e) }); }, false, { dataType: 'text', timeout: 12000, headers: { 'Range': 'bytes=0-63', 'Referer': i1[0].url } }); }), 15000, { ok: false, e: 'timeout' });
-        if (!f.ok) out.play = 'ERR ' + f.e; else { var h = f.d.slice(0, 80); out.play = h.indexOf('ftyp') >= 0 ? 'MP4' : (h.indexOf('#EXTM3U') >= 0 ? 'HLS' : (/^\s*</.test(h) ? 'HTML' : 'bytes' + f.d.length)); }
+        // Two passes: no Referer first (what the external/ExoPlayer player sends), then the
+        // page Referer (what the inner WebView player effectively sends — foreign referers
+        // get 403 on hotlink-protected CDNs, e.g. ebun/666-emded). 'MP4' = plays in both;
+        // 'MP4(noref)' = external only; 'MP4(ref)' = page-referer only.
+        function rangeGet(hdrs) { return wt(new Promise(function (res) { var req = new Lampa.Reguest(); req.native(fin, function (d) { req.clear(); res({ ok: true, d: String(d) }); }, function (e) { req.clear(); res({ ok: false, e: String(e && e.status || e) }); }, false, { dataType: 'text', timeout: 12000, headers: hdrs }); }), 15000, { ok: false, e: 'timeout' }); }
+        function kindOf(d) { var h = d.slice(0, 80); return h.indexOf('ftyp') >= 0 ? 'MP4' : (h.indexOf('#EXTM3U') >= 0 ? 'HLS' : (/^\s*</.test(h) ? 'HTML' : 'bytes' + d.length)); }
+        var f0 = await rangeGet({ 'Range': 'bytes=0-63' });
+        var f1 = await rangeGet({ 'Range': 'bytes=0-63', 'Referer': i1[0].url });
+        if (f0.ok && f1.ok) out.play = kindOf(f0.d);
+        else if (f0.ok) out.play = kindOf(f0.d) + '(noref)';
+        else if (f1.ok) out.play = kindOf(f1.d) + '(ref)';
+        else out.play = 'ERR ' + f0.e;
       }
     } else out.play = '-';
   } catch (e) { out.play = 'E ' + String(e).slice(0, 20); }

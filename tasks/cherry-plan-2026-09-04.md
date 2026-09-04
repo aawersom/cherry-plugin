@@ -53,3 +53,11 @@
 - Тяжёлые eval (сотни Image()) валят WebView → сброс стенда.
 - Пробники должны ходить транспортом адаптера (`cherryFetch`/`_fetchAny`): lenporno — force-proxy (натив = зеркало), pornve блокирует прокси (16-байтные ответы).
 - В тестах anti-drift проверять код, а не комментарии (комментарии упоминают старые URL).
+
+## Дополнение (вечер 2026-09-04): каналы — мёртвые/убранные/новые
+Полный аудит с доказательствами: `docs/channels-revival-2026-09-04.md`. Кратко:
+- **ebun не мёртв** — 403 только во внутреннем плеере (Referer lampa.mx); фикс 2 строки (`666-emded.com` → VPS + force-proxy). Харнесс audit6 исправлен (две попытки Referer).
+- **huyamba оживает** на `play.huyamba.mobi` (KVS, 33 RU-категории, hover-клип, токен не IP-bound; на Android — force-proxy страницы).
+- **24rolika мёртв** (0 байт / DNS) — снять плитку. **spankbang** — CF challenge везде, включая Val.town → FlareSolverr или снять.
+- **Добавить (Tier A):** xhamster (JSON `window.initials`, HLS не IP-bound, через VPS), ebalovo (`wec.epalovo.com`, KVS), porno666, lenkino, porno365, pornobriz — все проверены нативно со стенда.
+- Порядок: ebun → huyamba → xhamster → ebalovo → RU-пачка → 24rolika с плиток → spankbang (решение владельца).
