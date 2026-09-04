@@ -2948,6 +2948,13 @@ describe('thumb LOAD fixes (v0.13.11)', function () {
     expect(ph.indexOf("indexOf('hdnea=')")).toBeGreaterThan(-1);
     expect(/for \(var ci = 0; ci < cands\.length/.test(ph)).toBe(true);
   });
+
+  it('anti-drift: Fav.all() normalizes legacy THUMBNUM thumbs on read (v0.13.16)', function () {
+    var PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+    var at = PLUGIN.indexOf('all: function () {', PLUGIN.indexOf('var Fav = {'));
+    var body = PLUGIN.slice(at, at + 900);
+    expect(body).toMatch(/thumb:\s*\(r\.thumb\s*\|\|\s*''\)\.replace\(\/THUMBNUM\/g, '1'\)/);
+  });
 });
 
 // =====================================================================

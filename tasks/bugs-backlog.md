@@ -327,3 +327,12 @@ redirect and misleads; use cherryFetch).
 
 Dead code removed: pornone `_fromApi`. Tests: anti-drift for all 5 endpoints; 2 legacy tests
 updated (lenporno URL; single-page-search count 3→2 since jopaonline now paginates).
+
+## 2026-09-04 (e) — favorites posters: verified end-to-end + legacy THUMBNUM records (v0.13.16)
+
+Owner: «превью в избранном везде есть, не пропадает?». Stand (components registered by Lampa
+itself): seeded favorites from pornhub/xvideos/xnxx/eporner/xozilla/tizam/pornone/hellporno + a
+pornhub card with a deliberately broken hdnea token → 9/9 posters loaded; the broken one was
+self-healed (data-cherry-refreshed, 640 px). Remaining gap closed: records saved before v0.13.11
+could hold `xv_THUMBNUM_t.jpg` / `xn_THUMBNUM_t.jpg` (no refreshThumb for those sources) → `Fav.all()`
+now normalizes THUMBNUM→1 on read. Harnesses: test/tv-fav-posters.mjs, test/tv-fav-legacy.mjs.

@@ -108,6 +108,11 @@ Fix: `cardRender` attaches a one-shot `error` handler to the poster `<img>`; on 
 calls the source's optional **`refreshThumb(video)`** and swaps in a fresh URL. Only `pornhub`
 implements it (re-fetch the video page → a freshly-signed `hdnea`/pix-fl image, which renders from
 any IP; stand-verified 640×360 loads). Generic hook — also self-heals any transient CDN failure.
+Stand-verified end-to-end (v0.13.15, `test/tv-fav-posters.mjs`): favorites from 9 channels incl. a
+pornhub card with a deliberately broken token → 9/9 posters load, the broken one healed to 640 px.
+**Legacy records (v0.13.16):** favorites saved before v0.13.11 may still hold the xvideos/xnxx hover
+template (`…/xv_THUMBNUM_t.jpg`, a 404 as a poster); `Fav.all()` normalizes `THUMBNUM`→`1` on read
+(`test/tv-fav-legacy.mjs`).
 
 ### StreamResult
 
