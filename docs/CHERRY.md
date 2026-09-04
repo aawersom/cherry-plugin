@@ -415,6 +415,20 @@ Full matrix: `tasks/coverage-audit-2026-06-17.md`.
 
 ## Metadata
 
+- **Title entity decoding (v0.13.13)** — `_decodeHtml` is a single-pass decoder: numeric
+  (`&#233;`), hex (`&#xE9;`), and a named-entity map (`_HTML_ENTITIES`: iexcl/iquest/ndash/mdash/
+  accented Latin/symbols); unknown named entities are left literal. **`stripTags` delegates to it**,
+  so every parser that titles through `stripTags` decodes fully (root fix, not per-site). Fixes
+  scraped titles like `&iexcl;MUY TIERNA` → `¡MUY TIERNA`, `c&uacute;` → `cú` (was showing raw
+  entities and polluting «Похожие по названию» keywords). Stand-verified: xvideos entity titles 6→0.
+- **Hover-preview clip coverage** is site-limited: xvideos/xnxx (`data-pvv`), pornhub
+  (`data-mediabook`), and several KVS/custom adapters populate `video.preview`. Others expose **no
+  per-card clip in the listing** (porntrex/lenporno/pornone load it via JS on hover; hqporner/
+  eporner/pornhub-API serve none) — the poster still shows; only the on-focus clip is absent. No
+  URL-guessing (the old guessed `/preview.mp4` is gone).
+- **spankbang is Cloudflare-gated:** its listing now returns a managed "Just a moment…" JS
+  challenge on every egress IP (Val.town / CF / VPS / device) — plain HTTP proxies can't pass it.
+  Needs a headless-browser solver (FlareSolverr); until deployed, spankbang browse is dark.
 - **Real preview URLs** from the `data-pvv` card attribute (xvideos/xnxx, `plugin.js:1761`,
   `plugin.js:1912`). The old *guessed* `/preview.mp4` URLs are gone.
 - **HD/4K badge** is composed with duration in the `quality` slot in `toCard`

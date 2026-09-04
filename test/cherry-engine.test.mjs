@@ -3881,3 +3881,46 @@ describe('relevance ranking + self-heal (v0.13.12)', function () {
     expect(/_adp\.refreshThumb\(element\)/.test(PLUGIN)).toBe(true);                               // cardRender self-heal hook
   });
 });
+
+// =============================================================================
+// describe: HTML entity decoding — v0.13.13 (fixes &iexcl;/&uacute;/&ndash; in titles)
+// =============================================================================
+describe('HTML entity decoding (v0.13.13)', function () {
+  const PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+  function balanced(startIdx) {
+    let depth = 0;
+    for (let k = PLUGIN.indexOf('{', startIdx); k < PLUGIN.length; k++) {
+      if (PLUGIN[k] === '{') depth++;
+      else if (PLUGIN[k] === '}' && --depth === 0) return k;
+    }
+    throw new Error('unbalanced from ' + startIdx);
+  }
+  function grabFn(name) { const i = PLUGIN.indexOf('function ' + name + '('); return PLUGIN.slice(i, balanced(i) + 1); }
+  function grabVar(name) { const i = PLUGIN.indexOf('var ' + name + ' ='); return PLUGIN.slice(i, balanced(i) + 1) + ';'; }
+  // stripTags calls _decodeHtml, which reads _HTML_ENTITIES.
+  const ctx = [grabVar('_HTML_ENTITIES'), grabFn('_decodeHtml'), grabFn('stripTags')].join('\n');
+  const M = new Function(ctx + '\nreturn {_decodeHtml:_decodeHtml, stripTags:stripTags};')();
+
+  it('decodes named entities common in scraped titles', function () {
+    expect(M._decodeHtml('&iexcl;MUY TIERNA')).toBe('¡MUY TIERNA');
+    expect(M._decodeHtml('c&uacute; da')).toBe('cú da');
+    expect(M._decodeHtml('ni&ntilde;a')).toBe('niña');
+    expect(M._decodeHtml('Motion &ndash; Extreme')).toBe('Motion – Extreme');
+    expect(M._decodeHtml('caf&eacute; &amp; more')).toBe('café & more');
+  });
+  it('decodes numeric (incl. leading-zero) and hex references', function () {
+    expect(M._decodeHtml("Can&#039;t")).toBe("Can't");
+    expect(M._decodeHtml('&#233;')).toBe('é');
+    expect(M._decodeHtml('&#xE9;')).toBe('é');
+  });
+  it('leaves unknown named entities literal (never mangled)', function () {
+    expect(M._decodeHtml('keep &weird; literal')).toBe('keep &weird; literal');
+  });
+  it('stripTags removes tags AND fully decodes (delegates to _decodeHtml)', function () {
+    expect(M.stripTags('<b>Hot</b> &ntilde;i&ntilde;a &amp; more')).toBe('Hot ñiña & more');
+    expect(M.stripTags(null)).toBe('');
+  });
+  it('anti-drift: stripTags delegates decoding to _decodeHtml', function () {
+    expect(/return _decodeHtml\(String\(str == null \? '' : str\)\.replace\(\/<\[\^>\]\+>\/g, ''\)\)/.test(PLUGIN)).toBe(true);
+  });
+});

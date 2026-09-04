@@ -248,3 +248,26 @@ The remaining "не везде превью" is the HOVER-PREVIEW CLIP (plays on
 - xvideos titles keep rare named HTML entities (e.g. `&iexcl;`) — `_decodeHtml` covers common +
   numeric entities only; pollutes «Похожие по названию» keywords for such titles (~minor).
 - spankbang browse returned 0 cards this session; 24rolika HTTP 530 (site outage) — both env/site.
+
+## 2026-09-04 (b) — follow-ups on the 3 improvement proposals (v0.13.13)
+
+Owner asked to try/fix the 3 backlog items. Verified on the cherryRoot emulator.
+
+**RESOLVED:**
+- **HTML entities in titles (#2)** — `_decodeHtml` rewritten as a single-pass decoder (numeric
+  `&#233;` + hex `&#xE9;` + a named-entity map: iexcl/iquest/ndash/mdash/accented Latin/…);
+  unknown named entities left literal. `stripTags` now delegates to it, so EVERY parser's titles
+  decode (root-cause fix, not per-site). Emulator: xvideos titles with entities 6 → 0
+  ("&iexcl;MUY TIERNA" → "¡MUY TIERNA"). Improves display AND «Похожие по названию» keywords.
+
+**NOT FIXABLE IN-PLUGIN (verified, deferred with reason):**
+- **Hover-preview clip for porntrex/lenporno/pornone (#1)** — TRIED. Their listing HTML exposes
+  NO per-card video preview (porntrex's 6 `data-preview` are photo-ALBUM thumbs on
+  albums.cdntrex.com, not the 170 video cards; KVS loads the hover clip via JS on hover). Adding
+  it would require URL-guessing (removed earlier as unreliable) or per-hover AJAX. Not worth a
+  костыль. Poster is already 100%; the clip is optional focus polish.
+- **spankbang browse (#3)** — RE-CHECKED. All three proxy tiers (Val.town / CF worker / VPS) AND
+  the device-native residential IP get Cloudflare's "Just a moment…" MANAGED JS challenge (403).
+  Plain HTTP proxies can't pass it (needs JS exec + cf_clearance). Fix requires a headless-browser
+  solver (FlareSolverr) on the VPS — an infra task, out of scope for a plugin code change. Until
+  then spankbang stays dark. (Was passing on Val.town's IP before; CF has since tightened it.)

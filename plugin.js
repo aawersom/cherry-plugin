@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.12';
+  var CHERRY_VERSION = '0.13.13';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -2412,7 +2412,10 @@ function extractStreams(html) {
 
 // Strip HTML tags from a string
 function stripTags(str) {
-  return (str || '').replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').trim();
+  // Remove tags, then fully decode entities via the shared _decodeHtml (numeric + hex +
+  // named). Scraped titles routinely carry &iexcl; &uacute; &ndash; &#039; etc. — decoding
+  // them HERE fixes every parser that titles through stripTags, not just one site.
+  return _decodeHtml(String(str == null ? '' : str).replace(/<[^>]+>/g, ''));
 }
 
 // Final title fallback: derive a readable title from a video URL's last slug
@@ -2500,18 +2503,34 @@ function _attr(html, rx, group) {
  * @param {string} str
  * @returns {string}
  */
+// Named entities common in scraped titles (Latin accents, punctuation dashes/quotes,
+// symbols). Numeric (&#233;) and hex (&#xE9;) are handled generically below, so only
+// NAMED ones need a map. Unknown named entities are left literal (safe, never mangled).
+var _HTML_ENTITIES = {
+    amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", excl: '!', nbsp: ' ',
+    iexcl: '¡', iquest: '¿', laquo: '«', raquo: '»', hellip: '…',
+    ndash: '–', mdash: '—', lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”',
+    deg: '°', middot: '·', bull: '•', copy: '©', reg: '®', trade: '™',
+    euro: '€', pound: '£', cent: '¢', sect: '§',
+    eacute: 'é', egrave: 'è', ecirc: 'ê', euml: 'ë',
+    aacute: 'á', agrave: 'à', acirc: 'â', auml: 'ä', atilde: 'ã', aring: 'å',
+    iacute: 'í', igrave: 'ì', icirc: 'î', iuml: 'ï',
+    oacute: 'ó', ograve: 'ò', ocirc: 'ô', ouml: 'ö', otilde: 'õ', oslash: 'ø',
+    uacute: 'ú', ugrave: 'ù', ucirc: 'û', uuml: 'ü', yacute: 'ý', yuml: 'ÿ',
+    ntilde: 'ñ', ccedil: 'ç', szlig: 'ß',
+    Eacute: 'É', Aacute: 'Á', Iacute: 'Í', Oacute: 'Ó', Uacute: 'Ú',
+    Ntilde: 'Ñ', Ccedil: 'Ç', Auml: 'Ä', Ouml: 'Ö', Uuml: 'Ü'
+};
 function _decodeHtml(str) {
-    return str
-        .replace(/&amp;/g, '&')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/&quot;/g, '"')
-        .replace(/&#039;/g, "'")
-        .replace(/&apos;/g, "'")
-        .replace(/&excl;/g, '!')
-        .replace(/&nbsp;/g, ' ')
-        .replace(/&#(\d+);/g, function (_, n) { return String.fromCharCode(+n); })
-        .replace(/&#x([0-9a-f]+);/gi, function (_, n) { return String.fromCharCode(parseInt(n, 16)); })
+    return String(str == null ? '' : str)
+        .replace(/&(#x?[0-9a-f]+|[a-z][a-z0-9]*);/gi, function (m, e) {
+            if (e.charAt(0) === '#') {
+                var isHex = (e.charAt(1) === 'x' || e.charAt(1) === 'X');
+                var code = isHex ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+                return isNaN(code) ? m : String.fromCharCode(code);
+            }
+            return _HTML_ENTITIES.hasOwnProperty(e) ? _HTML_ENTITIES[e] : m;  // unknown named → leave literal
+        })
         .trim();
 }
 
