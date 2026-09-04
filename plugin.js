@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.13';
+  var CHERRY_VERSION = '0.13.14';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -1284,7 +1284,9 @@
           var holder = $node.find('.card__img, .card__view')[0] || node;
           holder.appendChild(videoEl);
         }
-        videoEl.src = url;
+        // Android: hosts that block the device IP get the preview via the proxy too (the same
+        // egress decision playVideo.px makes for the stream); everything else plays raw.
+        videoEl.src = (_isAndroid() && _forceProxyAndroid(url)) ? buildProxyUrl(url) : url;
         videoEl.load();
         videoEl.style.display = 'block';
         videoEl.style.opacity = '0';   // fade-in: start transparent, ramp to 1 on play
@@ -1785,7 +1787,10 @@
         // Dwell-timer: only start preview after the focus rests ~600ms on a card.
         // D-pad scrolling through a row clears the timer (in _stopCurrentPreview)
         // before it fires, so passing-through cards never trigger video.load()+play().
-        if (element.preview && Lampa.Storage.get('cherry_preview_enabled', true) && !_isAndroid()) {
+        // Android included (v0.13.14): the TV WebView autoplays a muted <video> without a
+        // gesture — stand-verified (playing event, currentTime advances). The Settings toggle
+        // is the kill switch; the dwell timer keeps D-pad scrolling free of video loads.
+        if (element.preview && Lampa.Storage.get('cherry_preview_enabled', true)) {
           _previewTimer = setTimeout(function () {
             _startPreview(target, element.preview);
           }, 600);
@@ -1828,6 +1833,45 @@
    */
   function CherryMain(object) {
     var comp = new Lampa.InteractionCategory(object);
+
+    // Channel health dots (owner: "a small green/gray dot on the channel tile so I can see
+    // whether it works"). Status is cached 6h in Storage and refreshed in the background
+    // AFTER the picker renders, a few sources at a time, each dot painted as its probe
+    // settles. Probe = browse p1 (the very request opening the channel makes) capped at 8s;
+    // ok = it returned cards. Hollow ring = not probed yet.
+    var _HEALTH_KEY = 'cherry_src_health', _HEALTH_TTL = 6 * 3600 * 1000;
+    var _dots = {};
+    function _healthGet() { var h = Lampa.Storage.get(_HEALTH_KEY, {}); return (h && typeof h === 'object') ? h : {}; }
+    function _paintDot(id, ok) {
+      var $d = _dots[id];
+      if (!$d) return;
+      $d.removeClass('cherry-dot--ok cherry-dot--bad cherry-dot--unk')
+        .addClass(ok === null ? 'cherry-dot--unk' : (ok ? 'cherry-dot--ok' : 'cherry-dot--bad'));
+    }
+    function _healthRefresh() {
+      var cache = _healthGet(), now = Date.now();
+      SOURCES.forEach(function (s) { var e = cache[s.id]; _paintDot(s.id, e ? !!e.ok : null); });
+      var stale = SOURCES.filter(function (s) { var e = cache[s.id]; return !e || (now - e.t) > _HEALTH_TTL; });
+      var i = 0, running = 0, LIMIT = 4;
+      function next() {
+        while (running < LIMIT && i < stale.length) {
+          (function (s) {
+            running++;
+            var sort0 = (s.cfg && s.cfg.sorts && s.cfg.sorts[0] && s.cfg.sorts[0].id) || '';
+            var probe = Promise.resolve().then(function () { return s.browse('', 1, sort0); })
+              .then(function (r) { return !!(r && r.items && r.items.length); })
+              .catch(function () { return false; });
+            Promise.race([probe, new Promise(function (res) { setTimeout(function () { res(false); }, 8000); })])
+              .then(function (ok) {
+                var c = _healthGet(); c[s.id] = { ok: ok, t: Date.now() }; Lampa.Storage.set(_HEALTH_KEY, c);
+                _paintDot(s.id, ok);
+                running--; next();
+              });
+          })(stale[i++]);
+        }
+      }
+      next();
+    }
 
     // ---- InteractionCategory overrides ------------------------------------
     // Home is a single-page source picker: [Поиск] + [Избранное] + one card per
@@ -1875,6 +1919,8 @@
 
       // Opening Cherry pulls the shared bucket (non-blocking, local-first).
       try { Sync.run(); } catch (e) {}
+      // Paint cached channel health, then refresh stale entries in the background.
+      try { _healthRefresh(); } catch (e) {}
     };
 
     comp.cardRender = function (object, element, card) {
@@ -1955,6 +2001,14 @@
           var cls = 'cherry-tile' + (element._action ? ' cherry-tile--action' : '');
           var bg  = element._action ? '' : ' style="background:' + (element._color || '#444') + '"';
           $view.append('<div class="' + cls + '"' + bg + '><span>' + (element._initial || '?') + '</span></div>');
+          // Health dot on source tiles (painted from cache now, refreshed by _healthRefresh).
+          if (element._kind === 'source') {
+            var $dot = $('<div class="cherry-dot cherry-dot--unk"></div>');
+            $view.append($dot);
+            _dots[element._source_id] = $dot;
+            var he = _healthGet()[element._source_id];
+            _paintDot(element._source_id, he ? !!he.ok : null);
+          }
         }
       } catch (e) {}
     };
@@ -2001,6 +2055,11 @@
       '.cherry-cat .cherry-tile{position:absolute;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;border-radius:.6em;}',
       '.cherry-cat .cherry-tile span{font-size:2.6em;font-weight:800;color:#fff;text-shadow:0 .05em .2em rgba(0,0,0,.4);}',
       '.cherry-cat .cherry-tile--action{background:#e75480 !important;}',
+      /* ---- Channel health dot on home tiles: green = returns cards, gray = down, ring = unknown */
+      '.cherry-home .cherry-dot{position:absolute;top:.55em;right:.55em;width:.6em;height:.6em;border-radius:50%;z-index:3;box-shadow:0 0 0 .12em rgba(0,0,0,.45);}',
+      '.cherry-home .cherry-dot--ok{background:#3ecf6a;}',
+      '.cherry-home .cherry-dot--bad{background:#8a8a8a;}',
+      '.cherry-home .cherry-dot--unk{background:transparent;box-shadow:0 0 0 .12em rgba(255,255,255,.35);}',
 
       /* ---- Bottom gradient scrim: lifts badge contrast over light thumbnails. */
       /* Sits at z-index:1, BELOW the badges (z-index:2), pointer-events:none.   */
@@ -2055,6 +2114,7 @@
       cherry_search_voice:     { ru: 'Голосом',             en: 'Voice'              },
       cherry_search_listening: { ru: 'Говорите…',           en: 'Listening…'         },
       cherry_search_hint: { ru: 'Введите запрос',      en: 'Enter a query'      },
+      cherry_recent_clear: { ru: 'Очистить недавние',  en: 'Clear recent'       },
       cherry_sources:     { ru: 'Источники',           en: 'Sources'            },
       cherry_favorites:   { ru: 'Случайные',           en: 'Favorites'          },
       cherry_continue:    { ru: 'RP',                  en: 'Continue'           },
@@ -2662,9 +2722,26 @@ function _rankByRelevance(items, query) {
         .map(function (x) { return x.v; });
 }
 
-// Popular search terms — quick picks so the user rarely has to type on a D-pad.
-var _POPULAR_TERMS = ['milf', 'teen', 'anal', 'blonde', 'mature', 'lesbian', 'japanese',
-    'big tits', 'creampie', 'threesome', 'massage', 'step mom', 'pov', 'amateur', 'asian'];
+// Popular search terms — quick picks so the user rarely has to type on a D-pad. RUSSIAN:
+// the owner searches in Russian; every term below has an _RU_EN entry, so _translateQuery
+// routes it to English-title sites while Russian-title sites get it verbatim.
+var _POPULAR_TERMS = ['мамка', 'молодая', 'анал', 'блондинка', 'зрелая', 'лесби', 'японка',
+    'большие сиськи', 'втроем', 'массаж', 'мачеха', 'любительское', 'азиатка', 'минет', 'русская'];
+
+// Recent queries (last 10) — kept DISCREET on purpose: they surface ONLY inside Cherry's own
+// search picker (never on the Lampa home or its global search — Cherry's Input uses nosave, so
+// Lampa's search history never records them), under a neutral storage key, without a heading,
+// with a one-tap clear. Lampa.Storage is device-local.
+var _RECENT_KEY = 'cherry_rq', _RECENT_MAX = 10;
+function _recentQueries() { var l = Lampa.Storage.get(_RECENT_KEY, []); return Array.isArray(l) ? l : []; }
+function _recentAdd(q) {
+    q = String(q || '').trim();
+    if (!q) return;
+    var l = _recentQueries().filter(function (x) { return _normText(x) !== _normText(q); });
+    l.unshift(q);
+    Lampa.Storage.set(_RECENT_KEY, l.slice(0, _RECENT_MAX));
+}
+function _recentClear() { Lampa.Storage.set(_RECENT_KEY, []); }
 
 // Voice availability — two distinct mechanisms:
 //  • NATIVE (LAMPA Android TV app): recognition runs in the app via AndroidJS.voiceStart()
@@ -2726,27 +2803,34 @@ function _voiceQuery(onText) {
 // Search entry picker: popular quick-picks + voice + manual type. `onQuery(text)` runs the
 // actual search. Avoids D-pad typing for the common case. Used by global + per-channel search.
 function _searchPicker(prefill, onQuery) {
+    // Every path that yields a query goes through onPick so it lands in the recents list.
+    var onPick = function (q) { _recentAdd(q); onQuery(q); };
     function _type() {
         if (typeof Lampa.Input === 'undefined' || !Lampa.Input.edit) return;
         Lampa.Input.edit({ title: Lampa.Lang.translate('cherry_search'), value: prefill || '', free: true, nosave: true },
             function (value) {
                 var q = (value || '').trim();
                 if (!q) { try { Lampa.Controller.toggle('content'); } catch (e) {} return; }
-                onQuery(q);
+                onPick(q);
             });
     }
     var items = [{ title: '✎ ' + Lampa.Lang.translate('cherry_search_type'), id: '__type__' }];
     if (_voiceAvailable()) {
         items.push({ title: '🎤 ' + Lampa.Lang.translate('cherry_search_voice'), id: '__voice__' });
     }
-    _POPULAR_TERMS.forEach(function (t) { items.push({ title: t, id: t }); });
+    // Recents first (↺, no heading), then a one-tap clear, then the popular picks.
+    var recents = _recentQueries();
+    recents.forEach(function (q) { items.push({ title: '↺ ' + q, id: q }); });
+    if (recents.length) items.push({ title: '✕ ' + Lampa.Lang.translate('cherry_recent_clear'), id: '__clear__' });
+    _POPULAR_TERMS.forEach(function (t) { items.push({ title: t.charAt(0).toUpperCase() + t.slice(1), id: t }); });
     Lampa.Select.show({
         title: Lampa.Lang.translate('cherry_search'),
         items: items,
         onSelect: function (item) {
             if (item.id === '__type__') _type();
-            else if (item.id === '__voice__') { if (!_voiceQuery(onQuery)) _type(); }
-            else onQuery(item.id);
+            else if (item.id === '__voice__') { if (!_voiceQuery(onPick)) _type(); }
+            else if (item.id === '__clear__') { _recentClear(); _searchPicker(prefill, onQuery); }
+            else onPick(item.id);
         },
         onBack: function () { try { Lampa.Controller.toggle('content'); } catch (e) {} }
     });
