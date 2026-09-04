@@ -3725,7 +3725,7 @@ describe('device bug fixes (8)', function () {
     // No caller may still pass the raw html (the old signature).
     expect(/_pornvePages\(html\)/.test(pv)).toBe(false);
     expect((pv.match(/_pornvePages\(items\.length, p\)/g) || []).length).toBeGreaterThanOrEqual(2);
-    expect(pv).toContain('_pornvePages(items.length, page)'); // search uses `page`
+    expect(pv).toContain('total_pages: 1 };'); // search is single-page on the site (v0.13.19)
   });
 
   // #3 eporner — preview <video> gets object-fit:cover so non-16:9 sources don't stretch.
@@ -4055,5 +4055,52 @@ describe('favorites: newest-first + pull-on-open (v0.13.17)', function () {
       { id: 'd', source: 's', title: 'merged-newest', thumb: '', url: '', duration: 0, views: 0, added: 9000, deleted: 0 }
     ];
     expect(Fav.all().map(function (r) { return r.id; })).toEqual(['d', 'b', 'a']);
+  });
+});
+
+// =============================================================================
+// describe: tag-search sources keep site relevance in global ranking — v0.13.19
+// =============================================================================
+describe('global ranking: tag-search sources get a site-relevant baseline (v0.13.19)', function () {
+  const PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+  function balanced(startIdx) {
+    let depth = 0;
+    for (let k = PLUGIN.indexOf('{', startIdx); k < PLUGIN.length; k++) {
+      if (PLUGIN[k] === '{') depth++;
+      else if (PLUGIN[k] === '}' && --depth === 0) return k;
+    }
+    throw new Error('unbalanced from ' + startIdx);
+  }
+  function grabFn(name) { const i = PLUGIN.indexOf('function ' + name + '('); return PLUGIN.slice(i, balanced(i) + 1); }
+  function grabVar(name) { const i = PLUGIN.indexOf('var ' + name + ' ='); return PLUGIN.slice(i, balanced(i) + 1) + ';'; }
+  const ctx = [grabVar('_SEARCH_SYN'), grabVar('_RU_EN'), grabFn('_normText'), grabFn('_searchGroups'), grabFn('_relScore'), grabFn('_rankByRelevance')].join('\n');
+  const M = new Function(ctx + '\nreturn {rank:_rankByRelevance};')();
+
+  it('a site-relevant card (no title words) ranks with plain full matches, below phrase/lead-boosted ones, above partial matches', function () {
+    const items = [
+      { title: 'random tag hit with no words', _siteRelevant: true },  // tag-search fallback
+      { title: 'blonde teen scene' },                                   // exact phrase + leads → top
+      { title: 'a teen who is blonde' },                                // both words, no phrase
+      { title: 'just a teen' }                                          // partial (missing group)
+    ];
+    const r = M.rank(items.slice(), 'blonde teen').map(function (v) { return v.title; });
+    expect(r[0]).toBe('blonde teen scene');
+    expect(r.indexOf('random tag hit with no words')).toBeLessThan(r.indexOf('just a teen'));
+    // scores as a plain full match (tie-class with 'a teen who is blonde'), below the boosted title
+    expect(r.indexOf('random tag hit with no words')).toBeGreaterThan(0);
+  });
+
+  it('without the flag the same card sinks below partial matches', function () {
+    const items = [{ title: 'random tag hit with no words' }, { title: 'just a teen' }];
+    const r = M.rank(items.slice(), 'blonde teen').map(function (v) { return v.title; });
+    expect(r[0]).toBe('just a teen');
+  });
+
+  it('anti-drift: _TAG_SEARCH map exists and the fan-out marks fallback cards from those sources', function () {
+    expect(PLUGIN).toContain("var _TAG_SEARCH = { hqporner: 1, perfektdamen: 1, porndig: 1, eporner: 1, pornhub: 1, analdin: 1, xozilla: 1 };");
+    expect(PLUGIN).toContain('if (_TAG_SEARCH[r._srcId]) picked.forEach(function (v) { v._siteRelevant = true; });');
+    expect(PLUGIN).toContain('if (v._siteRelevant) s = Math.max(s, groups.length * 10);');
+    expect(PLUGIN).toContain('picked.slice(0, 10).forEach(function (v, k) { v._srcRank = k; });');
+    expect(PLUGIN).toContain("((a.v._srcRank || 0) - (b.v._srcRank || 0)) || a.i - b.i");
   });
 });

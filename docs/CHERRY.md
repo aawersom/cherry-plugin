@@ -293,6 +293,8 @@ is available in every mode — the mitigation for sites whose server sort is a n
 > hit "bass"/"class". Stand-verified (emulator): exact-phrase in top-5 jumped from 0–40% → **100%**
 > for "teen anal"/"blonde massage"/"russian mature"/«большие сиськи»; strong-match top-10 0→100%.
 
+> **Tag-search sources (v0.13.19)** — hqporner, perfektdamen, porndig, eporner, pornhub, analdin, xozilla match a query by site TAGS: their results are relevant but the title often lacks the words (stand: 0–39% title match while the query is honoured). Before, the title-based ranker sank them to the bottom of global search. Now (`_TAG_SEARCH`): those sources skip the title filter — their top-N is taken in site order and marked `_siteRelevant`; `_rankByRelevance` scores such cards as a plain full match (`groups×10`), i.e. below phrase/lead-boosted titles, level with ordinary word matches. Score ties are broken by `_srcRank` (position within the card's own source) so equal cards INTERLEAVE across sources instead of clustering by source. The flags are transient (not persisted to favorites).
+
 > **KVS search URL (v0.13.10):** xozilla/analdin search is the `/search/{q}/` PATH — the old `?s=`
 > query param was ignored (returned the homepage feed → irrelevant). Fixed → query honored.
 

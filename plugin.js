@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.18';
+  var CHERRY_VERSION = '0.13.19';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -1150,8 +1150,15 @@
               if (groups.length) {
                 // Keep cards matching ALL query groups; fall back to top-N if none match.
                 var matched = r.items.filter(function (v) { return _groupHits(v.title) === groups.length; });
-                if (matched.length) picked = matched;
+                // Tag-search sources (_TAG_SEARCH) match by site tags: keep their site order
+                // UNFILTERED and mark the cards site-relevant so _rankByRelevance scores them as
+                // full matches (their titles rarely carry the words). Everyone else: title filter.
+                if (_TAG_SEARCH[r._srcId]) picked.forEach(function (v) { v._siteRelevant = true; });
+                else if (matched.length) picked = matched;
               }
+              // _srcRank = position within its own source: the ranker breaks score ties by it so
+              // equal-score cards INTERLEAVE across sources instead of clustering by source.
+              picked.slice(0, 10).forEach(function (v, k) { v._srcRank = k; });
               flat = flat.concat(picked.slice(0, 10));
             }
           });
@@ -2658,7 +2665,12 @@ var _RU_EN = {
 };
 // Known RUSSIAN-title sources — they should receive the ORIGINAL Cyrillic query, not the
 // translated one (their catalog is in Russian). Everything else defaults to English-title.
-var _RU_SOURCES = { tizam: 1, lenporno: 1, '24rolika': 1, ebun: 1, jopaonline: 1, pornobolt: 1 };  // crocotube: English titles (stand-verified) — a Cyrillic query there returns 0
+var _RU_SOURCES = { tizam: 1, lenporno: 1, '24rolika': 1, ebun: 1, jopaonline: 1, pornobolt: 1 };
+// Sources whose SEARCH matches by site TAGS, not title words (stand-measured share of 'blonde'
+// results with the word in the title: hqporner 0%, perfektdamen 5%, porndig 17%, eporner/pornhub
+// 23%, analdin 26%, xozilla 39% — yet each honours the query). Their results are site-relevant even
+// when no title word matches; the global ranker credits them instead of sinking them.
+var _TAG_SEARCH = { hqporner: 1, perfektdamen: 1, porndig: 1, eporner: 1, pornhub: 1, analdin: 1, xozilla: 1 };  // crocotube: English titles (stand-verified) — a Cyrillic query there returns 0
 
 // Translate a Cyrillic query to English for English-title sites. Greedy multi-word phrase match
 // first, then single words; untranslatable words are dropped. Returns '' if nothing translated
@@ -2732,8 +2744,16 @@ function _rankByRelevance(items, query) {
     var phrase = _normText(query);
     var firstWord = (groups[0] && groups[0][0]) ? _normText(groups[0][0]).split(' ')[0] : '';
     return items
-        .map(function (v, i) { return { v: v, s: _relScore(v.title, groups, phrase, firstWord), i: i }; })
-        .sort(function (a, b) { return b.s - a.s || a.i - b.i; })
+        .map(function (v, i) {
+            var s = _relScore(v.title, groups, phrase, firstWord);
+            // Site-ranked results from tag-search sources: the site matched the query (tags), only
+            // the title lacks the words — rank them with plain full matches, just below phrase/
+            // lead-boosted ones, instead of sinking them with the missing-group penalty.
+            if (v._siteRelevant) s = Math.max(s, groups.length * 10);
+            return { v: v, s: s, i: i };
+        })
+        // Ties: interleave across sources (position within own source), then original order.
+        .sort(function (a, b) { return b.s - a.s || ((a.v._srcRank || 0) - (b.v._srcRank || 0)) || a.i - b.i; })
         .map(function (x) { return x.v; });
 }
 
@@ -4946,9 +4966,10 @@ SOURCES.push(_kvsEngine({
     sorts: _cats('post_date:Свежее,video_viewed:По популярности,video_viewed_today:Популярное за день,video_viewed_week:Популярное за неделю,video_viewed_month:Популярное за месяц,rating_week:Рейтинг за неделю,rating:По рейтингу,duration:Длинные,most_commented:По комментариям'),
     searchUrl: function(query, page) {
         // KVS search is the /search/{q}/ PATH — the ?s= query param is ignored (returns the
-        // homepage feed → irrelevant results). page 1 omits the number; page>1 → /{q}/{p}/.
+        // homepage feed → irrelevant results). Page N = ?from_videos=N (the KVS search block's
+        // own pager; the /{q}/{p}/ path came back empty through the adapter). Stand: p2 100% new.
         var q = encodeURIComponent(query);
-        return page > 1 ? 'https://www.xozilla.com/search/' + q + '/' + page + '/'
+        return page > 1 ? 'https://www.xozilla.com/search/' + q + '/?from_videos=' + page
                         : 'https://www.xozilla.com/search/' + q + '/';
     },
     browseUrl: function(page) {
@@ -5159,9 +5180,10 @@ SOURCES.push(_kvsEngine({
     categories: _cats('sex:Sex,blowjobs:Blowjobs,hot:Hot,pussy:Pussy,ass:Ass,sexy:Sexy,hardcore:Hardcore,babes:Babes,big-tits:Big Tits,tits:Tits,brunettes:Brunettes,teens:Teens 18+,big-ass:Big Ass,amateurs:Amateurs,blondes:Blondes,doggy-style:Doggy Style,anal:Anal,big-cock:Big Cock,cumshots:Cumshots,sluts:Sluts,pussy-licking:Pussy Licking,crazy:Crazy,pornstars:Pornstars,masturbation:Masturbation,young:Young,cowgirl:Cowgirl,oral:Oral,milfs:MILFs,pov:POV,hd:HD,small-tits:Small Tits,tattoos:Tattoos,lesbians:Lesbians,homemade:Homemade,interracial:Interracial,busty:Busty,natural-tits:Natural Tits,reverse-cowgirl:Reverse Cowgirl,facial:Facial,mature:Mature'),
     sorts: _cats('post_date:Свежее,video_viewed:По популярности,video_viewed_today:Популярное за день,video_viewed_week:Популярное за неделю,video_viewed_month:Популярное за месяц,rating_week:Рейтинг за неделю,rating:По рейтингу,duration:Длинные'),
     searchUrl: function(query, page) {
-        // KVS search = /search/{q}/ PATH (the ?s= param is ignored → homepage feed).
+        // KVS search = /search/{q}/ PATH (the ?s= param is ignored → homepage feed). Page N =
+        // ?from_videos=N — the /{q}/{p}/ path re-served page 1 (only 10% new). Stand: p2 100% new.
         var q = encodeURIComponent(query);
-        return page > 1 ? 'https://www.analdin.com/search/' + q + '/' + page + '/'
+        return page > 1 ? 'https://www.analdin.com/search/' + q + '/?from_videos=' + page
                         : 'https://www.analdin.com/search/' + q + '/';
     },
     browseUrl: function(page) {
@@ -5220,13 +5242,12 @@ SOURCES.push({
 
     search: function (query, page) {
         var q = encodeURIComponent(query).replace(/%20/g, '+');
-        // page 1: /search/{q}/, page N: /search/{q}/page{N}/
-        var url = page > 1
-            ? 'https://pornve.com/search/' + q + '/page' + page + '/'
-            : 'https://pornve.com/search/' + q + '/';
+        // Single-page search (site): /search/{q}/ returns 20 cards; every pager form tried on the
+        // stand (/page{N}/, /{N}/, /page/{N}/, ?page=, ?p=) is either blocked or re-serves page 1.
+        var url = 'https://pornve.com/search/' + q + '/';
         return cherryFetch(url).then(function (html) {
             var items = _pornveCards(html);
-            return { items: items, total_pages: _pornvePages(items.length, page) };
+            return { items: items, total_pages: 1 };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
@@ -5360,7 +5381,8 @@ SOURCES.push({
 
     search: function (query, page) {
         var p = page || 1;
-        var url = 'https://familyporn.tv/search/?q=' + encodeURIComponent(query) + '&page=' + p;
+        // KVS-style search block: page N = &from_videos=N (&page= re-served page 1). Stand: p2/p3 100% new.
+        var url = 'https://familyporn.tv/search/?q=' + encodeURIComponent(query) + (p > 1 ? '&from_videos=' + p : '');
         return cherryFetch(url).then(function (html) {
             var items = _familypornCards(html);
             return { items: items, total_pages: _familypornPages(html, p, items.length) };
@@ -5485,12 +5507,15 @@ SOURCES.push({
     search: function (query, page) {
         var p = page || 1;
         var q = encodeURIComponent(query);
+        // Page 1 = /search/{q}/ (36 cards). The pretty /page/N re-serves page 1; DLE's own
+        // pager (index.php?do=search&search_start=N&result_from=…) yields the next set (stand:
+        // 80% new) and may answer non-200 → status-tolerant fetch for pages 2+.
         var url = p > 1
-            ? 'https://porndig.com/search/' + q + '/page/' + p
+            ? 'https://porndig.com/index.php?do=search&subaction=search&search_start=' + p + '&full_search=0&result_from=' + ((p - 1) * 36 + 1) + '&story=' + q
             : 'https://porndig.com/search/' + q + '/';
-        return cherryFetch(url).then(function (html) {
+        return (p > 1 ? _fetchAny(url) : cherryFetch(url)).then(function (html) {
             var items = _porndigCards(html);
-            return { items: items, total_pages: _porndigPages(html, p, items.length) };
+            return { items: items, total_pages: _derivePages(items.length, p, 36) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
@@ -5773,9 +5798,8 @@ SOURCES.push({
 
     search: function (query, page) {
         var p = page || 1;
-        var url = p > 1
-            ? 'https://perfektdamen.co/search/' + p + '/?q=' + encodeURIComponent(query)
-            : 'https://perfektdamen.co/search/1/?q=' + encodeURIComponent(query);
+        // Page N = &from_videos=N (the site's own /search/{p}/?q= links re-serve page 1). Stand: p2 100% new.
+        var url = 'https://perfektdamen.co/search/?q=' + encodeURIComponent(query) + (p > 1 ? '&from_videos=' + p : '');
         return cherryFetch(url).then(function (html) {
             var items = _perfektCards(html);
             return { items: items, total_pages: _perfektPages(html, p, items.length) };

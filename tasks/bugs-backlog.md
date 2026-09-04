@@ -373,3 +373,23 @@ OPEN (data-backed, for triage):
   by title words → they sink to the bottom. Consider a per-source "tag search" baseline.
 - Models index size: crocotube 5679, familyporn 1642 tiles in one grid → paginate/cap.
 - Hover clip absent on 9 channels (inherent, no per-card clip in listings).
+
+## 2026-09-04 (h) — items 1–3 of the matrix triage (v0.13.19)
+
+**1. Single-channel search page 2 — FIXED.** Discovered each site's real pager with the adapter
+transport and scored candidates by NEW cards on page 2: xozilla, analdin, familyporn,
+perfektdamen -> `?from_videos=N` (KVS search-block pager; the /{q}/{p}/ path came back empty or
+re-served page 1) — stand: p2/p3 100% new on all four. porndig -> DLE pager
+(index.php?do=search&search_start=N&result_from=…, status-tolerant fetch) — p2 80% new, p3
+repeats (2 pages). pornve — no working pager exists (every form blocked or page 1) -> declared
+single-page (total_pages 1).
+
+**2. Global ranking for tag-search sources — DONE.** `_TAG_SEARCH` (hqporner, perfektdamen,
+porndig, eporner, pornhub, analdin, xozilla): taken UNFILTERED in site order, marked
+`_siteRelevant`, scored as a plain full match (groups×10); score ties interleave across sources
+via `_srcRank`. Real grid («blonde», 197 cards): these sources now sit at positions 26–99
+(was 130+ for hqporner); title-boosted matches stay on top, non-matching RU sites at the end.
+
+**3. Categories — no defect.** tizam: the first category `all_sex` IS the plain feed (100% overlap
+by construction); its other categories filter normally (25–35% overlap). perfektdamen: 37–75%
+overlap (small site, `hd` ≈ everything) — works. Nothing to fix; cosmetic option: drop `all_sex`.

@@ -1801,7 +1801,7 @@ describe('Phase 3 A3(b): all_sources per-source title-match filter before slice'
   it('filter matches ALL query GROUPS (synonym-expanded AND) before slice(0,10)', () => {
     var at = SRC.indexOf('All-sources search');
     expect(at).toBeGreaterThan(-1);
-    var body = SRC.slice(at, at + 5000);
+    var body = SRC.slice(at, at + 6500);
     // per-GROUP AND match (synonym-expanded), not full-phrase indexOf
     expect(body).toMatch(/_groupHits\(v\.title\)\s*===\s*groups\.length/);
     var filterIdx = body.indexOf('_groupHits(v.title) === groups.length');
@@ -1829,7 +1829,7 @@ describe('Phase 3 A3(b): all_sources per-source title-match filter before slice'
 
   it('ranks merged set by relevance (shared _rankByRelevance), then cross-source dedups', () => {
     var at = SRC.indexOf('All-sources search');
-    var body = SRC.slice(at, at + 6000);
+    var body = SRC.slice(at, at + 7500);
     // Ranking is now the shared relevance ranker (also used by single-channel search).
     expect(body).toMatch(/flat\s*=\s*_rankByRelevance\(flat,\s*object\.query\)/);
     // cross-source dedup by normalized title + bucketed duration
