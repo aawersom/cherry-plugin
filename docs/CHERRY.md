@@ -225,13 +225,13 @@ custom card/grid/spinner CSS and templates were deleted (see Module Structure no
 | Surface | Mechanism |
 |---|---|
 | **Grid cards** | `.cherry-cat` scope: 16:9 landscape via `.card__view{padding-bottom:56.25%}`, image `object-fit:cover`; grid `cols--5` (5 per row) |
-| **Home picker** | `.cherry-home` square tiles (`.card__view{padding-bottom:100%}`), grid `cols--8`; `.cherry-tile` paints a coloured first-letter initial (no thumbnails) |
+| **Home picker** | `.cherry-home` square tiles (`.card__view{padding-bottom:100%}`), grid `cols--8`; `.cherry-tile` paints a coloured first-letter initial (no thumbnails). **Health dot (v0.13.14):** each source tile carries `.cherry-dot` top-right — green = browse p1 returned cards, gray = down/empty/timeout, hollow ring = not probed yet. Status cached 6 h in `cherry_src_health`; stale entries are re-probed in the background after the picker renders, 4 at a time, 8 s cap each (`CherryMain._healthRefresh`) |
 | **Home content** | A source picker: action tiles `[Поиск ⌕]` + `[Случайные ♥]` + `[Синхронизация ⟲]` (brand pink `--action`) + one tile per source (stable per-source hue from `_tileColor`) + `[РП ▶]` last (watch history, only when history exists). Tile labels: `cherry_favorites`='Случайные', `cherry_continue`='РП'. |
 | **Focus** | Single native Lampa frame + a subtle `transform:scale(1.04)` on `.card.focus .card__view` (no custom ring — a custom ring stacked on the native frame = double frame) |
 | **Card title** | 2-line white clamp (`-webkit-line-clamp:2`, `color:#fff`), `.card__title` font `.9em` |
 | **Source-origin badge** | `.cherry-src-badge` (z-index 2, above any preview) appended in `cardRender` on all_sources search AND favorites grids — those mix sources, so each card is tagged with its origin name |
 | **Header filter button** | `addFilterButton()` (`plugin.js:1168`) injects a persistent `.cherry-filter-btn` into the Lampa header next to search; visible only while a `cherry_grid` activity is on top; opens the same Поиск → Сортировка → Категории menu as the right edge |
-| **Preview clip** | `cardRender.onFocus` injects a muted/looping `<video.cherry-card__preview>` into the focused card when `element.preview` exists, `cherry_preview_enabled` is on, and not Android. Stopped on blur/stop/pause |
+| **Preview clip** | `cardRender.onFocus` injects a muted/looping `<video.cherry-card__preview>` into the focused card when `element.preview` exists and `cherry_preview_enabled` is on — **Android included since v0.13.14** (the TV WebView autoplays muted video without a gesture; stand-verified `playing` + advancing `currentTime`). A 600 ms dwell timer keeps D-pad scrolling free of loads; on Android, force-proxy hosts get the clip via the proxy (same egress rule as the stream). Stopped on blur/stop/pause |
 
 **Removed in this iteration (dead code from the migration):** ~390 lines of CSS
 (`.cherry-card*`, `.cherry-grid*`, `.cherry-source-*`, `@keyframes cherry-spin`, etc.)
@@ -289,6 +289,14 @@ is available in every mode — the mitigation for sites whose server sort is a n
 
 > **KVS search URL (v0.13.10):** xozilla/analdin search is the `/search/{q}/` PATH — the old `?s=`
 > query param was ignored (returned the homepage feed → irrelevant). Fixed → query honored.
+
+> **Search picker (v0.13.14):** `_searchPicker` = ✎ type · 🎤 voice · **↺ recent queries** · popular
+> picks. Quick-picks are **Russian** (`_POPULAR_TERMS`; every term has an `_RU_EN` entry so
+> `_translateQuery` routes it to English-title sites). Recents (`_recentAdd/_recentQueries/
+> _recentClear`, last 10, normalized dedupe) are deliberately discreet: shown ONLY inside Cherry's
+> own picker (Cherry's `Lampa.Input` uses `nosave`, so Lampa's global search history never sees
+> them), neutral storage key `cherry_rq`, no heading, one-tap «✕ Очистить недавние». Both entry
+> points (home tile and in-grid «Поиск») go through `onPick`, so voice/typed/picked all land there.
 
 ---
 

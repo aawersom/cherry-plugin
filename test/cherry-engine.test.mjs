@@ -3924,3 +3924,74 @@ describe('HTML entity decoding (v0.13.13)', function () {
     expect(/return _decodeHtml\(String\(str == null \? '' : str\)\.replace\(\/<\[\^>\]\+>\/g, ''\)\)/.test(PLUGIN)).toBe(true);
   });
 });
+
+// =============================================================================
+// describe: v0.13.14 UI — preview on Android, RU quick-picks, discreet recents, health dots
+// =============================================================================
+describe('v0.13.14 UI: Android preview + RU quick-picks + recents + health dots', function () {
+  const PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+  function balanced(startIdx) {
+    let depth = 0;
+    for (let k = PLUGIN.indexOf('{', startIdx); k < PLUGIN.length; k++) {
+      if (PLUGIN[k] === '{') depth++;
+      else if (PLUGIN[k] === '}' && --depth === 0) return k;
+    }
+    throw new Error('unbalanced from ' + startIdx);
+  }
+  function grabFn(name) { const i = PLUGIN.indexOf('function ' + name + '('); return PLUGIN.slice(i, balanced(i) + 1); }
+  function grabVar(name) { const i = PLUGIN.indexOf('var ' + name + ' ='); return PLUGIN.slice(i, balanced(i) + 1) + ';'; }
+  const popular = new Function('return ' + PLUGIN.match(/var _POPULAR_TERMS = (\[[\s\S]*?\]);/)[1])();
+  const RU_EN = new Function(grabVar('_RU_EN') + 'return _RU_EN;')();
+
+  it('quick-picks are Russian and every one is translatable for English-title sites', function () {
+    expect(popular.length).toBeGreaterThanOrEqual(10);
+    popular.forEach(t => {
+      expect(/^[а-яё ]+$/i.test(t)).toBe(true);
+      expect(RU_EN[t]).toBeDefined();            // _translateQuery can route it
+    });
+  });
+
+  it('recents: newest-first, case/punct-insensitive dedupe, capped at 10, clearable', function () {
+    // Minimal Lampa.Storage stand-in so the helpers run outside the app.
+    const store = {};
+    const ctx = 'var Lampa={Storage:{get:function(k,d){return k in store?store[k]:d;},set:function(k,v){store[k]=v;}}};'
+      + grabFn('_normText')
+      + PLUGIN.slice(PLUGIN.indexOf('var _RECENT_KEY'), PLUGIN.indexOf('function _recentClear'))
+      + grabFn('_recentClear')
+      + '\nreturn {add:_recentAdd,get:_recentQueries,clear:_recentClear};';
+    const R = new Function('store', ctx)(store);
+    R.add('мамка'); R.add('Big Tits'); R.add('мамка!');   // dupe of the first (normalized)
+    expect(R.get()).toEqual(['мамка!', 'Big Tits']);
+    for (let i = 0; i < 12; i++) R.add('q' + i);
+    expect(R.get().length).toBe(10);
+    expect(R.get()[0]).toBe('q11');
+    R.add('   '); expect(R.get().length).toBe(10);      // blanks ignored
+    R.clear(); expect(R.get()).toEqual([]);
+  });
+
+  it('anti-drift: preview no longer gated off on Android; proxied for force-proxy hosts', function () {
+    const gate = PLUGIN.match(/if \(element\.preview && Lampa\.Storage\.get\('cherry_preview_enabled', true\)([^)]*)\)/);
+    expect(gate).not.toBeNull();
+    expect(gate[1]).not.toMatch(/_isAndroid/);
+    expect(/videoEl\.src = \(_isAndroid\(\) && _forceProxyAndroid\(url\)\) \? buildProxyUrl\(url\) : url;/.test(PLUGIN)).toBe(true);
+  });
+
+  it('anti-drift: search picker records recents on every path and offers a clear', function () {
+    const at = PLUGIN.indexOf('function _searchPicker(');
+    const body = PLUGIN.slice(at, balanced(at) + 1);
+    expect(body).toMatch(/var onPick = function \(q\) \{ _recentAdd\(q\); onQuery\(q\); \}/);
+    expect(body).toMatch(/_voiceQuery\(onPick\)/);
+    expect(body).toMatch(/__clear__/);
+    expect(body).not.toMatch(/onQuery\(item\.id\)/);   // no path bypasses onPick
+  });
+
+  it('anti-drift: home tiles carry a cached, background-refreshed health dot', function () {
+    const at = PLUGIN.indexOf('function CherryMain(');
+    const body = PLUGIN.slice(at, balanced(at) + 1);
+    expect(body).toMatch(/cherry_src_health/);
+    expect(body).toMatch(/_healthRefresh\(\)/);
+    expect(body).toMatch(/cherry-dot cherry-dot--unk/);
+    expect(body).toMatch(/LIMIT = 4/);                        // bounded concurrency
+    expect(/\.cherry-home \.cherry-dot--ok\{background:#3ecf6a;\}/.test(PLUGIN)).toBe(true);
+  });
+});

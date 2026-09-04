@@ -271,3 +271,40 @@ Owner asked to try/fix the 3 backlog items. Verified on the cherryRoot emulator.
   Plain HTTP proxies can't pass it (needs JS exec + cf_clearance). Fix requires a headless-browser
   solver (FlareSolverr) on the VPS — an infra task, out of scope for a plugin code change. Until
   then spankbang stays dark. (Was passing on Val.town's IP before; CF has since tightened it.)
+
+## 2026-09-04 (c) — deep UI/functional audit follow-ups (v0.13.14)
+
+Owner triage of the interface audit: 1 (empty-favorites blank screen) — NO; 2 — DO; 3 (Случайные/RP
+labels) — intentional camouflage, keep; 4 — analyse both sorts, recommend; 5 — recents, masked;
+6 — no channel enable/disable, but a small health dot on tiles; 7 (grid cache) — NO; 8 (source
+badge in single-channel grid) — keep.
+
+**DONE (stand-verified, real components):**
+- **Hover-preview on Android (2):** the `!_isAndroid()` gate in `cardRender.onFocus` removed —
+  the TV WebView autoplays muted `<video>` (probe: `playing` event, currentTime 3.6 s in 4 s;
+  in-grid: focused card `paused:false, t:1.8`). Force-proxy hosts get the clip via the proxy.
+  Settings toggle now actually means something on TV.
+- **RU quick-picks + discreet recents (5):** `_POPULAR_TERMS` Russian; recents (last 10) shown
+  only in Cherry's picker with a clear item; verified «↺ мамка» after a pick.
+- **Health dots (6):** green/gray/ring on source tiles, 6 h cache, background re-probe 4-wide/8 s.
+  Stand: 22 green, 2 gray (spankbang, 24rolika) within ~3 s.
+
+**SORTS (4) — measured, recommendation pending owner OK:**
+- Server «Сортировка» changes the PLAIN FEED only on: pornhub, eporner, hqporner, youjizz,
+  perfektdamen, hellporno, pornobolt, crocotube. It is a NO-OP on the feed for: xvideos, xnxx,
+  pornone, porntrex, xozilla, 3movs, analdin, pornve, familyporn, ebun, lenporno, jopaonline
+  (their "latest" list is fixed) — but WORKS INSIDE A CATEGORY for all of those except
+  hqporner/youjizz/lenporno/jopaonline (category sort no-op there). porndig/tizam: no sorts.
+- «Сортировка (точная)» = client per-page (duration/title) — always works, page-local.
+- Recommendation: ONE «Сортировка» menu. List server sorts only where they take effect in the
+  current mode (feed / category / search — per-adapter capability derived from the table above),
+  then the exact client options as plain items («Длинные сначала», «Короткие сначала», «По
+  названию»). No "(точная)" wording; header keeps showing the active sort. ~40 lines: merge
+  `_openSort` + `_openClientSort`, add a feed-sort allowlist. Not implemented — awaiting go.
+
+**STILL OPEN (from the audit, not triaged):**
+- Search ignores the query on 5 channels (3movs `?s=` → `/search/{q}/`; pornone, jopaonline,
+  ebun, lenporno need URL investigation) — pollutes global search with fallback cards.
+- Empty-favorites blank screen: owner said no; root cause documented (sync resolve before the
+  activity is in `Lampa.Activity.all()` → `comp.empty()` appends nowhere). Also affects the
+  «Повторить» retry affordance only on that sync path.
