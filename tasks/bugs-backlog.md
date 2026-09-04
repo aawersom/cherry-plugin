@@ -217,3 +217,34 @@ vitest 736 pass (+RU→EN функциональные + анти-дрейф). v
 **Verification (emulator):** `test/tv-thumb-load-all.mjs` browse/cat/search/model/related = 100%
 for all 24 channels (24rolika down = HTTP 530 site outage, unfixable). «Все видео» merged feed:
 230/230 cards loaded = 100%, zero blanks. vitest 743 pass (+8 new regression tests).
+
+## 2026-09-04 — Relevance + preview + favorites pass (v0.13.12)
+
+Owner report (6 pts): (1) previews missing in search/all_videos; (2) search not relevant enough;
+(3) related/related-by-title not always relevant; (4) global search not always relevant; (5)
+favorites missing previews. Diagnosed + fixed on the Google-TV emulator (cherryRoot AVD).
+
+**RESOLVED:**
+- **Search relevance (2,4)** — new shared `_relScore`/`_rankByRelevance`, applied to BOTH
+  all_sources and single-channel search (per-page, before explicit client sort). Emulator:
+  exact-phrase in top-5 0–40% → 100% (teen anal, blonde massage, russian mature, большие сиськи);
+  strong-match top-10 0→100%.
+- **«Похожие» page 2+ (3)** — was the generic newest feed (~0% relevant). Now a title-keyword
+  search on the same source. Emulator: page-2 seed token-overlap 0→75–92%; pornhub (getRelated=1
+  item) now yields 30 relevant results.
+- **Favorites poster (5)** — pornhub thumbs are IP-bound signed URLs (24h TTL) → blank after a
+  day (only pornhub; others store stable URLs). Fix: cardRender one-shot `<img>` onerror →
+  `source.refreshThumb()`; pornhub re-fetches the video page for a fresh hdnea poster (verified
+  loads). Generic self-heal for any expired/broken poster.
+
+**Posters (1):** already 100% in browse/search/model/related/all_videos after v0.13.11 (re-confirmed).
+The remaining "не везде превью" is the HOVER-PREVIEW CLIP (plays on focus), missing on ~10 channels.
+
+**DEFERRED / inherent (low priority):**
+- Hover-preview clip absent on: hqporner, eporner (embed-only, no direct mp4), pornhub (webmasters
+  API returns none), pornone/tizam/ebun/porndig (no clean card-level preview attr). porntrex/
+  lenporno expose partial markers but not cleanly in the listing card chunk — revisit if a clean
+  per-card preview URL is confirmed. NOT fixable without a preview URL the site actually serves.
+- xvideos titles keep rare named HTML entities (e.g. `&iexcl;`) — `_decodeHtml` covers common +
+  numeric entities only; pollutes «Похожие по названию» keywords for such titles (~minor).
+- spankbang browse returned 0 cards this session; 24rolika HTTP 530 (site outage) — both env/site.

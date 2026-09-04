@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.11';
+  var CHERRY_VERSION = '0.13.12';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -1027,15 +1027,28 @@
         if (!relSrc) { resolve([], 1); return; }
         var relVideo = object.related_video;
         var relSort  = (relSrc.cfg && relSrc.cfg.sorts && relSrc.cfg.sorts[0] && relSrc.cfg.sorts[0].id) || '';
+        // Title keywords for the page-2+ continuation (below). Built once from the seed.
+        var relKw    = _searchKeywords(relVideo.title || '', 4);
         var _relDone = function (items) {
           items = (items || []).filter(function (v) { return v && v.url !== relVideo.url; });
           items.forEach(function (v) { if (v && !v.source) v.source = relSrc.id; });
           resolve(items.map(toCard), items.length ? (page + 50) : page);
         };
+        // Page-2+ continuation. The site's getRelated block is page 1 only (ignores
+        // `page`), so pages 2+ used to fall back to the newest browse feed — which is
+        // NOT similar to the seed at all. Instead run a TITLE-KEYWORD search on the same
+        // source: topically similar AND paginates (keeps «Похожие» both relevant and
+        // infinite). Falls back to the newest feed only if search is missing/empty.
         var _relFeed = function (cp) {
-          if (!relSrc.browse) { resolve([], page); return; }
-          relSrc.browse('', cp, relSort).then(function (r) { _relDone((r && r.items) || []); })
-            .catch(function () { resolve([], page); });
+          var searchP = (relSrc.search && relKw)
+            ? relSrc.search(relKw, cp).then(function (r) { return (r && r.items) || []; }).catch(function () { return []; })
+            : Promise.resolve([]);
+          searchP.then(function (items) {
+            if (items && items.length) { _relDone(items); return; }
+            if (!relSrc.browse) { resolve([], page); return; }
+            relSrc.browse('', cp, relSort).then(function (r) { _relDone((r && r.items) || []); })
+              .catch(function () { resolve([], page); });
+          });
         };
         if (page === 1) {
           var gp = relSrc.getRelated ? relSrc.getRelated(relVideo, 1) : Promise.resolve([]);
@@ -1102,7 +1115,6 @@
           // (via _RU_EN) so the same groups filter+rank BOTH Russian-title and English-title results
           // — Cyrillic queries are no longer skipped. Per-source empty filter → falls back to top-N.
           var groups = object.query ? _searchGroups(object.query) : [];
-          var phrase = _normText(object.query || '');
           function _groupHits(title) {
             var t = _normText(title), n = 0;
             for (var g = 0; g < groups.length; g++) {
@@ -1128,14 +1140,10 @@
               flat = flat.concat(picked.slice(0, 10));
             }
           });
-          // Relevance rank: more matched groups first, +0.5 boost when the exact phrase is
-          // present (stable for ties → preserves per-source interleave).
-          if (groups.length) {
-            flat = flat
-              .map(function (v, i) { return { v: v, h: _groupHits(v.title) + (_normText(v.title).indexOf(phrase) !== -1 ? 0.5 : 0), i: i }; })
-              .sort(function (a, b) { return b.h - a.h || a.i - b.i; })
-              .map(function (x) { return x.v; });
-          }
+          // Relevance rank (shared with single-channel search): rewards matching more query
+          // groups, the exact phrase, and titles that lead with the query; penalizes stuffing.
+          // Stable for ties → preserves per-source interleave.
+          if (groups.length) flat = _rankByRelevance(flat, object.query);
           // Cross-source dedup: the same video posted on several sites → keep one (the
           // highest-ranked, since we dedup AFTER the relevance sort). Key = normalized title
           // (first 40 chars) + duration bucketed to 15s. Cards without a title can't be keyed.
@@ -1227,6 +1235,9 @@
 
       promise.then(function (result) {
         var m = mapResult(result);
+        // Search: relevance-rank per page (site search is often date-, not relevance-sorted).
+        // Applied BEFORE the explicit client sort so a chosen sort (longest/A-Z) still wins.
+        if (object.query) m.items = _rankByRelevance(m.items, object.query);
         _applyClientSort(m.items);   // guaranteed client sort (longest/shortest/A-Z) per page
         resolve(m.items, m.total_pages);
       }).catch(function (err) {
@@ -1628,6 +1639,30 @@
           }
         } catch (e) {}
       }
+
+      // Self-heal an expired/broken poster. Some CDNs sign thumbnails with a short TTL
+      // (pornhub: ~24h IP-bound token) → a FAVORITED card's stored thumb 404s later and
+      // the card goes blank. If the source can re-resolve a fresh thumb, swap it in on the
+      // FIRST load error (one-shot guard so a still-broken refresh can't loop). Generic:
+      // helps any transient CDN failure, not just favorites.
+      try {
+        var _adp = sourceById(element.source);
+        if (_adp && typeof _adp.refreshThumb === 'function' && element.thumb) {
+          var _img = card.render().find('.card__img')[0];
+          if (_img && _img.tagName === 'IMG') {
+            var _heal = function () {
+              if (_img.getAttribute('data-cherry-refreshed')) return;
+              _img.setAttribute('data-cherry-refreshed', '1');
+              _adp.refreshThumb(element).then(function (u) {
+                if (u && u !== element.thumb) { element.thumb = u; _img.src = u; }
+              }).catch(function () {});
+            };
+            _img.addEventListener('error', _heal);
+            // Already failed before this hook attached (lazy-loaded src set earlier).
+            if (_img.complete && _img.naturalWidth === 0 && _img.getAttribute('src')) _heal();
+          }
+        }
+      } catch (e) {}
 
       // Metadata overlays on every card: dur/HD pill (bottom-right) + views (bottom-left).
       // HD is merged INTO the duration pill ("HD · 12:34"), or shown alone if there is
@@ -2568,6 +2603,46 @@ function _searchGroups(query) {
     return out;
 }
 
+// Relevance score of a title against pre-built query groups. Rewards matching MORE groups,
+// the exact multi-word phrase, and a title that LEADS with the query; mildly penalizes very
+// long titles (keyword-stuffed spam). Short tokens (≤3 chars) match on word boundary so
+// "ass" doesn't hit "bass"/"class". Higher = more relevant. Shared by global + single search.
+function _relScore(title, groups, phrase, firstWord) {
+    var t = _normText(title);
+    if (!t) return -100;
+    var hit = 0;
+    for (var g = 0; g < groups.length; g++) {
+        var members = groups[g], got = false;
+        for (var k = 0; k < members.length; k++) {
+            var mem = members[k];
+            if (!mem) continue;
+            if (mem.length <= 3) {
+                if (new RegExp('(^| )' + mem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '($| )').test(t)) { got = true; break; }
+            } else if (t.indexOf(mem) !== -1) { got = true; break; }
+        }
+        if (got) hit++;
+    }
+    var s = hit * 10 - (groups.length - hit) * 8;
+    if (phrase && phrase.indexOf(' ') !== -1 && t.indexOf(phrase) !== -1) s += 6;  // exact multi-word phrase
+    if (firstWord && t.lastIndexOf(firstWord, 0) === 0) s += 3;                     // title leads with query
+    s -= Math.min(t.length / 60, 2);                                               // mild anti-stuffing
+    return s;
+}
+
+// Stable relevance re-rank of search results. No-op for empty/short lists or no query so
+// browse/all_videos ordering is untouched. Page-local (each page ranks independently).
+function _rankByRelevance(items, query) {
+    if (!query || !items || items.length < 2) return items;
+    var groups = _searchGroups(query);
+    if (!groups.length) return items;
+    var phrase = _normText(query);
+    var firstWord = (groups[0] && groups[0][0]) ? _normText(groups[0][0]).split(' ')[0] : '';
+    return items
+        .map(function (v, i) { return { v: v, s: _relScore(v.title, groups, phrase, firstWord), i: i }; })
+        .sort(function (a, b) { return b.s - a.s || a.i - b.i; })
+        .map(function (x) { return x.v; });
+}
+
 // Popular search terms — quick picks so the user rarely has to type on a D-pad.
 var _POPULAR_TERMS = ['milf', 'teen', 'anal', 'blonde', 'mature', 'lesbian', 'japanese',
     'big tits', 'creampie', 'threesome', 'massage', 'step mom', 'pov', 'amateur', 'asian'];
@@ -2804,6 +2879,21 @@ SOURCES.push({
       };
     }
     return card;
+  },
+
+  // Re-resolve a FRESH poster when the stored one expired. Pornhub thumbs are IP-bound
+  // signed URLs with a ~24h TTL, so a FAVORITED card's stored thumb 404s the next day →
+  // blank poster. The video page re-signs its og:image on every fetch; prefer any
+  // hdnea-signed candidate (pix-fl, renders from any IP) — hash&validto (pix-cdn77) is
+  // IP-bound and would 404 in the device <img>. Consumed by cardRender's self-heal hook.
+  refreshThumb: function (video) {
+    if (!video || !video.url) return Promise.resolve('');
+    return cherryFetch(video.url).then(function (html) {
+      var hd = html.match(/https?:\/\/[a-z0-9.-]*phncdn\.com\/[^"'\s<>]*hdnea=[^"'\s<>]*/i);
+      if (hd) return hd[0].replace(/&amp;/g, '&');
+      var og = html.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i);
+      return og ? og[1].replace(/&amp;/g, '&') : '';
+    }).catch(function () { return ''; });
   },
 
   cfg: {

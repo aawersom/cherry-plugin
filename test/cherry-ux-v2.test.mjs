@@ -543,13 +543,17 @@ describe('plugin.js source assertions (anti-drift)', () => {
     // No longer awaits getRelated before pushing (the grid fetches per page).
     expect(body).not.toMatch(/cardSrc\.getRelated\(element\)\.then/);
   });
-  it('C9: related_video branch = getRelated(page 1) + channel-feed continuation (infinite scroll)', () => {
+  it('C9: related_video branch = getRelated(page 1) + title-search continuation (relevant + infinite)', () => {
     var at = SRC.indexOf('if (object.related_video)');
     expect(at).toBeGreaterThan(-1);
-    var body = SRC.slice(at, at + 1400);
+    var body = SRC.slice(at, at + 2200);
     // Page 1 = the site's related block.
     expect(body).toMatch(/relSrc\.getRelated\(relVideo,\s*1\)/);
-    // Page 2+ continuation = the channel's own browse feed (paginates everywhere).
+    // Page 2+ continuation = a TITLE-KEYWORD search on the same source (topically similar,
+    // paginates) — replaces the old generic newest-feed fallback which was ~0% relevant.
+    expect(body).toMatch(/relKw\s*=\s*_searchKeywords\(relVideo\.title/);
+    expect(body).toMatch(/relSrc\.search\(relKw,\s*cp\)/);
+    // Falls back to the newest feed only when search is missing/empty.
     expect(body).toMatch(/relSrc\.browse\(\s*''\s*,\s*cp\s*,\s*relSort\s*\)/);
     // Empty related → feed from page 1 (no dead first page).
     expect(body).toMatch(/_relNoP1/);
@@ -1823,10 +1827,11 @@ describe('Phase 3 A3(b): all_sources per-source title-match filter before slice'
     expect(body).toMatch(/if\s*\(matched\.length\)\s*picked\s*=\s*matched/);
   });
 
-  it('ranks merged set by group hits + phrase boost, then cross-source dedups', () => {
+  it('ranks merged set by relevance (shared _rankByRelevance), then cross-source dedups', () => {
     var at = SRC.indexOf('All-sources search');
     var body = SRC.slice(at, at + 6000);
-    expect(body).toMatch(/b\.h\s*-\s*a\.h\s*\|\|\s*a\.i\s*-\s*b\.i/);
+    // Ranking is now the shared relevance ranker (also used by single-channel search).
+    expect(body).toMatch(/flat\s*=\s*_rankByRelevance\(flat,\s*object\.query\)/);
     // cross-source dedup by normalized title + bucketed duration
     expect(body).toMatch(/_seenKey/);
     expect(body).toMatch(/_normText\(v\.title\)\.slice\(0,\s*40\)/);

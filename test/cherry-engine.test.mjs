@@ -3827,3 +3827,57 @@ describe('RU→EN search translation', function () {
     expect(M._RU_SOURCES.xvideos).toBeFalsy();
   });
 });
+
+// =============================================================================
+// describe: relevance ranking + «Похожие» continuation + favorites self-heal — v0.13.12
+// =============================================================================
+describe('relevance ranking + self-heal (v0.13.12)', function () {
+  const PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+  function balanced(startIdx) {
+    let depth = 0;
+    for (let k = PLUGIN.indexOf('{', startIdx); k < PLUGIN.length; k++) {
+      if (PLUGIN[k] === '{') depth++;
+      else if (PLUGIN[k] === '}' && --depth === 0) return k;
+    }
+    throw new Error('unbalanced from ' + startIdx);
+  }
+  function grabFn(name) { const i = PLUGIN.indexOf('function ' + name + '('); return PLUGIN.slice(i, balanced(i) + 1); }
+  function grabVar(name) { const i = PLUGIN.indexOf('var ' + name + ' ='); return PLUGIN.slice(i, balanced(i) + 1) + ';'; }
+  const ctx = [grabVar('_SEARCH_SYN'), grabVar('_RU_EN'), grabFn('_normText'), grabFn('_searchGroups'), grabFn('_relScore'), grabFn('_rankByRelevance')].join('\n');
+  const M = new Function(ctx + '\nreturn {_relScore:_relScore,_rankByRelevance:_rankByRelevance,_searchGroups:_searchGroups};')();
+
+  it('ranks the exact multi-word phrase above scattered-word matches', function () {
+    const items = [
+      { title: 'Hot blonde in a big house with small tits' }, // big + tits scattered (matches groups, no phrase)
+      { title: 'Amazing big tits compilation' },              // exact phrase
+      { title: 'Some random clip' }                           // no match
+    ];
+    const r = M._rankByRelevance(items.slice(), 'big tits');
+    expect(r[0].title).toBe('Amazing big tits compilation');
+    expect(r[r.length - 1].title).toBe('Some random clip');
+  });
+  it('penalizes titles missing a query group', function () {
+    const r = M._rankByRelevance([{ title: 'teen solo only' }, { title: 'teen anal scene' }], 'teen anal');
+    expect(r[0].title).toBe('teen anal scene');
+  });
+  it('short tokens (<=3 chars) match on word boundary, not substring', function () {
+    const g = M._searchGroups('ass');
+    expect(M._relScore('nice ass video', g, 'ass', 'ass'))
+      .toBeGreaterThan(M._relScore('bass guitar class', g, 'ass', 'ass'));
+  });
+  it('is a no-op for empty/short lists or no query', function () {
+    expect(M._rankByRelevance([], 'x')).toEqual([]);
+    const one = [{ title: 'a' }]; expect(M._rankByRelevance(one, 'x')).toBe(one);
+    const two = [{ title: 'a' }, { title: 'b' }]; expect(M._rankByRelevance(two, '')).toBe(two);
+  });
+
+  it('anti-drift: shipped code wires the shared ranker, relevant related, and self-heal', function () {
+    expect(/flat = _rankByRelevance\(flat, object\.query\)/.test(PLUGIN)).toBe(true);              // all_sources
+    expect(/if \(object\.query\) m\.items = _rankByRelevance\(m\.items, object\.query\)/.test(PLUGIN)).toBe(true); // single search
+    expect(/relKw\s*=\s*_searchKeywords\(relVideo\.title/.test(PLUGIN)).toBe(true);               // «Похожие» p2 keywords
+    expect(/relSrc\.search\(relKw, cp\)/.test(PLUGIN)).toBe(true);                                 // «Похожие» p2 title-search
+    expect(/refreshThumb: function \(video\)/.test(PLUGIN)).toBe(true);                            // pornhub refresher
+    expect(/data-cherry-refreshed/.test(PLUGIN)).toBe(true);                                       // one-shot guard
+    expect(/_adp\.refreshThumb\(element\)/.test(PLUGIN)).toBe(true);                               // cardRender self-heal hook
+  });
+});

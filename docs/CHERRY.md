@@ -101,6 +101,14 @@ plugin.js
 **Fav serialisation invariant:** only 7 fields persisted: `id, source, title, thumb, url, duration, views`.
 Fields `preview` and `model` are silently dropped on favourite — intentional (signed tokens expire).
 
+**Poster self-heal (v0.13.12):** the persisted `thumb` can expire — pornhub thumbnails are
+IP-bound signed URLs with a ~24h TTL, so a favorite opened the next day showed a **blank poster**
+(pornhub is the only channel with expiring thumbs; all others store stable URLs — stand-verified).
+Fix: `cardRender` attaches a one-shot `error` handler to the poster `<img>`; on load failure it
+calls the source's optional **`refreshThumb(video)`** and swaps in a fresh URL. Only `pornhub`
+implements it (re-fetch the video page → a freshly-signed `hdnea`/pix-fl image, which renders from
+any IP; stand-verified 640×360 loads). Generic hook — also self-heals any transient CDN failure.
+
 ### StreamResult
 
 ```javascript
@@ -265,10 +273,19 @@ parallel (`Promise.all`, per-source failures swallowed), then filters + ranks + 
 > - Stand-verified: RU query top-20 relevance ~0-40% → **100%**.
 
 For each query a per-source title-match filter runs *before* `slice(0,10)` (empty filter → falls
-back to that source's top-N). Merged set is ranked by matched-group count + exact-phrase boost,
-then cross-source deduped (normalized title + bucketed duration). The page paginates: any full raw
+back to that source's top-N). Merged set is ranked by the shared **`_rankByRelevance`**, then
+cross-source deduped (normalized title + bucketed duration). The page paginates: any full raw
 batch (≥10) offers the next page. A guaranteed client-side sort (`client_sort` duration/title)
 is available in every mode — the mitigation for sites whose server sort is a no-op.
+
+> **Relevance ranking (v0.13.12)** — one shared scorer, `_relScore(title, groups, phrase, firstWord)`,
+> used by BOTH global (all_sources) and single-channel search (`_gridLoad`: search results are
+> re-ranked per page BEFORE the explicit client sort, since site search is often date- not
+> relevance-sorted). Score = +10 per matched query group, −8 per missing group, +6 for the exact
+> multi-word phrase, +3 when the title leads with the query, minus a mild length penalty
+> (anti keyword-stuffing). Short tokens (≤3 chars) match on a **word boundary** so "ass" doesn't
+> hit "bass"/"class". Stand-verified (emulator): exact-phrase in top-5 jumped from 0–40% → **100%**
+> for "teen anal"/"blonde massage"/"russian mature"/«большие сиськи»; strong-match top-10 0→100%.
 
 > **KVS search URL (v0.13.10):** xozilla/analdin search is the `/search/{q}/` PATH — the old `?s=`
 > query param was ignored (returned the homepage feed → irrelevant). Fixed → query honored.
@@ -365,9 +382,12 @@ The card long-press menu (`cardRender.onMenu`, `plugin.js:834`) offers two relat
    - On player close, a related grid is auto-pushed if `getRelated` resolved in the
      background (`playVideo` + the `player` `destroy` listener, REQ-4).
    - **Infinite scroll (v0.13.4):** the site's related block is a fixed list (ignores `page`),
-     so the grid CONTINUES into the channel's own feed: page 1 = `getRelated(video)`, page 2+ =
-     `src.browse('', cp)` (paginates everywhere after v0.13.3). Empty related → feed from page 1.
-     Title-similarity is the separate «Похожие названия» item, so search is not duplicated here.
+     so the grid CONTINUES on page 2+. **v0.13.12:** the continuation is now a **title-keyword
+     search on the same source** (`relSrc.search(relKw, cp)`, `relKw = _searchKeywords(seed.title)`),
+     NOT the generic newest feed — so pages 2+ stay topically similar to the seed AND paginate.
+     Falls back to `src.browse('', cp)` only when the source lacks search or it returns nothing.
+     Stand-verified: page-2 token-overlap with the seed 0→**75-92%** (pornhub, whose `getRelated`
+     returns only 1 item, now gets 30 relevant results). Empty related → feed from page 1.
 2. **«Похожие названия»** — a keyword search of the video's title words across all sources
    (`all_sources:true`), always offered. Already paginates (the all_sources fan-out).
 
