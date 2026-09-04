@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.22';
+  var CHERRY_VERSION = '0.13.23';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -158,6 +158,12 @@
     // desktop UA; the stream itself is proxied via the adapter's `androidProxyStream` flag
     // (the mirror host rotates, so no host entry can name it).
     'www.ebalovo.porn': 1,
+    // lenkino: same family as ebalovo (UA-bound tokens, mobile mirror) — page here, stream via
+    // the adapter's androidProxyStream flag.
+    'www.lenkino.adult': 1,
+    // porno666: get_file tokens are IP-bound and the CDN 403s foreign Referers (ebun's farm) —
+    // page and get_file share this host, so both go through the proxy with no Referer.
+    'porno666.link': 1,
     // spankbang: Cloudflare challenges the device home IP too → force the page through
     // the proxy (routes to Val.town via PROXY_URL_VT, which passes the challenge).
     'ru.spankbang.com': 1, 'spankbang.com': 1, 'www.spankbang.com': 1,
@@ -2706,7 +2712,7 @@ var _RU_EN = {
 };
 // Known RUSSIAN-title sources — they should receive the ORIGINAL Cyrillic query, not the
 // translated one (their catalog is in Russian). Everything else defaults to English-title.
-var _RU_SOURCES = { tizam: 1, lenporno: 1, '24rolika': 1, ebun: 1, jopaonline: 1, pornobolt: 1, huyamba: 1, xhamster: 1, ebalovo: 1 };  // xhamster: RU-localised titles, site search takes RU or EN as typed
+var _RU_SOURCES = { tizam: 1, lenporno: 1, '24rolika': 1, ebun: 1, jopaonline: 1, pornobolt: 1, huyamba: 1, xhamster: 1, ebalovo: 1, porno666: 1, lenkino: 1, pornobriz: 1 };  // xhamster: RU-localised titles, site search takes RU or EN as typed
 // Sources whose SEARCH matches by site TAGS, not title words (stand-measured share of 'blonde'
 // results with the word in the title: hqporner 0%, perfektdamen 5%, porndig 17%, eporner/pornhub
 // 23%, analdin 26%, xozilla 39% — yet each honours the query). Their results are site-relevant even
@@ -5093,10 +5099,18 @@ function _porntrexPages(html, page, itemsLen) {
           // injected after the slug, before the page. categoryFmt MUST carry {slug}/{page}.
           // The «Свежее» default (globalLatestSort) is NOT a valid category sort segment —
           // a category's bare /categories/{slug}/{page}/ IS its latest order — so omit it.
-          var fmt = (s && s !== cfg.globalLatestSort)
-            ? cfg.categoryFmt.replace('{slug}', '{slug}/' + s)
-            : cfg.categoryFmt;
-          url = _buildCatUrl(fmt, category, p, cfg.catPageBase || 1, cfg.catPage1Omit !== false);
+          if (cfg.catSortQuery) {
+            // Category pages that reject the /{sort}/ segment but honour ?sort_by= with the KVS
+            // vocabulary (porno666): map the root-path sort id → sort_by value.
+            url = _buildCatUrl(cfg.categoryFmt, category, p, cfg.catPageBase || 1, cfg.catPage1Omit !== false);
+            var qsv = cfg.catSortQuery[s];
+            if (qsv) url += (url.indexOf('?') >= 0 ? '&' : '?') + sp + '=' + qsv;
+          } else {
+            var fmt = (s && s !== cfg.globalLatestSort)
+              ? cfg.categoryFmt.replace('{slug}', '{slug}/' + s)
+              : cfg.categoryFmt;
+            url = _buildCatUrl(fmt, category, p, cfg.catPageBase || 1, cfg.catPage1Omit !== false);
+          }
         } else if (category && cfg.categoryFmt) {
           url = _buildCatUrl(cfg.categoryFmt, category, p, cfg.catPageBase || 1, cfg.catPage1Omit !== false);
           // Append sort unless the URL already carries that param (avoids ?sort=mv dupes).
@@ -6532,11 +6546,14 @@ SOURCES.push(_kvsEngine({
 // 480p / 720p / 1080p files (labels verified against *_text on huyamba). Falls back to
 // the generic extractStreams when a skin has no flashvars.
 function _kvsFlashvarsQuality(html) {
-    var varM = /(video_url|video_alt_url2|video_alt_url)\s*[=:]\s*['"]([^'"]+)['"]/g;
     var labels = { video_url: '480p', video_alt_url: '720p', video_alt_url2: '1080p' };
+    // Skins that label their files (porno666: video_url_text: '360p' …) override the default map.
+    var tRe = /(video_url|video_alt_url\d*)_text\s*[=:]\s*['"]([^'"]+)['"]/g, tm;
+    while ((tm = tRe.exec(html)) !== null) labels[tm[1]] = tm[2];
+    var varM = /(video_url|video_alt_url\d*)\s*[=:]\s*['"](https?:[^'"]+)['"]/g;
     var quality = {}, fm;
     while ((fm = varM.exec(html)) !== null) quality[labels[fm[1]] || fm[1]] = fm[2];
-    var best = quality['1080p'] || quality['720p'] || quality['480p'] || '';
+    var best = bestQualityUrl(quality);
     if (best) return { url: best, quality: quality };
     return extractStreams(html);
 }
@@ -6631,6 +6648,233 @@ SOURCES.push({
         return cherryFetch(url).then(function (html) {
             var items = _ebCards(html);
             return { items: items, total_pages: _derivePages(items.length, p, 24) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    }
+});
+
+// ---- 9c. Porno666 (added v0.13.23) ----
+// RU KVS site on the brand host porno666.link (mirrors wwwp.porno666.news / x.porno666.fo also
+// exist — card + model links are normalised to the brand host). It is the farm behind ebun's
+// 666-emded.com embeds, with the same stream policy: get_file tokens are IP-bound AND the CDN
+// (nl2.videofile.me) 403s any foreign Referer → on Android the page and the stream (same host)
+// go through the proxy (CF; stand: CF-minted token streams via CF → 206). Feed sorts are root
+// paths (/most-popular/, /top-rated/, /latest-updates/); category pages reject the /{sort}/
+// segment but honour ?sort_by= (KVS vocabulary) → catSortQuery. Flashvars label their files
+// 360/480/720 (video_url_text …) — _kvsFlashvarsQuality reads those labels.
+SOURCES.push(_kvsEngine({
+    id: 'porno666',
+    name: 'Porno666',
+    host: 'porno666.link',
+    sortMode: 'path', globalLatestSort: 'latest-updates',
+    categoryFmt: 'https://porno666.link/categories/{slug}/{page}/',
+    catPageBase: 1, catPage1Omit: true,
+    catSortQuery: { 'most-popular': 'video_viewed', 'top-rated': 'rating', 'latest-updates': 'post_date' },
+    categories: _cats('masturbaciya:Мастурбация,orgazmy:Оргазмы,massaj:Массаж,negry:Негры,porno-vk:Порно ВК,mamki:Мамки,chulki-i-kolgotki:Чулки и колготки,bolshie-chleny:Большие члены,blondinki:Блондинки,bolshie-siski:Большие сиськи,analnyy-seks:Анал,domashnee-i-chastnoe:Домашнее порно,zrelye:Зрелые,tolstye:Толстые,ryjie:Рыжие,molodye:Молодые,ne-postanovochnoe:Не постановочное,russkoe:Русское порно,studenty:Студенты,jeny:Жены,spyashchie:Спящие,hudye:Худые,jopy:Жопы,bryunetki:Брюнетки,rakom:Раком,seks-vtroem:Секс втроем,igrushki:Игрушки,svingery:Свингеры,strapon:Страпон,minet:Минет,sperma:Сперма,izmena:Измена,volosatye:Волосатые,pikap:Пикап,gruppovoe:Групповое,porno-film:Порно фильмы,jestkoe:Жесткое,aziatki:Азиатки,kasting:Кастинг,pyanye:Пьяные,yaponskoe:Японское,bdsm:БДСМ'),
+    sorts: _cats('most-popular:По популярности,latest-updates:Свежее,top-rated:По рейтингу'),
+    searchUrl: function (query, page) {
+        var q = encodeURIComponent(query);
+        return page > 1 ? 'https://porno666.link/search/' + q + '/' + page + '/' : 'https://porno666.link/search/' + q + '/';
+    },
+    browseUrl: function (page) {
+        return page > 1 ? 'https://porno666.link/latest-updates/' + page + '/' : 'https://porno666.link/latest-updates/';
+    },
+    hrefRxSrc: 'href="(https?://[a-z0-9.-]*porno666[a-z0-9.-]*/video/(\\d+)/)"',
+    normalizeUrl: function (raw) { return raw.replace(/^https?:\/\/[^/]+/, 'https://porno666.link'); },
+    idFromUrl: function (url, m) { return 'p666-' + m[2]; },
+    // Card: <a href=…/video/{id}/ title=…><img data-original=… data-preview=…mp4><div class="duration">
+    // <div class="views"><strong class="title">
+    chunkWindow: { before: 0, after: 900 },
+    stripBase64: true,
+    thumbRx: [/data-original="([^"?#]+\.jpe?g)/i, /src="(https?:\/\/[^"?#]+\.jpe?g)/i],
+    titleRx: [/<strong class="title">\s*([^<]+?)\s*<\/strong>/, /^href="[^"]+" title="([^"]+)"/],
+    modelIndex: {
+        url: function (p) { return p > 1 ? 'https://porno666.link/models/' + p + '/' : 'https://porno666.link/models/'; },
+        hrefRx: /href="(https?:\/\/[a-z0-9.-]*porno666[a-z0-9.-]*\/models\/[a-z0-9-]+\/)"/g,
+        normalizeUrl: function (raw) { return raw.replace(/^https?:\/\/[^/]+/, 'https://porno666.link'); },
+        nameRx: [/title="([^"]+)"/, /alt="([^"]+)"/],
+        thumbRx: [/src="(https?:\/\/[^"]+\.jpe?g)"/i]
+    },
+    getStream: function (video) {
+        return cherryFetch(video.url).then(_kvsFlashvarsQuality)
+            .catch(function () { return { url: '', quality: {} }; });
+    }
+}));
+
+// ---- 9d. Lenkino (added v0.13.23) ----
+// Same "len" family as ebalovo: the brand domain www.lenkino.adult 301s to the current mirror
+// (wes.lenkino.adult today; mobile UAs are sent to mob.lenkino.love, whose stream tokens 404),
+// so URLs are built on the brand domain and card/model links are normalised back to it.
+// Cards: <a href="…/{id}" class="len_pucl"><img src=img.lencdn.com… alt=…><div class="itm-dur">
+// <div class="itm-tit">. Feeds: / (newest, page/{p}), /top-porno (page/{p}); categories /{slug}
+// (page/{p}, no sorts); search /search/{q}/page/{p}; pornstars /pornstars (page/{p}) →
+// /pornstar/{slug} (page/{p}). Stream = flashvars video_url/video_alt_url (480/720p) on
+// video_file/… — not IP-bound, but UA-BOUND (404 with the WebView UA) and a foreign Referer is
+// answered with a decoy ad clip → page force-proxied on Android + `androidProxyStream`.
+var _LK_BASE = 'https://www.lenkino.adult';
+var _LK_CARDS = {
+    id: 'lenkino',
+    // Video links are the only host-root numeric paths (/{id}); pager links carry /page/.
+    hrefRxSrc: 'href="(https?://[a-z0-9.-]+/(\\d+))"',
+    normalizeUrl: function (raw) { return raw.replace(/^https?:\/\/[^/]+/, _LK_BASE); },
+    idFromUrl: function (url, m) { return 'lk-' + m[2]; },
+    chunkWindow: { before: 0, after: 900 },
+    thumbRx: [/src="(https?:\/\/img\.lencdn\.com\/[^"]+\.jpe?g)"/i],
+    titleRx: [/<div class="itm-tit">\s*([^<]+?)\s*<\/div>/, /alt="([^"]+)"/],
+    durationRx: /class="itm-dur[^"]*">\s*([\d:]+)/
+};
+// Drop thumb-less matches: the footer's RTA link (/2257) is the only host-root numeric path that is not a card.
+function _lkCards(html) { return _kvsParseCards(html, _LK_CARDS).filter(function (v) { return !!v.thumb; }); }
+
+function _lkUrl(category, page, sort) {
+    var p = page || 1, pg = p > 1 ? '/page/' + p : '';
+    if (category) return _LK_BASE + '/' + category + pg;
+    return _LK_BASE + ((sort || 'top') === 'top' ? '/top-porno' : '') + (pg || (sort === 'latest' ? '/' : ''));
+}
+
+SOURCES.push({
+    id: 'lenkino',
+    name: 'Lenkino',
+    host: 'www.lenkino.adult',
+    androidProxyStream: true,
+    cfg: { categories: _cats('a1-russian:Русское порно,milf-porn:Порно зрелых,stepmom:Мачеха,anal-porno:Анал,big-tits:Большие сиськи,lesbi:Лесби,group-videos:Групповуха,pov:pov,porno-bdsm:БДСМ,webcam:Вебкамера,gangbang:Ганг банг,threesome:ЖМЖ,beautiful:Красивый секс,erotic:Эротика,amateur-porno:Домашнее порно,casting:Кастинг,cunnilingus:Куни,massage:Массаж,masturbation:Мастурбация,blowjob:Минет,solo:Соло,rough-sex:Хардкор,2man-woman:МЖМ,czech-porno:Чешское порно,russian-amateur:Русское домашнее порно,teen:Молодые,old-and-young:Старые с молодыми,students:Студенты,asian:Азиатки,exgfs:Секс с бывшей,mistress:Госпожа,latina:С латинками,nurse:Медсестра,bride:С невестой,secretary:Секретарша,babysitter:Няня,cheerleader:Черлидерша,schoolgirl:Студентка,slave:Секс-рабыня,maid:Горничная,teacher-milf:Учительница,indianka:Индианка'),
+           sorts: _cats('top:По популярности,latest:Свежее') },
+
+    search: function (query, page) {
+        var p = page || 1;
+        var url = _LK_BASE + '/search/' + encodeURIComponent(query) + (p > 1 ? '/page/' + p : '');
+        return cherryFetch(url).then(function (html) {
+            var items = _lkCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 36) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    browse: function (category, page, sortId) {
+        var p = page || 1;
+        return cherryFetch(_lkUrl(category, p, sortId)).then(function (html) {
+            var items = _lkCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 36) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    getRelated: _relatedFrom(_lkCards),
+
+    getStream: function (video) {
+        return cherryFetch(video.url).then(_kvsFlashvarsQuality)
+            .catch(function () { return { url: '', quality: {} }; });
+    },
+
+    getModels: function (page) {
+        var p = page || 1;
+        return cherryFetch(_LK_BASE + '/pornstars' + (p > 1 ? '/page/' + p : '')).then(function (html) {
+            return _parseModelIndex(html, {
+                window: 700,
+                hrefRx: /href="(https?:\/\/[a-z0-9.-]+\/pornstar\/[a-z0-9_-]+)"/g,
+                normalizeUrl: _LK_CARDS.normalizeUrl,
+                nameRx: [/alt="([^"]+)"/, /<div class="itm-tit">\s*([^<]+?)\s*</],
+                thumbRx: [/src="(https?:\/\/img\.lencdn\.com\/[^"]+\.jpe?g)"/i]
+            });
+        }).catch(function () { return []; });
+    },
+
+    browseByModel: function (modelUrl, page) {
+        var p = page || 1;
+        var url = modelUrl.replace(/\/+$/, '') + (p > 1 ? '/page/' + p : '');
+        return cherryFetch(url).then(function (html) {
+            var items = _lkCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 36) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    }
+});
+
+// ---- 9e. Pornobriz (added v0.13.23) ----
+// RU site with its own engine and plain relative markup: <div class="thumb_main"><a href="/video/{slug}/"
+// rel="bookmark"><video data-preview=…mp4><img data-original="/content/screen/…jpg" alt=…>
+// <div class="t-hd">FULL HD</div><div class="duration"><div class="th-title">. Sorts are roots
+// (/new/, /top/, /best/ + page{p}/), categories /{slug}/page{p}/, search /search/{q}/ (single
+// page), models /stars/page{p}/ → /models/{slug}/page{p}/. Stream = <source src=… size=1080|720|
+// 480|240> on the page host (302 → idcdn/cdngu CDNs) — no IP/UA/Referer binding (a listed
+// quality can be missing on the CDN → 404, the player falls back); mobile UAs get the
+// m.pornobriz.cloud mirror with the same markup. See the androidProxyStream note below.
+var _PB_BASE = 'https://pornobriz.com';
+function _pbAbs(u) { return u && u.charAt(0) === '/' ? _PB_BASE + u : u; }
+var _PB_CARDS = {
+    id: 'pornobriz',
+    hrefRxSrc: 'href="(/video/([a-z0-9_-]+)/)" rel="bookmark"',
+    normalizeUrl: _pbAbs,
+    idFromUrl: function (url, m) { return 'pb-' + m[2]; },
+    chunkWindow: { before: 0, after: 900 },
+    stripBase64: true,
+    thumbRx: [/data-original="(\/content\/screen\/[^"]+\.jpe?g)"/i],
+    titleRx: [/<div class="th-title">\s*([^<]+?)\s*<\/div>/, /alt="([^"]+)"/],
+    previewRx: /data-preview="([^"]+\.mp4)"/
+};
+function _pbCards(html) {
+    return _kvsParseCards(html, _PB_CARDS).map(function (v) { v.thumb = _pbAbs(v.thumb); return v; });
+}
+
+function _pbUrl(category, page, sort) {
+    var p = page || 1, pg = p > 1 ? 'page' + p + '/' : '';
+    return _PB_BASE + '/' + (category || sort || 'top') + '/' + pg;
+}
+
+SOURCES.push({
+    id: 'pornobriz',
+    name: 'Pornobriz',
+    host: 'pornobriz.com',
+    // The page is fine natively, but the WebView's media stack rejects the CDN's direct
+    // response (MEDIA_ELEMENT_ERROR "Format error" on both the mirror and the final
+    // s12.idcdn.top URL, while curl gets a clean 206 video/mp4) — through the proxy the
+    // same file plays (stand: inner player currentTime 17 s). px() proxies the stream.
+    androidProxyStream: true,
+    cfg: { categories: _cats('asian:Азиатки,anal:Анальный секс,bdsm:БДСМ,blonde:Блондинки,big_ass:Большая жопа,big_tits:Большие сиськи,big_dick:Большой член,shaved:Бритая киска,brunette:Брюнетки,clothes:В одежде,hairy:Волосатые киски,swallow:Глотают сперму,deepthroat:Глубокая глотка,group:Групповой секс,double_penetration:Двойное проникновение,long_hair:Длинноволосые девушки,wanking:Дрочат,hardcore:Жесткий секс,ffm:ЖМЖ порно,toys:Игрушки,kazakh:Казашки,cumshot:Камшот,cum_in_mouth:Кончают в рот,perfect_ass:Красивая задница,lingerie:Красивое белье,beautiful:Красивые девушки,beautiful_tits:Красивые сиськи,close_up:Крупным планом,pussy_licking:Кунилингус,lesbian:Лесбиянки,amateur:Любительское порно,petite:Маленькие девушки,small_tits:Маленькие сиськи,milf:Мамочки,masturbation:Мастурбация,interracial:Межрасовое,mfm:МЖМ порно,cute:Милашки,blowjob:Минет,seks-molodye:Молодые,outdoor:На природе,public:На публике,riding:Наездницы,ebony:Негритянки,orgasm:Оргазм,pov:От первого лица,peeing:Писают,kissing:Поцелуи,gagging:Рвотные позывы,reality:Реальный секс,rimming:Римминг,romantic:Романтическое,russian:Русское порно,redhead:Рыжие,japanese:С японками,threesome:Секс втроем,doggystyle:Секс раком,babe:Симпатичные,squirting:Сквиртинг,solo_girl:Соло девушек,creampie:Сперма в жопе,cum_on_tits:Сперма на груди,facial:Сперма на лице,strap-on:Страпон,striptease:Стриптиз,black-haired:Темноволосые,fetish:Фетиш,fingering:Фингеринг,fisting:Фистинг,skinny:Худые девушки'),
+           sorts: _cats('top:По популярности,new:Свежее,best:Лучшее') },
+
+    // The site's search is a single page (no pager) — 30 best matches.
+    search: function (query) {
+        var url = _PB_BASE + '/search/' + encodeURIComponent(query) + '/';
+        return cherryFetch(url).then(function (html) {
+            return { items: _pbCards(html), total_pages: 1 };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    browse: function (category, page, sortId) {
+        var p = page || 1;
+        return cherryFetch(_pbUrl(category, p, sortId)).then(function (html) {
+            var items = _pbCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 42) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    getRelated: _relatedFrom(_pbCards),
+
+    getStream: function (video) {
+        return cherryFetch(video.url).then(function (html) {
+            var rx = /<source src="([^"]+\.mp4)"[^>]*size="(\d+)"/g, m, quality = {};
+            while ((m = rx.exec(html)) !== null) quality[m[2] + 'p'] = m[1];
+            var best = bestQualityUrl(quality);
+            return best ? { url: best, quality: quality } : extractStreams(html);
+        }).catch(function () { return { url: '', quality: {} }; });
+    },
+
+    getModels: function (page) {
+        var p = page || 1;
+        return cherryFetch(_PB_BASE + '/stars/' + (p > 1 ? 'page' + p + '/' : '')).then(function (html) {
+            return _parseModelIndex(html, {
+                window: 500,
+                hrefRx: /href="(\/models\/[^"\/]+\/)" rel="bookmark"/g,
+                normalizeUrl: _pbAbs,
+                nameRx: [/title="([^"]+)"/, /alt="([^"]+)"/],
+                thumbRx: [/data-original="(\/models\/(?!no_screen)[^"]+\.jpe?g)"/i]
+            }).map(function (mdl) { mdl.thumb = _pbAbs(mdl.thumb); return mdl; });
+        }).catch(function () { return []; });
+    },
+
+    browseByModel: function (modelUrl, page) {
+        var p = page || 1;
+        var url = modelUrl.replace(/\/+$/, '') + '/' + (p > 1 ? 'page' + p + '/' : '');
+        return cherryFetch(url).then(function (html) {
+            var items = _pbCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 42) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     }
 });
