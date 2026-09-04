@@ -4099,7 +4099,7 @@ describe('global ranking: tag-search sources get a site-relevant baseline (v0.13
   });
 
   it('anti-drift: _TAG_SEARCH map exists and the fan-out marks fallback cards from those sources', function () {
-    expect(PLUGIN).toContain("var _TAG_SEARCH = { hqporner: 1, perfektdamen: 1, porndig: 1, eporner: 1, pornhub: 1, analdin: 1, xozilla: 1 };");
+    expect(PLUGIN).toContain("var _TAG_SEARCH = { hqporner: 1, perfektdamen: 1, porndig: 1, eporner: 1, pornhub: 1, analdin: 1, xozilla: 1, xhamster: 1 };");
     expect(PLUGIN).toContain('if (_TAG_SEARCH[r._srcId]) picked.forEach(function (v) { v._siteRelevant = true; });');
     expect(PLUGIN).toContain('if (v._siteRelevant) s = Math.max(s, groups.length * 10);');
     expect(PLUGIN).toContain('picked.slice(0, 10).forEach(function (v, k) { v._srcRank = k; });');
@@ -4209,5 +4209,110 @@ describe('v0.13.20 channels: ebun route, huyamba revival (play.huyamba.mobi), 24
     expect(block("id: '24rolika',", 'search:')).toContain('disabled: true');
     expect((PLUGIN.match(/_activeSources\(\)/g) || []).length).toBeGreaterThanOrEqual(3);
     expect(PLUGIN).toContain('var promises = _act.map(function (src) {');
+  });
+});
+
+// ── v0.13.21: xHamster adapter (JSON listing, HLS master, related, pornstars) ──
+describe('v0.13.21 xhamster: JSON cards, paging, URLs, HLS stream, related, models', function () {
+  const PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+  function grab(name) {
+    const i = PLUGIN.indexOf('function ' + name + '(');
+    expect(i).toBeGreaterThan(-1);
+    let depth = 0;
+    for (let k = PLUGIN.indexOf('{', i); k < PLUGIN.length; k++) {
+      if (PLUGIN[k] === '{') depth++;
+      else if (PLUGIN[k] === '}' && --depth === 0) return PLUGIN.slice(i, k + 1);
+    }
+    throw new Error('unbalanced ' + name);
+  }
+  function block(startMarker, endMarker) {
+    const a = PLUGIN.indexOf(startMarker); expect(a).toBeGreaterThan(-1);
+    const b = PLUGIN.indexOf(endMarker, a); expect(b).toBeGreaterThan(a);
+    return PLUGIN.slice(a, b);
+  }
+  const sortLine = PLUGIN.slice(PLUGIN.indexOf('var _XH_SORT'), PLUGIN.indexOf(';', PLUGIN.indexOf('var _XH_SORT')) + 1);
+  const deps = ['_attr', '_decodeHtml', '_titleFromUrl', '_derivePages', '_humanizeName', '_parseModelIndex',
+    '_xhInitials', '_xhThumbProps', '_xhCards', '_xhModels', '_xhPages', '_xhUrl'].map(grab).join('\n') + '\n' + sortLine;
+  // eslint-disable-next-line no-new-func
+  const M = new Function(deps + '\nreturn { _xhCards, _xhModels, _xhPages, _xhUrl, _xhInitials, _xhThumbProps, _parseModelIndex };')();
+
+  it('listing fixture (/newest): 46 cards — ids, RU titles, webp thumbs, h264 hover clip, duration, views', function () {
+    const items = M._xhCards(fixture('xhamster-listing.html'));
+    expect(items.length).toBeGreaterThanOrEqual(46);
+    expect(items[0].id).toMatch(/^xh-\d+$/);
+    expect(items[0].source).toBe('xhamster');
+    expect(items.every(v => /^https:\/\/ru\.xhamster\.com\/videos\//.test(v.url))).toBe(true);
+    expect(items.every(v => /^https:\/\/[a-z0-9.-]+\.xhcdn\.com\//.test(v.thumb))).toBe(true);
+    expect(items.every(v => /\.t\.mp4$/.test(v.preview) && !/av1/.test(v.preview))).toBe(true); // h264 fallback, not AV1
+    expect(items.filter(v => v.duration > 0).length).toBe(items.length);
+    expect(items.filter(v => /[А-Яа-яЁё]/.test(v.title)).length / items.length).toBeGreaterThan(0.8);
+  });
+
+  it('search fixture (/search/blonde?page=2): cards come from searchResult; pages from maxPages', function () {
+    const html = fixture('xhamster-search.html');
+    const items = M._xhCards(html);
+    expect(items.length).toBeGreaterThanOrEqual(40);
+    expect(M._xhPages(html, 2, items.length)).toBe(80);
+  });
+
+  it('pornstar page: the moments (shorts) block is skipped in favour of the video list', function () {
+    const html = fixture('xhamster-pornstar-page.html');
+    const items = M._xhCards(html);
+    expect(items.length).toBeGreaterThanOrEqual(40);
+    // synthetic: moments-only root → longest non-moments list wins, moments ignored
+    const root = { momentsListComponent: { videoThumbProps: [{ id: 1, pageURL: 'https://ru.xhamster.com/moments/x' }] },
+                   trendingVideoSectionComponent: { videoListProps: { videoThumbProps: [{ id: 2, pageURL: 'https://ru.xhamster.com/videos/a' }, { id: 3, pageURL: 'https://ru.xhamster.com/videos/b' }] } } };
+    expect(M._xhThumbProps(root).map(v => v.id)).toEqual([2, 3]);
+  });
+
+  it('_xhPages: lastPageNumber on feed pages, maxPages on search, derive fallback', function () {
+    expect(M._xhPages(fixture('xhamster-listing.html'), 1, 46)).toBe(1771);
+    expect(M._xhPages('<html>no json</html>', 1, 46)).toBeGreaterThan(1);
+    expect(M._xhPages('<html>no json</html>', 1, 3)).toBe(1);
+  });
+
+  it('_xhUrl: trend root feed (default), newest/best(+weekly/monthly), categories, paging', function () {
+    expect(M._xhUrl('', 1, '')).toBe('https://ru.xhamster.com/');
+    expect(M._xhUrl('', 2, 'trend')).toBe('https://ru.xhamster.com/2');
+    expect(M._xhUrl('', 1, 'newest')).toBe('https://ru.xhamster.com/newest');
+    expect(M._xhUrl('', 3, 'newest')).toBe('https://ru.xhamster.com/newest/3');
+    expect(M._xhUrl('', 2, 'best-weekly')).toBe('https://ru.xhamster.com/best/weekly/2');
+    expect(M._xhUrl('milf', 1, 'trend')).toBe('https://ru.xhamster.com/categories/milf');
+    expect(M._xhUrl('milf', 2, 'best')).toBe('https://ru.xhamster.com/categories/milf/best/2');
+    expect(M._xhUrl('milf', 2, 'newest')).toBe('https://ru.xhamster.com/categories/milf/newest/2');
+  });
+
+  it('getStream regex: the preloaded HLS master on the video page (multi-quality, token not IP-bound)', function () {
+    const html = fixture('xhamster-video.html');
+    const m = /<link rel="preload" href="(https:\/\/video-nss\.xhcdn\.com\/[^"]+\.m3u8)"/.exec(html);
+    expect(m).toBeTruthy();
+    expect(m[1]).toMatch(/\/media=hls4\/multi=.*1920x1080:1080p.*\.h264\.mp4\.m3u8$/);
+    expect(block("id: 'xhamster',", 'getModels:')).toContain('<link rel="preload" href="(https:\\/\\/video-nss');
+  });
+
+  it('related: xplayerPluginSettings.relatedVideos on the video page (11 cards)', function () {
+    const root = M._xhInitials(fixture('xhamster-video.html'));
+    const rel = root.xplayerPluginSettings.relatedVideos;
+    expect(rel.length).toBeGreaterThanOrEqual(10);
+    expect(rel[0].url).toMatch(/^https:\/\/ru\.xhamster\.com\/videos\//);
+    expect(rel[0].thumbUrl).toMatch(/^https:\/\//);
+  });
+
+  it('pornstar index: /pornstars JSON (pornstarListProps.pornstars) → 60 models with RU names + avatars', function () {
+    const items = M._xhModels(fixture('xhamster-pornstars.html'));
+    expect(items.length).toBe(60);
+    expect(items[0].name).toMatch(/[А-Яа-яЁё]/);
+    expect(items[0].thumb).toMatch(/^https:\/\/[a-z0-9.-]+\.xhcdn\.com\//);
+    expect(items[0].url).toMatch(/^https:\/\/ru\.xhamster\.com\/pornstars\/[a-z0-9-]+$/);
+    expect(M._xhModels('<html>no json</html>')).toEqual([]);
+  });
+
+  it('routing: page host VPS-routed + force-proxied; RU-titled + tag-search; tile before Spankbang', function () {
+    expect(block('var PROXY_URL_2_HOSTS = {', '};')).toContain("'ru.xhamster.com': 1");
+    expect(block('var _ANDROID_FORCE_PROXY = {', '};')).toContain("'ru.xhamster.com': 1");
+    expect(PLUGIN).toMatch(/var _RU_SOURCES = \{[^}]*xhamster: 1/);
+    expect(PLUGIN).toMatch(/var _TAG_SEARCH = \{[^}]*xhamster: 1/);
+    expect(PLUGIN.indexOf("id: 'xhamster'")).toBeLessThan(PLUGIN.indexOf("id: 'spankbang'"));
+    expect(PLUGIN.indexOf("id: 'xhamster'")).toBeGreaterThan(PLUGIN.indexOf("id: 'eporner'"));
   });
 });

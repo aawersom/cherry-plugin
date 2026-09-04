@@ -43,6 +43,7 @@ const PROXY_URL_2_HOSTS = {
   // ebun embed/stream host + huyamba page (v0.13.20) — see plugin.js comments
   '666-emded.com': 1,
   'play.huyamba.mobi': 1,
+  'ru.xhamster.com': 1,
 };
 const VIDEO_TIMEOUT_MS = 35000;
 const CONCURRENCY      = 3;

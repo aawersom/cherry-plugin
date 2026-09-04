@@ -682,6 +682,7 @@ Only safe for plain pass-through proxies that do NOT rewrite M3U8.
 | 2 | `xvideos` | Xvideos | xvideos.com | CF datacenter | HLS from CDN | ✅ Working |
 | 3 | `xnxx` | Xnxx | xnxx.com | VPS | HLS-first (adaptive 1080p+); MP4 fallback in quality map | ✅ Working |
 | 4 | `eporner` | Eporner | eporner.com | VPS (video pages) + Android force-proxy | JSON API browse; video page via VPS. getStream hash/xhr needs RE | ⚠ listing OK, stream RE |
+| 4b | `xhamster` | xHamster | ru.xhamster.com | VPS (page force-proxied on Android: native fetch trips on HTTP 103; CF got 503) | JSON `window.initials` → videoThumbProps (title RU-localised, thumb webp, h264 hover clip); stream = preloaded HLS master (`<link rel=preload>`, token not IP-bound) → inner player on Android; related = xplayerPluginSettings.relatedVideos; pornstars JSON | ✅ Added 2026-09-04 (v0.13.21) |
 | 5 | `spankbang` | Spankbang | ru.spankbang.com | **Val.town** (+ Android force-proxy) | Val.town IP passes CF challenge; listing + signed-token mp4 (`sb-cd.com`) | ✅ Working |
 | 6 | `hqporner` | HQPorner | hqporner.com | VPS (page + bigcdn) + Android force-proxy | page via VPS; embed `mydaddy.cc` + CDN `*.bigcdn.cc` both VPS (IP-bound token). Player markup redesigned → stream RE | ⚠ cards OK, stream RE |
 | 7 | `youjizz` | YouJizz | youjizz.com | VPS (+ `*.youjizz.com` CDN) | Direct MP4 (Android: protocol-relative normalized → no chooser) | ✅ Working |

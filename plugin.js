@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.20';
+  var CHERRY_VERSION = '0.13.21';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -59,7 +59,11 @@
     '666-emded.com': 1,
     // huyamba: mobile UAs are 302'd into a dead mobile mirror (rt.huyamba.xyz) — the VPS
     // fetches with a desktop UA. Its get_file token is NOT IP-bound (stream stays raw).
-    'play.huyamba.mobi': 1
+    'play.huyamba.mobi': 1,
+    // xhamster: the device's native fetch of listings trips on HTTP 103 (Early Hints) and the
+    // CF worker got a 503 from it once; the VPS is steady. Only the PAGE host — the HLS stream
+    // (video-nss.xhcdn.com) is not IP-bound and stays raw.
+    'ru.xhamster.com': 1
     // NB: hellporno stays on CF (Deno returns 0 cards for it even when up; CF gives 60).
     // hqporner is blocked on CF datacenter IPs and Deno doesn't help — it needs a
     // residential route (PROXY_URL_3). Neither is routed to Deno.
@@ -145,6 +149,9 @@
     // huyamba: the device (mobile UA) is redirected to the dead rt.huyamba.xyz → 0 cards
     // natively; via the proxy (desktop UA) the listing loads. Stream token not IP-bound.
     'play.huyamba.mobi': 1,
+    // xhamster: native listing fetch fails intermittently (HTTP 103 Early Hints surfaces as an
+    // error) → page via the proxy (VPS). HLS stream host stays raw (token not IP-bound).
+    'ru.xhamster.com': 1,
     // spankbang: Cloudflare challenges the device home IP too → force the page through
     // the proxy (routes to Val.town via PROXY_URL_VT, which passes the challenge).
     'ru.spankbang.com': 1, 'spankbang.com': 1, 'www.spankbang.com': 1,
@@ -2690,12 +2697,12 @@ var _RU_EN = {
 };
 // Known RUSSIAN-title sources — they should receive the ORIGINAL Cyrillic query, not the
 // translated one (their catalog is in Russian). Everything else defaults to English-title.
-var _RU_SOURCES = { tizam: 1, lenporno: 1, '24rolika': 1, ebun: 1, jopaonline: 1, pornobolt: 1, huyamba: 1 };
+var _RU_SOURCES = { tizam: 1, lenporno: 1, '24rolika': 1, ebun: 1, jopaonline: 1, pornobolt: 1, huyamba: 1, xhamster: 1 };  // xhamster: RU-localised titles, site search takes RU or EN as typed
 // Sources whose SEARCH matches by site TAGS, not title words (stand-measured share of 'blonde'
 // results with the word in the title: hqporner 0%, perfektdamen 5%, porndig 17%, eporner/pornhub
 // 23%, analdin 26%, xozilla 39% — yet each honours the query). Their results are site-relevant even
 // when no title word matches; the global ranker credits them instead of sinking them.
-var _TAG_SEARCH = { hqporner: 1, perfektdamen: 1, porndig: 1, eporner: 1, pornhub: 1, analdin: 1, xozilla: 1 };  // crocotube: English titles (stand-verified) — a Cyrillic query there returns 0
+var _TAG_SEARCH = { hqporner: 1, perfektdamen: 1, porndig: 1, eporner: 1, pornhub: 1, analdin: 1, xozilla: 1, xhamster: 1 };  // xhamster: real full-text search, but titles are RU-localised → an EN query never appears in them  // crocotube: English titles (stand-verified) — a Cyrillic query there returns 0
 
 // Translate a Cyrillic query to English for English-title sites. Greedy multi-word phrase match
 // first, then single words; untranslatable words are dropped. Returns '' if nothing translated
@@ -3909,6 +3916,176 @@ SOURCES.push({
       return { items: items, total_pages: _derivePages(items.length, p, 38) };
     }).catch(function(){ return { items: [], total_pages: 0 }; });
   }
+});
+
+// ---- xHamster (added v0.13.21) ----
+// Every listing page embeds its cards as JSON (`window.initials` → …videoThumbProps[]): title
+// (RU-localised on ru.xhamster.com), pageURL, duration (s), views, thumbURL (webp),
+// trailerFallbackUrl (h264 hover clip; trailerURL is AV1 — TV WebViews can't decode it).
+// URLs: feed /{p} (trending), /newest/{p}, /best[/weekly|/monthly]/{p}; categories
+// /categories/{slug}[/newest|/best…]/{p}; search /search/{q}?page={p} (the site's own full-text
+// search, RU or EN); pornstars /pornstars/{p} + /pornstars/{slug}/{p}.
+// Stream: the video page PRELOADS the HLS master (<link rel="preload" href="…video-nss…m3u8">) —
+// multi-quality, token NOT IP-bound (stand: device-issued master + segments fetched via the VPS →
+// 206). The mp4 "sources" ARE IP-bound (data={ip}-dvp) → never used. m3u8 → inner player on
+// Android (playVideo). The page host is VPS-routed + force-proxied on Android: the native fetch
+// tripped on HTTP 103 Early Hints and the CF worker got a 503 once; the VPS is steady.
+function _xhInitials(html) {
+    var m = /window\.initials\s*=\s*(\{[\s\S]*?\});\s*<\/script>/.exec(html);
+    if (!m) return null;
+    try { return JSON.parse(m[1]); } catch (e) { return null; }
+}
+
+// The page's main card list: the LONGEST videoThumbProps[] that is not the "moments" (shorts)
+// block — pornstar pages put momentsListComponent before the real videoListProps.
+function _xhThumbProps(root) {
+    var best = null;
+    function walk(o, path, depth) {
+        if (!o || typeof o !== 'object' || depth > 6) return;
+        if (Object.prototype.toString.call(o) === '[object Array]') {
+            for (var i = 0; i < o.length && i < 3; i++) walk(o[i], path, depth + 1);
+            return;
+        }
+        if (o.videoThumbProps && o.videoThumbProps.length && !/moment/i.test(path)) {
+            if (!best || o.videoThumbProps.length > best.length) best = o.videoThumbProps;
+        }
+        for (var k in o) {
+            if (o.hasOwnProperty(k) && o[k] && typeof o[k] === 'object') walk(o[k], path + '/' + k, depth + 1);
+        }
+    }
+    walk(root, '', 0);
+    return best || [];
+}
+
+function _xhCards(html) {
+    var root = _xhInitials(html);
+    if (!root) return [];
+    var arr = _xhThumbProps(root), items = [], seen = {};
+    for (var i = 0; i < arr.length; i++) {
+        var v = arr[i];
+        if (!v || !v.pageURL || !v.id || seen[v.id]) continue;
+        seen[v.id] = true;
+        items.push({
+            id: 'xh-' + v.id,
+            source: 'xhamster',
+            title: _decodeHtml(v.title || '') || _titleFromUrl(v.pageURL),
+            thumb: v.thumbURL || v.previewThumbURL || '',
+            preview: v.trailerFallbackUrl || v.trailerURL || undefined,
+            url: v.pageURL,
+            duration: parseInt(v.duration, 10) || 0,
+            views: parseInt(v.views, 10) || 0
+        });
+    }
+    return items;
+}
+
+// Pornstar index cards: the first pornstars[] whose entries carry pageURL (layoutPage.pornstarListProps).
+function _xhModels(html) {
+    var root = _xhInitials(html);
+    if (!root) return [];
+    var list = null;
+    function walk(o, depth) {
+        if (list || !o || typeof o !== 'object' || depth > 5) return;
+        if (Object.prototype.toString.call(o) === '[object Array]') {
+            for (var i = 0; i < o.length && i < 3; i++) walk(o[i], depth + 1);
+            return;
+        }
+        if (o.pornstars && o.pornstars.length && o.pornstars[0] && o.pornstars[0].pageURL) { list = o.pornstars; return; }
+        for (var k in o) {
+            if (o.hasOwnProperty(k) && o[k] && typeof o[k] === 'object') walk(o[k], depth + 1);
+        }
+    }
+    walk(root, 0);
+    var items = [], seen = {};
+    for (var i = 0; list && i < list.length; i++) {
+        var m = list[i];
+        if (!m || !m.pageURL || seen[m.pageURL]) continue;
+        seen[m.pageURL] = true;
+        items.push({ name: _decodeHtml(m.name || '') || _humanizeName(m.pageURL.split('/').pop()),
+                     url: m.pageURL, thumb: m.imageThumbUrl || m.logoThumbUrl || '' });
+    }
+    return items;
+}
+
+// lastPageNumber (feed/category/pornstar pages) or maxPages (search); else derive from fullness.
+function _xhPages(html, page, itemsLen) {
+    var m = /"lastPageNumber":(\d+)/.exec(html) || /"maxPages":(\d+)/.exec(html);
+    return (m && parseInt(m[1], 10)) || _derivePages(itemsLen, page, 46);
+}
+
+// Sort → path segment; `trend` (site root = trending) is the «По популярности» default.
+var _XH_SORT = { trend: '', newest: '/newest', best: '/best', 'best-weekly': '/best/weekly', 'best-monthly': '/best/monthly' };
+function _xhUrl(category, page, sort) {
+    var p = page || 1;
+    var seg = _XH_SORT[sort || 'trend'];
+    if (seg === undefined) seg = '';
+    var path = (category ? '/categories/' + category : '') + seg;
+    return 'https://ru.xhamster.com' + path + (p > 1 ? '/' + p : (path ? '' : '/'));
+}
+
+SOURCES.push({
+    id: 'xhamster',
+    name: 'xHamster',
+    host: 'ru.xhamster.com',
+    cfg: { categories: _cats('russian:Русские,amateur:Любительницы,anal:Анал,asian:Азиатки,bbw:Толстушки,big-ass:Большие жопы,big-tits:Большие титьки,blonde:Блондинки,blowjob:Минет,brunette:Брюнетки,casting:Кастинг,cheating:Измена,creampie:Кримпай,cuckold:Куколд,cumshot:Камшот,double-penetration:Двойное проникновение,gangbang:Генгбенг,hairy:Волосатые,handjob:Хенджоб,hardcore:Хардкор,homemade:Домашнее,indian:Индийки,interracial:Межрасовое,latina:Латинки,lesbian:Лесбиянки,lingerie:Кружевное белье,massage:Массаж,mature:Зрелые,milf:Милфа,mom:Мамки,orgasm:Оргазм,pov:POV,redhead:Рыжая,squirting:Сквирт,stockings:В чулках,18-year-old:18 летние,threesome:Тройничок,vintage:Винтаж,webcam:Веб-камера,wife:Жена,turkish:Турки,skinny:Худые,granny:Бабушки,bdsm:БДСМ,hentai:Хентай,czech:Чешки,french:Француженки,ukrainian:Украинки,office:В офисе,nurse:Медсестра,beach:На пляже,arab:Арабки,chinese:Китаянки,thai:Тайки,british:Британки'),
+           sorts: _cats('trend:По популярности,newest:Свежее,best-weekly:Лучшие за неделю,best-monthly:Лучшие за месяц,best:Лучшие за всё время') },
+
+    search: function (query, page) {
+        var p = page || 1;
+        var url = 'https://ru.xhamster.com/search/' + encodeURIComponent(query) + (p > 1 ? '?page=' + p : '');
+        return cherryFetch(url).then(function (html) {
+            var items = _xhCards(html);
+            return { items: items, total_pages: _xhPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    browse: function (category, page, sortId) {
+        var p = page || 1;
+        return cherryFetch(_xhUrl(category, p, sortId)).then(function (html) {
+            var items = _xhCards(html);
+            return { items: items, total_pages: _xhPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    // «Похожие» = the player's own relatedVideos list on the video page (JSON).
+    getRelated: function (video) {
+        if (!video || !video.url) return Promise.resolve([]);
+        return cherryFetch(video.url).then(function (html) {
+            var root = _xhInitials(html);
+            var rel = root && root.xplayerPluginSettings && root.xplayerPluginSettings.relatedVideos;
+            if (!rel || !rel.length) return [];
+            return rel.filter(function (r) { return r && r.url && r.url !== video.url; }).slice(0, 20).map(function (r) {
+                return { id: 'xh-' + (r.idHash || r.url), source: 'xhamster', title: _decodeHtml(r.title || '') || _titleFromUrl(r.url),
+                         thumb: r.thumbUrl || '', url: r.url, duration: parseInt(r.duration, 10) || 0,
+                         views: parseInt(r.views, 10) || 0, hd: r.isHD ? 'HD' : undefined };
+            });
+        }).catch(function () { return []; });
+    },
+
+    getStream: function (video) {
+        return cherryFetch(video.url).then(function (html) {
+            var m = /<link rel="preload" href="(https:\/\/video-nss\.xhcdn\.com\/[^"]+\.m3u8)"/.exec(html) ||
+                    /"(https:(?:\\\/\\\/|\/\/)video-nss\.xhcdn\.com(?:\\\/|\/)[^"]+?\.m3u8)"/.exec(html);
+            if (!m) return { url: '', quality: {} };
+            return { url: m[1].replace(/\\\//g, '/'), quality: {} };
+        }).catch(function () { return { url: '', quality: {} }; });
+    },
+
+    // Pornstar index /pornstars/{p} (547 pages, 60/page) — JSON like the cards (…pornstarListProps.pornstars[]).
+    getModels: function (page) {
+        var p = page || 1;
+        return cherryFetch('https://ru.xhamster.com/pornstars' + (p > 1 ? '/' + p : '')).then(_xhModels)
+            .catch(function () { return []; });
+    },
+
+    browseByModel: function (modelUrl, page) {
+        var p = page || 1;
+        var url = modelUrl.replace(/\/+$/, '') + (p > 1 ? '/' + p : '');
+        return cherryFetch(url).then(function (html) {
+            var items = _xhCards(html);
+            return { items: items, total_pages: _xhPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    }
 });
 
 // ---- Spankbang ----
