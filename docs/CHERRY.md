@@ -113,6 +113,7 @@ pornhub card with a deliberately broken token → 9/9 posters load, the broken o
 **Legacy records (v0.13.16):** favorites saved before v0.13.11 may still hold the xvideos/xnxx hover
 template (`…/xv_THUMBNUM_t.jpg`, a 404 as a poster); `Fav.all()` normalizes `THUMBNUM`→`1` on read
 (`test/tv-fav-legacy.mjs`).
+**Order + pull-on-open (v0.13.17):** `Fav.all()` returns records **newest first by `added`** — local toggles unshift but `_merge` appends records pulled from another device, so a video favorited elsewhere used to land at the bottom of the grid. Opening favorites now runs `Sync.run()` first (capped at 2.5 s; no PIN / failure → local list) and renders on a later tick — which also lets the empty-state hint mount (the old blank empty-favorites screen came from resolving synchronously before the activity was registered).
 
 ### StreamResult
 

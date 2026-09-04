@@ -336,3 +336,14 @@ pornhub card with a deliberately broken hdnea token → 9/9 posters loaded; the 
 self-healed (data-cherry-refreshed, 640 px). Remaining gap closed: records saved before v0.13.11
 could hold `xv_THUMBNUM_t.jpg` / `xn_THUMBNUM_t.jpg` (no refreshThumb for those sources) → `Fav.all()`
 now normalizes THUMBNUM→1 on read. Harnesses: test/tv-fav-posters.mjs, test/tv-fav-legacy.mjs.
+
+## 2026-09-04 (f) — favorites: sync-merged records sank to the bottom; pull on open (v0.13.17)
+
+Owner added a video to the sync bucket (PIN 1206) and did not see it on the TV. Root cause:
+Fav.all() returned records in STORAGE order — local toggles unshift (newest first) but
+_merge APPENDS records pulled from another device, so a merged newest record rendered as the
+LAST card. Plus the bucket was only pulled on Cherry-home open, not when opening favorites.
+Fix: Fav.all() sorts by added desc; the favorites grid runs Sync.run() first (capped 2.5 s,
+no PIN / failure -> local list) and renders on a later tick. Side effect: the empty-favorites
+blank screen (sync resolve before the activity was registered) is gone — the hint box now
+mounts (stand: emptyBox 1, selector 1). Harness: test/tv-fav-order.mjs. vitest 763.

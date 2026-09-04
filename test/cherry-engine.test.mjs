@@ -4022,3 +4022,38 @@ describe('v0.13.14 UI: Android preview + RU quick-picks + recents + health dots'
     expect(/\.cherry-home \.cherry-dot--ok\{background:#3ecf6a;\}/.test(PLUGIN)).toBe(true);
   });
 });
+
+// =============================================================================
+// describe: favorites order + pull-on-open — v0.13.17
+// =============================================================================
+describe('favorites: newest-first + pull-on-open (v0.13.17)', function () {
+  const PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+  it('Fav.all() sorts active records by added desc (merged-from-remote records no longer sink to the bottom)', function () {
+    var at = PLUGIN.indexOf('all: function () {', PLUGIN.indexOf('var Fav = {'));
+    var body = PLUGIN.slice(at, at + 1200);
+    expect(body).toContain('.filter(function (r) { return r.added > r.deleted; })');
+    expect(body).toContain('.sort(function (a, b) { return (b.added || 0) - (a.added || 0); })');
+    expect(body.indexOf('.filter(')).toBeLessThan(body.indexOf('.sort('));
+  });
+  it('favorites grid pulls the sync bucket first (capped) and renders on a later tick', function () {
+    var at = PLUGIN.indexOf('if (object.is_favorites) {', PLUGIN.indexOf('function _gridLoad('));
+    var body = PLUGIN.slice(at, at + 900);
+    expect(body).toContain('Promise.resolve(Sync.run()).then(_favRender, _favRender)');
+    expect(body).toContain('setTimeout(_favRender, 2500)');
+    expect(body).not.toContain('var favs = Fav.all().map(toCard);');
+  });
+  it('sort semantics: newest first, legacy added=1 last, tombstoned excluded', function () {
+    var store = {};
+    var ctx = 'var Lampa={Storage:{get:function(k,d){return k in store?store[k]:d;},set:function(k,v){store[k]=v;}}};var Sync={schedule:function(){}};'
+      + 'var Fav=' + PLUGIN.slice(PLUGIN.indexOf('var Fav = {') + 'var Fav = '.length, PLUGIN.indexOf('_merge: function (remote)')) + '_merge:function(){}};'
+      + 'return Fav;';
+    var Fav = new Function('store', ctx)(store);
+    store.cherry_favs = [
+      { id: 'a', source: 's', title: 'legacy', thumb: '', url: '', duration: 0, views: 0, added: 1, deleted: 0 },
+      { id: 'b', source: 's', title: 'old', thumb: '', url: '', duration: 0, views: 0, added: 1000, deleted: 0 },
+      { id: 'c', source: 's', title: 'gone', thumb: '', url: '', duration: 0, views: 0, added: 5000, deleted: 6000 },
+      { id: 'd', source: 's', title: 'merged-newest', thumb: '', url: '', duration: 0, views: 0, added: 9000, deleted: 0 }
+    ];
+    expect(Fav.all().map(function (r) { return r.id; })).toEqual(['d', 'b', 'a']);
+  });
+});
