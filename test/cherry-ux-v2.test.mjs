@@ -1894,9 +1894,9 @@ describe('per-channel search pagination audit', () => {
 
   it('genuinely single-page searches stay total_pages:1 and are documented', () => {
     var singlePageHits = SRC.match(/single-page search \(site\)/g) || [];
-    // pornobolt, 24rolika, jopaonline (tizam now uses the real /search-results/ form;
-    // lenporno now paginates via /search/{q}/?page= → both no longer single-page-broken).
-    expect(singlePageHits.length).toBeGreaterThanOrEqual(3);
+    // pornobolt, 24rolika (tizam uses the real /search-results/ form; lenporno paginates
+    // via /search/?text=&page=; jopaonline now paginates via /search/{q}/{p}/ — v0.13.15).
+    expect(singlePageHits.length).toBeGreaterThanOrEqual(2);
   });
 
   it('tizam search uses the real /search-results/?search_string= form (not /?s=)', () => {
@@ -1914,11 +1914,12 @@ describe('per-channel search pagination audit', () => {
     expect(body).toContain('_derivePages');
   });
 
-  it('lenporno search uses /search/{query}/?page={p} with _derivePages (not /search/?q=)', () => {
+  it('lenporno search uses the site form GET /search/?text={q}&page={p} with _derivePages (v0.13.15)', () => {
     var at = SRC.indexOf("id: 'lenporno'");
     var body = SRC.slice(SRC.indexOf('search: function', at), SRC.indexOf('browse: function', at));
-    expect(body).toContain("'https://www.lenporno.net/search/' + encodeURIComponent(query) + '/?page=' + p");
-    expect(body).not.toContain("'https://www.lenporno.net/search/?q='");
+    expect(body).toContain("'https://www.lenporno.net/search/?text=' + encodeURIComponent(query)");
+    // the old path form silently served the homepage feed for any query
+    expect(body).not.toContain("'https://www.lenporno.net/search/' + encodeURIComponent(query) + '/?page=' + p");
     expect(body).toContain('_derivePages');
   });
 

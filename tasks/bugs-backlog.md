@@ -308,3 +308,22 @@ badge in single-channel grid) — keep.
 - Empty-favorites blank screen: owner said no; root cause documented (sync resolve before the
   activity is in `Lampa.Activity.all()` → `comp.empty()` appends nowhere). Also affects the
   «Повторить» retry affordance only on that sync path.
+
+## 2026-09-04 (d) — search ignored the query on 5 channels — RESOLVED (v0.13.15)
+
+Owner: «делай». Method: for each site, discover the real search `<form>` (action/method/field)
+from its homepage, then score every candidate URL with the adapter's OWN card parser (title-stem
+match %, two queries → different first card, page 2 disjoint). All on the emulator, via the
+adapters' real fetch path (lenporno is a force-proxy host — probing it natively hits a mirror
+redirect and misleads; use cherryFetch).
+
+| site | was (ignored query) | now (stand-verified) |
+|---|---|---|
+| 3movs | `/?s=` | `/search_videos/?q=` + `&from_videos={p}` — 83–96%, p2 differs (10 tie repeats, grid dedups) |
+| pornone | WP REST → 0 posts → `?s=` fallback | `/search/?q=&page=` — 100%, p2 disjoint; 11/page device-IP, 35 via proxy |
+| ebun | `/search/?s=` | `/search/{q}/{p}/` — 83%, p2 disjoint |
+| lenporno | `/search/{q}/?page=` (= homepage) | `/search/?text=&page=` — 92%, p1/p2/p3 disjoint |
+| jopaonline | DLE `?do=search` (404 + generic block) | `/search/{q}/{p}/` — 92–100%, paginates |
+
+Dead code removed: pornone `_fromApi`. Tests: anti-drift for all 5 endpoints; 2 legacy tests
+updated (lenporno URL; single-page-search count 3→2 since jopaonline now paginates).

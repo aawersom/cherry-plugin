@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.14';
+  var CHERRY_VERSION = '0.13.15';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -4361,44 +4361,19 @@ SOURCES.push({
     host: 'pornone.com',
     cfg: { categories: _cats('amateur:Amateur,anal:Anal,asian:Asian,ass:Ass,babes:Babes,bbc:Bbc,bbw:BBW,bdsm:Bdsm,big-boobs:Big Boobs,big-dick:Big Dick,blonde:Blonde,blowjob:Blowjob,brunette:Brunette,bukkake:Bukkake,busty:Busty,cougar:Cougar,creampie:Creampie,cuckold:Cuckold,cumshot:Cumshot,deepthroat:Deepthroat,ebony:Ebony,fetish:Fetish,gangbang:Gangbang,granny:Granny,hairy:Hairy,handjob:Handjob,hardcore:Hardcore,hentai:Hentai,homemade:Homemade,interracial:Interracial,japanese:Japanese,latin:Latin,lesbian:Lesbian,massage:Massage,mature:Mature,milf:MILF,mom:Mom,pawg:Pawg,petite:Petite,pov:POV,public:Public,redhead:Redhead,russian:Russian,squirting:Squirting,stepmom:Stepmom,teen:Teen,threesome:Threesome,toys:Toys,webcams:Webcams,young:Young'), sorts: _cats('newest:Свежее,views:По популярности,views/week:Популярное за неделю,views/month:Популярное за месяц,rating:По рейтингу') },
 
-    // WP REST API is tried first; HTML scraping is the fallback.
-    _fromApi: function (text) {
-        var posts;
-        try { posts = JSON.parse(text); } catch (e) { return null; }
-        if (!Array.isArray(posts) || !posts.length) return null;
-        return posts.map(function (p) {
-            var thumb = '';
-            try { thumb = p._embedded['wp:featuredmedia'][0].source_url || ''; } catch (e) {}
-            return {
-                id:       String(p.id),
-                source:   'pornone',
-                title:    _decodeHtml((p.title && p.title.rendered) || ''),
-                thumb:    thumb,
-                url:      p.link || '',
-                duration: 0,
-                views:    0
-            };
-        });
-    },
-
     search: function (query, page) {
-        var self = this;
         var p = page || 1;
-        var apiUrl = 'https://pornone.com/wp-json/wp/v2/posts?search=' +
-            encodeURIComponent(query) + '&per_page=20&page=' + p +
-            '&_embed=wp%3Afeaturedmedia&_fields=id,title,link,_embedded';
-        return cherryFetch(apiUrl).then(function (text) {
-            var items = self._fromApi(text);
-            // WP API per_page=20 → full batch implies a next page.
-            if (items) return { items: items, total_pages: _derivePages(items.length, p, 20) };
-            throw new Error('api-empty');
-        }).catch(function () {
-            var url = 'https://pornone.com/?s=' + encodeURIComponent(query) + '&paged=' + p;
-            return cherryFetch(url).then(function (html) {
-                var items = _pornoneCards(html);
-                return { items: items, total_pages: _pornonePages(html, p, items.length) };
-            }).catch(function () { return { items: [], total_pages: 0 }; });
-        });
+        // The site's own search form: /search/?q={q}&page={p}. The former WP REST
+        // (wp-json …?search=) now returns 0 posts and its ?s= fallback IGNORES the query
+        // (same generic list for anything). Stand-verified: 100% title match (35 cards),
+        // page 2 disjoint.
+        var url = 'https://pornone.com/search/?q=' + encodeURIComponent(query) + '&page=' + p;
+        return cherryFetch(url).then(function (html) {
+            var items = _pornoneCards(html);
+            // Page size differs by egress: 11 cards from the device IP, 35 via the proxy —
+            // use the default floor (≥6 ⇒ more pages) so device-IP paging doesn't stop at p1.
+            return { items: items, total_pages: _derivePages(items.length, p, 12) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
     browse: function (category, page, sort) {
@@ -5019,10 +4994,15 @@ SOURCES.push({
 
     search: function (query, page) {
         var p = page || 1;
-        var url = 'https://www.3movs.com/?s=' + encodeURIComponent(query) + '&p=' + p;
+        // The site's own search form: /search_videos/?q={q}; KVS paginates the result block
+        // with from_videos={p} (the page's data-parameters say "from_videos+from_albums:N";
+        // &page= / &p= are ignored). The old /?s= IGNORED the query (generic list for
+        // anything). Stand-verified: 83-92% title match, page 2 differs (grid dedups the
+        // few relevance-tie repeats).
+        var url = 'https://www.3movs.com/search_videos/?q=' + encodeURIComponent(query) + (p > 1 ? '&from_videos=' + p : '');
         return cherryFetch(url).then(function (html) {
             var items = _3movsCards(html);
-            return { items: items, total_pages: _3movsPages(html, p, items.length) };
+            return { items: items, total_pages: _derivePages(items.length, p, 24) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
@@ -6324,11 +6304,12 @@ SOURCES.push({
 
     search: function (query, page) {
         var p = page || 1;
-        // Site search param is ?s= (?q= returns 0 results).
-        var url = 'https://www1.ebun.tv/search/?s=' + encodeURIComponent(query) + '&page=' + p;
+        // KVS path search /search/{q}/{p}/ — the old /search/?s= was IGNORED (returned the
+        // same generic list for any query). Stand-verified: 83% title match, page 2 disjoint.
+        var url = 'https://www1.ebun.tv/search/' + encodeURIComponent(query) + '/' + (p > 1 ? p + '/' : '');
         return cherryFetch(url).then(function (html) {
             var items = _ebunCards(html);
-            return { items: items, total_pages: _ebunPages(html, p, items.length) };
+            return { items: items, total_pages: _derivePages(items.length, p, 24) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 
@@ -6460,11 +6441,12 @@ SOURCES.push({
     cfg: { sorts: _cats('2:По популярности,3:По рейтингу'), categories: _cats('russkoye:Русское,molodyye:Молодые,zrelyye:Зрелые,mamki:Мамки,analnoye:Анальное,minet:Минет,domashneye:Домашнее,krasotki:Красотки,bryunetki:Брюнетки,blondinki:Блондинки,bolshiye-dojki:Большие дойки,bolshiye-popki:Большие попки,bolshiye-chleny:Большие члены,khudyye:Худые,v-chulkakh:В чулках,ot-pervogo-litsa:От первого лица,gruppovoye:Групповое,kasting:Кастинг,studenty:Студенты,izmena:Измена,gheny:Жены,mzhm:МЖМ,blacked:Негры,aziatskoye:Азиатское,yaponskoye:Японское,mulatki:Мулатки,rakom:Раком,sperma:Сперма,bdsm:БДСМ,masturbatsiya:Мастурбация,lesbiyanki:Лесбиянки,massazh:Массаж,volosatyye:Волосатые,dvoynoye-proniknoveniye:Двойное проникновение,dominirovaniye:Доминирование,orgazmy:Оргазмы,zhestkoye:Жесткое,na-prirode:На природе,na-publike:На публике,pikap:Пикап') },
 
     search: function (query, page) {
-        // Path-style search: /search/{query}/?page={p} (24 cards/page, real pagination).
-        // The old /search/?q= returned 0 cards (and /search/{q}/{n}/ + /page/{n}/ both
-        // yield 0 — must use ?page=). 24 cards/page → _derivePages(24).
+        // The site's search form is POST /search/ with field `text`; it also honours GET
+        // /search/?text={q}&page={p} (24 cards/page). The former /search/{q}/?page= silently
+        // served the HOMEPAGE feed (same list for any query). Stand-verified: 92% title match,
+        // pages 1/2/3 disjoint, a second query yields a different set.
         var p = page || 1;
-        var url = 'https://www.lenporno.net/search/' + encodeURIComponent(query) + '/?page=' + p;
+        var url = 'https://www.lenporno.net/search/?text=' + encodeURIComponent(query) + (p > 1 ? '&page=' + p : '');
         return cherryFetch(url).then(function (html) {
             var items = _lenpornoCards(html);
             return { items: items, total_pages: _derivePages(items.length, p, 24) };
@@ -6703,12 +6685,15 @@ SOURCES.push({
     cfg: { categories: _cats('mamki:Мамки,russkoe:Русское,zhestkoe:Жесткое,zrelye:Зрелые,izmena:Измена,krasotki:Красотки,domashnee:Домашнее,big-cock:Большие члены,gruppovoe:Групповое,anal:Анал,asian:Азиатки,studenty:Студенты,blonde:Блондинки,bolshie-siski:Большие сиськи,bryunetki:Брюнетки,dvoynoe-proniknovenie:Двойное проникновение,hudenkie:Худые,krasiviy-seks:Красивый секс,lesbiyanki:Лесбиянки,masturbation:Мастурбация,mejrassovyy:Межрасовое,minet:Минет,molodye:Молодые,mulatki:Мулатки,pickap:Пикап,rakom:Раком,redhead:Рыжие,s-negrami:Негры,stockings:Чулки,v-vannoi:В ванной,zhopy:Жопы'), sorts: _cats('popular:По популярности,toprated:По рейтингу') },
 
     search: function (query, page) {
-        // single-page search (site): DLE ?do=search returns one page (no page param) → total_pages 1.
-        // DLE search responds HTTP 404 but the body DOES contain result cards, so use
-        // the status-tolerant _fetchAny (cherryFetch would throw on !ok and drop them).
-        var url = 'https://jopaonline.mobi/?do=search&subaction=search&story=' + encodeURIComponent(query);
+        var p = page || 1;
+        // Path search /search/{q}/{p}/ (the site's own form action) — the old DLE
+        // ?do=search returned a generic 16-card block for ANY query (the "cards on a 404
+        // page" were never results). Stand-verified: 92-96% title match, real pagination
+        // (page 2 disjoint). Status-tolerant fetch kept in case the site answers non-200.
+        var url = 'https://jopaonline.mobi/search/' + encodeURIComponent(query) + '/' + p + '/';
         return _fetchAny(url).then(function (html) {
-            return { items: _jopaCards(html), total_pages: 1 };
+            var items = _jopaCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 24) };
         }).catch(function () { return { items: [], total_pages: 0 }; });
     },
 

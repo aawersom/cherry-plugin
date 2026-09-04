@@ -3985,6 +3985,26 @@ describe('v0.13.14 UI: Android preview + RU quick-picks + recents + health dots'
     expect(body).not.toMatch(/onQuery\(item\.id\)/);   // no path bypasses onPick
   });
 
+  it('anti-drift: search URLs on the 5 previously query-ignoring sites use the sites\' real search endpoints (v0.13.15)', function () {
+    const between = (a, b) => PLUGIN.slice(PLUGIN.indexOf(a), PLUGIN.indexOf(b));
+    const movs = between("id: '3movs'", "function _3movsCards");
+    expect(movs).toMatch(/\/search_videos\/\?q=' \+ encodeURIComponent\(query\)/);
+    expect(movs).toMatch(/&from_videos=' \+ p/);
+    expect(movs).not.toMatch(/3movs\.com\/\?s=/);
+    const pornone = between("id: 'pornone'", "function _pornoneCards");
+    expect(pornone).toMatch(/pornone\.com\/search\/\?q=' \+ encodeURIComponent\(query\) \+ '&page=' \+ p/);
+    expect(pornone).not.toMatch(/cherryFetch\(apiUrl\)|_fromApi\(|'https:\/\/pornone\.com\/\?s='/);
+    const ebun = between("id: 'ebun'", "function _ebunCards");
+    expect(ebun).toMatch(/www1\.ebun\.tv\/search\/' \+ encodeURIComponent\(query\) \+ '\/' \+ \(p > 1 \? p \+ '\/' : ''\)/);
+    expect(ebun).not.toMatch(/'https:\/\/www1\.ebun\.tv\/search\/\?s='/);
+    const len = between("id: 'lenporno'", "function _lenpornoCards");
+    expect(len).toMatch(/lenporno\.net\/search\/\?text=' \+ encodeURIComponent\(query\)/);
+    expect(len).not.toMatch(/\/search\/' \+ encodeURIComponent\(query\) \+ '\/\?page=/);
+    const jopa = between("id: 'jopaonline'", "function _jopaCards");
+    expect(jopa).toMatch(/jopaonline\.mobi\/search\/' \+ encodeURIComponent\(query\) \+ '\/' \+ p \+ '\/'/);
+    expect(jopa).not.toMatch(/do=search&subaction=search/);
+  });
+
   it('anti-drift: home tiles carry a cached, background-refreshed health dot', function () {
     const at = PLUGIN.indexOf('function CherryMain(');
     const body = PLUGIN.slice(at, balanced(at) + 1);

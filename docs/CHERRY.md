@@ -298,6 +298,18 @@ is available in every mode — the mitigation for sites whose server sort is a n
 > them), neutral storage key `cherry_rq`, no heading, one-tap «✕ Очистить недавние». Both entry
 > points (home tile and in-grid «Поиск») go through `onPick`, so voice/typed/picked all land there.
 
+> **Search endpoints that silently ignored the query (v0.13.15).** Five adapters returned the
+> SAME generic list for any query (found by comparing two queries — identical first card), so in
+> global search they contributed 10 unfiltered fallback cards each. Fixed to the sites' REAL
+> search forms (discovered from each homepage `<form>` and scored with the adapter's own parser;
+> stand-verified 79–100% title match, page 2 disjoint, second query → different set):
+> `3movs` `/search_videos/?q=` (+`&from_videos={p}`; `&page=`/`&p=` are ignored) · `pornone`
+> `/search/?q=&page=` (the WP REST path returned 0 posts; `_fromApi` removed; page size is 11 from
+> the device IP vs 35 via proxy → default `_derivePages` floor) · `ebun` `/search/{q}/{p}/` (was
+> `?s=`) · `lenporno` `/search/?text=&page=` (the form is POST `text`; GET is honoured; the old
+> `/search/{q}/` served the homepage) · `jopaonline` `/search/{q}/{p}/` (the DLE `?do=search` 404
+> page's cards were never results; now paginates).
+
 ---
 
 ## Categories — personalized per site, native labels
