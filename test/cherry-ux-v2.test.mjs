@@ -1778,7 +1778,7 @@ describe('Step 3: PATH-segment sorts (popular first, Russian labels, segment in 
     expect(eng).toBeGreaterThan(-1);
     var at = SRC.indexOf('browse: function(category, page, sort)', eng);
     expect(at).toBeGreaterThan(-1);
-    var body = SRC.slice(at, at + 1700);
+    var body = SRC.slice(at, at + 2600);
     expect(body).toContain("cfg.sortMode === 'path'");
     // path mode injects the sort segment after the slug in the categoryFmt,
     // EXCEPT the «Свежее» default (globalLatestSort) which maps to the bare category path.

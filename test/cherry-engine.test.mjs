@@ -4184,7 +4184,7 @@ describe('v0.13.20 channels: ebun route, huyamba revival (play.huyamba.mobi), 24
   });
 
   it('_kvsFlashvarsQuality: huyamba video page → 480p/720p/1080p, best = 1080p', function () {
-    const fn = new Function('extractStreams', grab('_kvsFlashvarsQuality') + '\nreturn _kvsFlashvarsQuality;')(
+    const fn = new Function('extractStreams', grab('bestQualityUrl') + '\n' + grab('_kvsFlashvarsQuality') + '\nreturn _kvsFlashvarsQuality;')(
       function () { return { url: '', quality: {} }; });
     const r = fn(fixture('huyamba-video.html'));
     expect(Object.keys(r.quality).sort()).toEqual(['1080p', '480p', '720p']);
@@ -4337,7 +4337,7 @@ describe('v0.13.22 ebalovo: cards, URLs, stream, models', function () {
   }
   const baseLine = PLUGIN.slice(PLUGIN.indexOf('var _EB_BASE'), PLUGIN.indexOf(';', PLUGIN.indexOf('var _EB_BASE')) + 1);
   const deps = ['parseDur', 'parseViews', '_attr', '_decodeHtml', '_titleFromUrl', '_derivePages', '_humanizeName',
-    '_parseModelIndex', '_ebCards', '_ebUrl', '_kvsFlashvarsQuality'].map(grab).join('\n') + '\n' + baseLine + '\n' + stmt('var _EB_CARDS = {');
+    '_parseModelIndex', '_ebCards', '_ebUrl', '_kvsFlashvarsQuality', 'bestQualityUrl'].map(grab).join('\n') + '\n' + baseLine + '\n' + stmt('var _EB_CARDS = {');
   // eslint-disable-next-line no-new-func
   const M = new Function('_kvsParseCards', 'extractStreams', deps + '\nreturn { _ebCards, _ebUrl, _kvsFlashvarsQuality, _parseModelIndex };')(
     _kvsParseCards, function () { return { url: '', quality: {} }; });
@@ -4395,7 +4395,7 @@ describe('v0.13.22 ebalovo: cards, URLs, stream, models', function () {
     const eb = PLUGIN.slice(PLUGIN.indexOf("id: 'ebalovo'"), PLUGIN.indexOf('search:', PLUGIN.indexOf("id: 'ebalovo'")));
     expect(eb).toContain('androidProxyStream: true');
     expect(PLUGIN).toContain('if (_isAndroid()) return (_forceProxyAndroid(u) || source.androidProxyStream) ? buildProxyUrl(u) : u;');
-    expect((PLUGIN.match(/^\s+androidProxyStream: true,/gm) || []).length).toBe(1); // only ebalovo declares it
+    expect((PLUGIN.match(/^\s+androidProxyStream: true,/gm) || []).length).toBe(3); // ebalovo + lenkino (UA-bound tokens), pornobriz (WebView rejects the CDN response)
   });
 
   it('registration: RU-titled source, tile right after Huyamba, brand-domain base', function () {
@@ -4403,5 +4403,163 @@ describe('v0.13.22 ebalovo: cards, URLs, stream, models', function () {
     expect(PLUGIN.indexOf("id: 'ebalovo'")).toBeGreaterThan(PLUGIN.indexOf("id: 'huyamba'"));
     expect(PLUGIN.indexOf("id: 'ebalovo'")).toBeLessThan(PLUGIN.indexOf("id: 'ebun'"));
     expect(PLUGIN).toContain("var _EB_BASE = 'https://www.ebalovo.porn';");
+  });
+});
+
+// ── v0.13.23: RU batch — porno666 (KVS engine + catSortQuery), lenkino (len family), pornobriz ──
+describe('v0.13.23 RU batch: porno666, lenkino, pornobriz', function () {
+  const PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+  function grab(name) {
+    const i = PLUGIN.indexOf('function ' + name + '(');
+    expect(i).toBeGreaterThan(-1);
+    let depth = 0;
+    for (let k = PLUGIN.indexOf('{', i); k < PLUGIN.length; k++) {
+      if (PLUGIN[k] === '{') depth++;
+      else if (PLUGIN[k] === '}' && --depth === 0) return PLUGIN.slice(i, k + 1);
+    }
+    throw new Error('unbalanced ' + name);
+  }
+  function stmt(startMarker) {
+    const a = PLUGIN.indexOf(startMarker); expect(a).toBeGreaterThan(-1);
+    const b = PLUGIN.indexOf('\n};', a); expect(b).toBeGreaterThan(a);
+    return PLUGIN.slice(a, b + 3);
+  }
+  function line(startMarker) {
+    const a = PLUGIN.indexOf(startMarker); expect(a).toBeGreaterThan(-1);
+    return PLUGIN.slice(a, PLUGIN.indexOf(';', a) + 1);
+  }
+  function engineCfg(id) {
+    const a = PLUGIN.search(new RegExp("_kvsEngine\\(\\{\\s*id: '" + id + "'")); expect(a).toBeGreaterThan(-1);
+    const b = PLUGIN.indexOf('}));', a);
+    const _cats = new Function(grab('_cats') + '\nreturn _cats;')();
+    return new Function('_kvsEngine', '_cats', 'cherryFetch', '_kvsFlashvarsQuality', 'return ' + PLUGIN.slice(a, b + 2) + ';')(
+      function (c) { return c; }, _cats, function () {}, function () {});
+  }
+  const helpers = ['parseDur', 'parseViews', '_attr', '_decodeHtml', '_titleFromUrl', '_derivePages', '_humanizeName', '_parseModelIndex', '_buildCatUrl',
+    '_kvsFlashvarsQuality', '_lkCards', '_lkUrl', '_pbAbs', '_pbCards', '_pbUrl', 'bestQualityUrl'].map(grab).join('\n') +
+    '\n' + line('var _LK_BASE') + '\n' + stmt('var _LK_CARDS = {') + '\n' + line('var _PB_BASE') + '\n' + stmt('var _PB_CARDS = {');
+  const M = new Function('_kvsParseCards', 'extractStreams', helpers + '\nreturn { _lkCards, _lkUrl, _pbCards, _pbUrl, _kvsFlashvarsQuality, _parseModelIndex, _buildCatUrl, bestQualityUrl };')(
+    _kvsParseCards, function () { return { url: '', quality: {} }; });
+
+  // ---------- porno666 (engine) ----------
+  it('porno666 listing fixture: 24 cards on the brand host — RU titles, thumbs, duration, views, hover clip', function () {
+    const cfg = engineCfg('porno666');
+    const items = _kvsParseCards(fixture('porno666-listing.html'), cfg);
+    expect(items.length).toBeGreaterThanOrEqual(24);
+    expect(items[0].id).toMatch(/^p666-\d+$/);
+    expect(items.every(v => /^https:\/\/porno666\.link\/video\/\d+\/$/.test(v.url))).toBe(true);
+    expect(items.every(v => /^https:\/\/[a-z0-9.-]+\/contents\/videos_screenshots\/.*\.jpg$/.test(v.thumb))).toBe(true);
+    expect(items.every(v => /[А-Яа-яЁё]/.test(v.title))).toBe(true);
+    expect(items.every(v => v.duration > 0)).toBe(true);
+    expect(items.filter(v => v.views > 0).length / items.length).toBeGreaterThan(0.8);
+    expect(items.filter(v => /\.mp4\/?$/.test(v.preview || '')).length / items.length).toBeGreaterThan(0.8);
+  });
+
+  it('porno666 engine URLs: root-path feed sorts, ?sort_by= inside categories (catSortQuery), search /{q}/{p}/', function () {
+    let captured = '';
+    const eng = new Function('cherryFetch', '_kvsParseCards', '_kvsPages', '_parseModelIndex', '_derivePages',
+      grab('_buildCatUrl') + '\n' + grab('_kvsEngine') + '\nreturn _kvsEngine;')(
+      function (u) { captured = u; return Promise.resolve(''); }, function () { return []; }, function () { return 1; }, function () { return []; }, function () { return 1; })(engineCfg('porno666'));
+    eng.browse('', 1, 'most-popular'); expect(captured).toBe('https://porno666.link/most-popular/');
+    eng.browse('', 2, 'top-rated'); expect(captured).toBe('https://porno666.link/top-rated/2/');
+    eng.browse('', 2, 'latest-updates'); expect(captured).toBe('https://porno666.link/latest-updates/2/');
+    eng.browse('mamki', 1, 'most-popular'); expect(captured).toBe('https://porno666.link/categories/mamki/?sort_by=video_viewed');
+    eng.browse('mamki', 2, 'latest-updates'); expect(captured).toBe('https://porno666.link/categories/mamki/2/?sort_by=post_date');
+    eng.search('блондинка', 2); expect(captured).toBe('https://porno666.link/search/%D0%B1%D0%BB%D0%BE%D0%BD%D0%B4%D0%B8%D0%BD%D0%BA%D0%B0/2/');
+    expect(engineCfg('porno666').sorts[0].id).toBe('most-popular');
+  });
+
+  it('porno666 stream: flashvars labelled 360/480/720/1080 by the skin (video_alt_url3!) → best = 1080p', function () {
+    const r = M._kvsFlashvarsQuality(fixture('porno666-video.html'));
+    expect(Object.keys(r.quality).sort()).toEqual(['1080p', '360p', '480p', '720p']);
+    expect(r.url).toBe(r.quality['1080p']);
+    expect(r.url).toMatch(/^https:\/\/porno666\.link\/get_file\/.*\.mp4\/\?v-acctoken=/);
+  });
+
+  it('porno666 models index (/models/): 20 models on the brand host with names + thumbs', function () {
+    const cfg = engineCfg('porno666');
+    const items = M._parseModelIndex(fixture('porno666-models.html'), cfg.modelIndex);
+    expect(items.length).toBeGreaterThanOrEqual(20);
+    expect(items[0].url).toMatch(/^https:\/\/porno666\.link\/models\/[a-z0-9-]+\/$/);
+    expect(items[0].name).toBe('Zoey Kush');
+    expect(items[0].thumb).toMatch(/^https:\/\/.*\.jpg$/);
+  });
+
+  // ---------- lenkino ----------
+  it('lenkino listing fixture (brand → mirror): 46 cards normalised to www.lenkino.adult, RU titles, lencdn thumbs, duration', function () {
+    const items = M._lkCards(fixture('lenkino-listing.html'));
+    expect(items.length).toBeGreaterThanOrEqual(45); // 46 numeric links minus the footer RTA link (no thumb)
+    expect(items[0].id).toMatch(/^lk-\d+$/);
+    expect(items.every(v => /^https:\/\/www\.lenkino\.adult\/\d+$/.test(v.url))).toBe(true);
+    expect(items.every(v => /^https:\/\/img\.lencdn\.com\//.test(v.thumb))).toBe(true);
+    expect(items.filter(v => /[А-Яа-яЁё]/.test(v.title)).length / items.length).toBeGreaterThan(0.9);
+    expect(items.every(v => v.duration > 0)).toBe(true);
+  });
+
+  it('lenkino URLs: home = newest (page/{p}), top-porno, categories /{slug}/page/{p}', function () {
+    expect(M._lkUrl('', 1, '')).toBe('https://www.lenkino.adult/top-porno');
+    expect(M._lkUrl('', 2, 'top')).toBe('https://www.lenkino.adult/top-porno/page/2');
+    expect(M._lkUrl('', 1, 'latest')).toBe('https://www.lenkino.adult/');
+    expect(M._lkUrl('', 3, 'latest')).toBe('https://www.lenkino.adult/page/3');
+    expect(M._lkUrl('a1-russian', 1, 'top')).toBe('https://www.lenkino.adult/a1-russian');
+    expect(M._lkUrl('a1-russian', 2, '')).toBe('https://www.lenkino.adult/a1-russian/page/2');
+  });
+
+  it('lenkino stream: flashvars 480p/720p on video_file/… (best 720p); pornstars index 36 models', function () {
+    const r = M._kvsFlashvarsQuality(fixture('lenkino-video.html'));
+    expect(Object.keys(r.quality).sort()).toEqual(['480p', '720p']);
+    expect(r.url).toMatch(/^https:\/\/[a-z0-9.-]+\/video_file\/.*\.mp4\/\?v-acctoken=/);
+    const models = M._parseModelIndex(fixture('lenkino-pornstars.html'), {
+      window: 700, hrefRx: /href="(https?:\/\/[a-z0-9.-]+\/pornstar\/[a-z0-9_-]+)"/g,
+      normalizeUrl: function (raw) { return raw.replace(/^https?:\/\/[^/]+/, 'https://www.lenkino.adult'); },
+      nameRx: [/alt="([^"]+)"/], thumbRx: [/src="(https?:\/\/img\.lencdn\.com\/[^"]+\.jpe?g)"/i] });
+    expect(models.length).toBeGreaterThanOrEqual(36);
+    expect(models[0].url).toMatch(/^https:\/\/www\.lenkino\.adult\/pornstar\/[a-z0-9-]+$/);
+    expect(models[0].name).toBe('Lexi Luna');
+    expect(models[0].thumb).toMatch(/^https:\/\/img\.lencdn\.com\/models\//);
+  });
+
+  // ---------- pornobriz ----------
+  it('pornobriz listing fixture: 42 cards with absolute urls/thumbs, RU titles, duration, HD badge, hover clip', function () {
+    const items = M._pbCards(fixture('pornobriz-listing.html'));
+    expect(items.length).toBeGreaterThanOrEqual(42);
+    expect(items[0].id).toMatch(/^pb-[a-z0-9_-]+$/);
+    expect(items.every(v => /^https:\/\/pornobriz\.com\/video\/[a-z0-9_-]+\/$/.test(v.url))).toBe(true);
+    expect(items.every(v => /^https:\/\/pornobriz\.com\/content\/screen\/.*\.jpg$/.test(v.thumb))).toBe(true);
+    expect(items.every(v => /[А-Яа-яЁё]/.test(v.title))).toBe(true);
+    expect(items.every(v => v.duration > 0)).toBe(true);
+    expect(items.filter(v => v.hd === 'HD').length).toBeGreaterThan(0);
+    expect(items.every(v => /^https:\/\/pornobriz\.com\/preview\/.*\.mp4$/.test(v.preview || ''))).toBe(true);
+  });
+
+  it('pornobriz URLs + stream: /top/ default, /new/page2/, /{cat}/page{p}/; <source size=…> → 1080/720/480/240, best 1080p', function () {
+    expect(M._pbUrl('', 1, '')).toBe('https://pornobriz.com/top/');
+    expect(M._pbUrl('', 2, 'new')).toBe('https://pornobriz.com/new/page2/');
+    expect(M._pbUrl('anal', 1, 'best')).toBe('https://pornobriz.com/anal/');
+    expect(M._pbUrl('anal', 3, '')).toBe('https://pornobriz.com/anal/page3/');
+    const html = fixture('pornobriz-video.html');
+    const rx = /<source src="([^"]+\.mp4)"[^>]*size="(\d+)"/g; let m; const q = {};
+    while ((m = rx.exec(html)) !== null) q[m[2] + 'p'] = m[1];
+    expect(Object.keys(q).sort()).toEqual(['1080p', '240p', '480p', '720p']);
+    expect(M.bestQualityUrl(q)).toBe(q['1080p']);
+    const models = M._parseModelIndex(fixture('pornobriz-stars.html'), { window: 500, hrefRx: /href="(\/models\/[^"\/]+\/)" rel="bookmark"/g,
+      normalizeUrl: function (u) { return 'https://pornobriz.com' + u; }, nameRx: [/title="([^"]+)"/], thumbRx: [/data-original="(\/models\/(?!no_screen)[^"]+\.jpe?g)"/i] });
+    expect(models.length).toBeGreaterThanOrEqual(50);
+    expect(models[1].name).toBe('Lana Rhoades');
+    expect(models[1].thumb).toBe('/models/lana_rhoades.jpg');
+  });
+
+  it('registration + routing: three RU sources, lenkino flag + force host, porno666 force host, tile order', function () {
+    expect(PLUGIN).toMatch(/var _RU_SOURCES = \{[^}]*porno666: 1[^}]*lenkino: 1[^}]*pornobriz: 1/);
+    const force = PLUGIN.slice(PLUGIN.indexOf('var _ANDROID_FORCE_PROXY = {'), PLUGIN.indexOf('};', PLUGIN.indexOf('var _ANDROID_FORCE_PROXY = {')));
+    expect(force).toContain("'www.lenkino.adult': 1");
+    expect(force).toContain("'porno666.link': 1");
+    expect(force).not.toContain('pornobriz');
+    const lk = PLUGIN.slice(PLUGIN.indexOf("id: 'lenkino'"), PLUGIN.indexOf('search:', PLUGIN.indexOf("id: 'lenkino'")));
+    expect(lk).toContain('androidProxyStream: true');
+    ['ebalovo', 'porno666', 'lenkino', 'pornobriz', 'ebun'].reduce(function (prev, id) {
+      const at = PLUGIN.indexOf("id: '" + id + "'"); expect(at).toBeGreaterThan(prev); return at;
+    }, PLUGIN.indexOf("id: 'huyamba'"));
+    expect(PLUGIN).toContain('if (cfg.catSortQuery) {');
   });
 });
