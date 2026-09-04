@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.15';
+  var CHERRY_VERSION = '0.13.16';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -444,7 +444,9 @@
             id:       r.id,
             source:   r.source,
             title:    r.title    || '',
-            thumb:    r.thumb    || '',
+            // Legacy records saved before v0.13.11 may hold the unsubstituted xvideos/xnxx
+            // hover template (…/xv_THUMBNUM_t.jpg) — a 404 as a poster. Normalize on read.
+            thumb:    (r.thumb   || '').replace(/THUMBNUM/g, '1'),
             url:      r.url      || '',
             duration: r.duration || 0,
             views:    r.views    || 0
