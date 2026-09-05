@@ -4563,3 +4563,24 @@ describe('v0.13.23 RU batch: porno666, lenkino, pornobriz', function () {
     expect(PLUGIN).toContain('if (cfg.catSortQuery) {');
   });
 });
+
+// ── v0.13.24: favorites grid is built once (no rebuild from inside the sync); pornhub API alternates native/proxy ──
+describe('v0.13.24: favorites single build + pornhub API route alternation', function () {
+  const PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+  it('Sync.run merges only — the old _refreshGrid → comp.create() rebuild is gone', function () {
+    expect(PLUGIN).not.toMatch(/_refreshGrid\s*[:(]/); // no definition, no call (comments may mention it)
+    const sync = PLUGIN.slice(PLUGIN.indexOf('var Sync = {'), PLUGIN.indexOf('function secToTime(')).replace(/\/\/.*$/gm, ''); // code only
+    expect(sync).not.toContain('comp.create()');
+    expect(sync).toContain('if (res && Array.isArray(res.records)) Fav._merge(res.records);');
+    // the favorites grid still pulls on open and renders once (guarded by _favDone)
+    expect(PLUGIN).toContain('Promise.resolve(Sync.run()).then(_favRender, _favRender)');
+    expect(PLUGIN).toContain('if (_favDone) return;');
+  });
+  it('pornhub _apiFetch alternates native and proxy between attempts (viaProxy flips), browser unaffected', function () {
+    const ph = PLUGIN.slice(PLUGIN.indexOf("id: 'pornhub',"), PLUGIN.indexOf("id: 'xvideos',"));
+    expect(ph).toContain('_apiFetch: function(url, tries, viaProxy) {');
+    expect(ph).toContain("var get = (viaProxy && _isAndroid()) ? _proxyText(url) : cherryFetch(url);");
+    expect(ph).toContain('return self._apiFetch(url, tries - 1, !viaProxy);');
+    expect((ph.match(/self\._apiFetch\(url, 4\)/g) || []).length).toBeGreaterThanOrEqual(2); // callers unchanged
+  });
+});

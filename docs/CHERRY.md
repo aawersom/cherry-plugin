@@ -968,6 +968,20 @@ Current list covers 14 bigcdn subdomains (s1, s4, s16, s18, s25, s30, s33, s38, 
 
 ---
 
+### Favorites grid — built once (v0.13.24)
+
+`_gridLoad` (is_favorites) pulls the sync bucket on open (≤2.5 s) and renders **once** from the merged
+`Fav.all()` (guard `_favDone`). `Sync.run()` only merges records — the former `_refreshGrid()` →
+`comp.create()` repaint was removed: with pull-on-open it fired on every favorites open and rebuilt an
+already-built grid (duplicate card set, orphaned empty-state box, D-pad focus lost). Stand-verified with
+the real bucket (79 records): first card focused, arrows move focus, warm and cold opens.
+
+### Pornhub API route alternation (v0.13.24)
+
+`_apiFetch(url, tries, viaProxy)` alternates the device's native fetch and the proxy between attempts
+(`viaProxy` flips) instead of re-asking the same route 4×: the webmasters API answers some IPs with a
+200 HTML page or an empty list natively while the CF worker / VPS return the JSON. Browser: no-op.
+
 ## Source Status — Iteration 3 (live test 2026-06-03)
 
 Live testing session. All originally-reported broken channels fixed.
