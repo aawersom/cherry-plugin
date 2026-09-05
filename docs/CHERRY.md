@@ -498,7 +498,7 @@ extra force-proxy rule (see **Android fetch model** below).
 | Tier | Var | Endpoint | Used for |
 |------|-----|----------|----------|
 | Primary | `PROXY_URL` | `cherry-proxy.aawersom.workers.dev` (CF Worker + SOCKS5) | default; pornhub via residential SOCKS5 |
-| Secondary | `PROXY_URL_2` | `185-36-141-21.sslip.io` (self-hosted **VPS**, stable IP) | CF-ASN-blocked + KVS IP-bound sites |
+| Secondary | `PROXY_URL_2` | `185-36-141-21.sslip.io` (self-hosted **VPS**, stable IP; rewrites m3u8 with referer) | CF-ASN-blocked + KVS IP-bound sites + **pornhub page + phncdn HLS** (v0.13.25) |
 | Tertiary | `PROXY_URL_3` | `''` (unused) | reserved for residential VPS |
 | Val.town | `PROXY_URL_VT` | `aawersom--0d56e6a4…web.val.run` (free HTTP val) | **spankbang** only (passes CF challenge) |
 
@@ -975,6 +975,27 @@ Current list covers 14 bigcdn subdomains (s1, s4, s16, s18, s25, s30, s33, s38, 
 `comp.create()` repaint was removed: with pull-on-open it fired on every favorites open and rebuilt an
 already-built grid (duplicate card set, orphaned empty-state box, D-pad focus lost). Stand-verified with
 the real bucket (79 records): first card focused, arrows move focus, warm and cold opens.
+
+### Pornhub playback chain — one IP, playable scheme, Referer on segments (v0.13.25)
+
+Since 2026-09 the webmasters flashvars carry **HLS only** (no mp4), so every pornhub play goes through the
+inner player + hls.js. Three facts, all stand/curl-verified 2026-09-05:
+
+1. **Two signing schemes, random per page render (~2/3 vs 1/3):** A) `ev-h.phncdn.com` +
+   `validfrom/validto/ipa=1/hash` — plays; B) `hv-h.phncdn.com` + `h=/e=` — the edge answers 410 for the
+   playlist and, after an ev-h host swap, 404/470 for every segment from every egress we have (CF, VPS,
+   Val.town, direct). `getStream` re-renders the page (≤7 fetches) until scheme A is present
+   (`_isPlayableHls`), falls back to the last page only if none was.
+2. **Segments are IP-bound (ipa=1) and hotlink-checked:** they load only from the IP that fetched the page
+   AND with `Referer: https://www.pornhub.com/`. The CF worker's egress varies between requests → 470;
+   the dead residential pool used to give one exit, now the **VPS** is that one IP: `www.pornhub.com` /
+   `rt.pornhub.com` (page) + `*.phncdn.com` (playlists/segments) are routed to `PROXY_URL_2`. The Deno
+   proxy propagates `referer` into every rewritten playlist URL and rewrites with `https://` (patched +
+   deployed 2026-09-05, see DEPLOY.md).
+3. The webmasters API stays on the device IP (its thumb URLs are IP-bound); `_apiFetch` alternates
+   native ↔ proxy only when the native answer is empty.
+
+Stand: real `playVideo` → hls.js `FRAG_LOADED`/`BUFFER_APPENDED`, `currentTime` 3.7 s within 14 s.
 
 ### Pornhub API route alternation (v0.13.24)
 

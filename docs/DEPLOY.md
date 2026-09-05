@@ -119,6 +119,16 @@ npx wrangler dev
 
 ### Передеплой VPS-скрипта (через SSH/paramiko)
 
+> 2026-09-05: задеплоена правка `main.js` — `rewriteM3u8(text, baseUrl, proxyOrigin, key, referer)` пробрасывает
+> `&referer=` во все переписанные URL плейлиста (сегменты pornhub требуют Referer pornhub.com), а `proxyOrigin`
+> строится как `https://` (`X-Forwarded-Proto`, за Caddy `request.url` был `http://` → лишний 308 на каждый
+> сегмент). Бэкап на VPS: `/opt/cherry-proxy/main.js.bak-20260905-1430`. Деплой: paramiko (root, пароль из
+> локального vault) → `cp` бэкап → sftp `main.js` → `systemctl restart cherry-proxy.service` → `is-active`.
+>
+> Cloudflare-воркер: OAuth-токен wrangler истёк 2026-06-17, non-interactive деплой невозможен без
+> `wrangler login` в интерактивной сессии (или `CLOUDFLARE_API_TOKEN`). Residential-SOCKS5 пул в воркере
+> мёртв (оба порта не отвечают); pornhub с него снят маршрутом на VPS, поэтому воркер пока не трогали.
+
 ```powershell
 # Изменить workers/cherry-proxy-deno/main.js, затем по SSH:
 #   scp на /opt/cherry-proxy/main.js → systemctl restart cherry-proxy.service

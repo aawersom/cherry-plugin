@@ -17,8 +17,9 @@ let code = readFileSync('D:/Works/Lampa/plugin.js', 'utf8').replace(/^\uFEFF/, '
 code = code.replace('if (window.plugin_cherry_ready) return;', 'window.plugin_cherry_ready = false;');
 code = code.replace('if (window.appready) {', 'if (false) {');
 const ix = code.lastIndexOf('})();');
-const expose = "\n;try{window.__C={SOURCES:SOURCES,cherryFetch:cherryFetch,_fetchAny:_fetchAny,_proxyTextAny:_proxyTextAny,cherryPost:cherryPost,_RU_SOURCES:_RU_SOURCES,_searchGroups:_searchGroups,_translateQuery:_translateQuery,_normText:_normText,_rankByRelevance:_rankByRelevance,_decodeHtml:_decodeHtml,bestQualityUrl:bestQualityUrl,_forceProxyAndroid:_forceProxyAndroid,buildProxyUrl:buildProxyUrl,Sync:Sync,Fav:Fav,Hist:Hist};}catch(e){window.__C_ERR=String(e);}\n";
+const expose = "\n;try{window.__C={SOURCES:SOURCES,cherryFetch:cherryFetch,_fetchAny:_fetchAny,_proxyTextAny:_proxyTextAny,cherryPost:cherryPost,_RU_SOURCES:_RU_SOURCES,_searchGroups:_searchGroups,_translateQuery:_translateQuery,_normText:_normText,_rankByRelevance:_rankByRelevance,_decodeHtml:_decodeHtml,bestQualityUrl:bestQualityUrl,_forceProxyAndroid:_forceProxyAndroid,buildProxyUrl:buildProxyUrl,Sync:Sync,Fav:Fav,Hist:Hist,playVideo:playVideo};}catch(e){window.__C_ERR=String(e);}\n";
 code = code.slice(0, ix) + expose + code.slice(ix);
+await send('Runtime.evaluate', { expression: 'window.__C_ERR = ""; true', returnByValue: true });
 await send('Runtime.evaluate', { expression: code, returnByValue: false });
 await new Promise(r => setTimeout(r, 600));
 const err = await evalJS('window.__C_ERR||""'); if (err) { console.log('__C_ERR:', err); }

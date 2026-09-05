@@ -44,6 +44,10 @@ const PROXY_URL_2_HOSTS = {
   '666-emded.com': 1,
   'play.huyamba.mobi': 1,
   'ru.xhamster.com': 1,
+  // pornhub video page (v0.13.25): page + phncdn playlist + segments on one IP (VPS)
+  'www.pornhub.com': 1, 'rt.pornhub.com': 1,
+  // familyporn (v0.13.25): get_file CDN rejects hosting-range IPs → page + stream via the VPS
+  'familyporn.tv': 1,
 };
 const VIDEO_TIMEOUT_MS = 35000;
 const CONCURRENCY      = 3;

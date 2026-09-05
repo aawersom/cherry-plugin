@@ -2087,7 +2087,8 @@ describe('Android native stream — plugin.js source assertions (anti-drift)', (
   it('pornhub HLS is ALWAYS proxied with referer (force-proxied on Android for ipa token + CORS)', () => {
     // pornhub is HLS-only + ipa=1 IP-bound; its page is force-proxied on Android, so the m3u8 +
     // segments must go through the SAME proxy exit (referer=pornhub.com) — never raw on Android.
-    expect(SRC).toMatch(/quality\[lbl\]\s*=\s*buildProxyUrl\(hlsUrls\[lbl\],\s*'https:\/\/www\.pornhub\.com\/'\)/);
+    // v0.13.25: the dead hv-h edge is mapped to ev-h before proxying (same path + token).
+    expect(SRC).toMatch(/quality\[lbl\]\s*=\s*buildProxyUrl\(hlsUrls\[lbl\]\.replace\(\/\^https\?:\\\/\\\/hv-h\\\.phncdn\\\.com\\\/\/, 'https:\/\/ev-h\.phncdn\.com\/'\),\s*'https:\/\/www\.pornhub\.com\/'\)/);
     expect(SRC).not.toMatch(/_isAndroid\(\)\s*\?\s*hlsUrls\[lbl\]\s*:\s*buildProxyUrl\(hlsUrls\[lbl\]/);
     // pornhub page hosts are in the Android force-proxy map + phncdn suffix match
     expect(SRC).toMatch(/'www\.pornhub\.com':\s*1/);

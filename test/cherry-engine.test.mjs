@@ -4584,3 +4584,46 @@ describe('v0.13.24: favorites single build + pornhub API route alternation', fun
     expect((ph.match(/self\._apiFetch\(url, 4\)/g) || []).length).toBeGreaterThanOrEqual(2); // callers unchanged
   });
 });
+
+// ── v0.13.25: pornhub playable-scheme re-render + one-IP HLS chain; familyporn via VPS; pornve 720p default ──
+describe('v0.13.25: pornhub HLS chain, familyporn routing, pornve AV1 avoidance', function () {
+  const PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+  function block(startMarker, endMarker) {
+    const a = PLUGIN.indexOf(startMarker); expect(a).toBeGreaterThan(-1);
+    const b = PLUGIN.indexOf(endMarker, a); expect(b).toBeGreaterThan(a);
+    return PLUGIN.slice(a, b);
+  }
+  it('pornhub: page is re-rendered until the ev-h/validfrom HLS scheme (≤7 fetches), hv-h mapped to ev-h, playlist probed', function () {
+    const ph = block("id: 'pornhub',", "id: 'xvideos',");
+    expect(ph).toContain('function _isPlayableHls(html)');
+    expect(ph).toContain('return _fetchPage(6).then(');
+    expect(ph).toContain('if (ok && _isPlayableHls(html)) return html;');
+    expect(ph).toContain("hlsUrls[lbl].replace(/^https?:\\/\\/hv-h\\.phncdn\\.com\\//, 'https://ev-h.phncdn.com/')");
+    expect(ph).toContain('return Promise.all(labels.map(function (lbl) {'); // every quality probed in parallel
+    expect(ph).toContain('var map = Object.keys(playable).length ? playable : quality;');
+    // the detector accepts the flashvars-escaped scheme-A url and rejects scheme B
+    const m = ph.match(/function _isPlayableHls\(html\) \{ return (\/.*?\/)\.test\(html\); \}/);
+    const re = new Function('return ' + m[1])();
+    expect(re.test('"videoUrl":"https:\\/\\/ev-h.phncdn.com\\/hls\\/x\\/master.m3u8?validfrom=1&validto=2&ipa=1"')).toBe(true);
+    expect(re.test('"videoUrl":"https:\\/\\/hv-h.phncdn.com\\/hls\\/x\\/master.m3u8?h=abc&e=1788"')).toBe(false);
+  });
+  it('pornhub: page hosts and *.phncdn.com are routed to the VPS (one IP for page + playlist + segments)', function () {
+    const vps = block('var PROXY_URL_2_HOSTS = {', '};');
+    expect(vps).toContain("'www.pornhub.com': 1, 'rt.pornhub.com': 1");
+    expect(PLUGIN).toContain("/(?:^|\\.)phncdn\\.com$/.test(h)) base = PROXY_URL_2;");
+  });
+  it('familyporn: page + get_file via the VPS on Android (CDN rejects hosting-range IPs)', function () {
+    expect(block('var PROXY_URL_2_HOSTS = {', '};')).toContain("'familyporn.tv': 1");
+    expect(block('var _ANDROID_FORCE_PROXY = {', '};')).toContain("'familyporn.tv': 1");
+  });
+  it('pornve: Android drops the AV1 1080p entry from the map (Lampa picks the highest map entry)', function () {
+    const pv = block("id: 'pornve',", "id: 'familyporn',");
+    expect(pv).toContain("if (_isAndroid() && quality['720p']) delete quality['1080p'];");
+    const fp = block("id: 'familyporn',", 'function _familypornCards(');
+    expect(fp).not.toContain("delete quality['1080p']"); // untouched
+  });
+  it('playVideo honours the adapter-chosen stream.url (probed/720p/full-file); bestQualityUrl is the fallback', function () {
+    expect(PLUGIN).toContain('var url = stream.url || bestQualityUrl(quality);');
+    expect(PLUGIN).not.toContain('var url = bestQualityUrl(quality) || stream.url;');
+  });
+});

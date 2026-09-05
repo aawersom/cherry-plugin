@@ -41,13 +41,18 @@ function isPrivateHostname(hostname) {
   return false;
 }
 
-function rewriteM3u8(text, baseUrl, proxyOrigin, key) {
+// `referer` is propagated into every rewritten variant/segment URL: CDNs with IP-bound tokens
+// (pornhub phncdn ipa=1) also hotlink-check the Referer on SEGMENTS — without it the segment is
+// 404 even from the very IP that fetched the page and the playlist (verified 2026-09-05).
+function rewriteM3u8(text, baseUrl, proxyOrigin, key, referer) {
   const base = new URL(baseUrl);
   function proxify(rawUrl) {
     let abs;
     try { abs = new URL(rawUrl, base).toString(); } catch { return rawUrl; }
     if (abs.startsWith(proxyOrigin)) return rawUrl;
-    return proxyOrigin + '/proxy?url=' + encodeURIComponent(abs) + '&key=' + encodeURIComponent(key);
+    let p = proxyOrigin + '/proxy?url=' + encodeURIComponent(abs) + '&key=' + encodeURIComponent(key);
+    if (referer) p += '&referer=' + encodeURIComponent(referer);
+    return p;
   }
   return text.split('\n').map(line => {
     const trimmed = line.trim();
@@ -150,9 +155,12 @@ Deno.serve({ hostname: '127.0.0.1', port: Number(Deno.env.get('PORT')) || 8787 }
 
   if (isM3u8) {
     const text = await upstream.text();
-    const proxyOrigin = new URL(request.url).origin;
+    // Behind Caddy (TLS termination) request.url is http:// — rewriting with it costs every
+    // variant/segment a 308 hop. Trust X-Forwarded-Proto, default https (the only public scheme).
+    const reqUrl = new URL(request.url);
+    const proxyOrigin = (request.headers.get('x-forwarded-proto') || 'https') + '://' + reqUrl.host;
     const key = Deno.env.get('PROXY_KEY') || '';
-    const rewritten = rewriteM3u8(text, parsedTarget.toString(), proxyOrigin, key);
+    const rewritten = rewriteM3u8(text, parsedTarget.toString(), proxyOrigin, key, customReferer);
     responseHeaders.set('Content-Type', 'application/vnd.apple.mpegurl');
     responseHeaders.delete('Content-Length');
     return new Response(rewritten, { status: upstream.status, headers: responseHeaders });
