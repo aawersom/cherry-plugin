@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.24';
+  var CHERRY_VERSION = '0.13.25';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -57,6 +57,15 @@
     // fetched the EMBED, and the CDN rejects any foreign Referer (403 for the WebView's
     // lampa.mx). VPS = one stable IP for embed + stream, and the proxy sends no Referer.
     '666-emded.com': 1,
+    // pornhub video PAGE (2026-09-05): the flashvars are HLS-only now and the SEGMENT tokens
+    // (ipa=1) are bound to the IP that fetched the page. The CF worker's egress differs
+    // between requests → 470 on every segment (playlist loads, video never starts). The VPS
+    // is one IP for page + playlist + segments and rewrites the m3u8 (*.phncdn.com is routed
+    // here too — regex below). The webmasters API stays on the device IP (thumbs IP-bound).
+    'www.pornhub.com': 1, 'rt.pornhub.com': 1,
+    // familyporn: its get_file (IP-bound KVS token) 302s to a CDN that rejects hosting-range
+    // IPs (stand: 403; via the VPS with page + stream on one IP: 206). Page + stream here.
+    'familyporn.tv': 1,
     // huyamba: mobile UAs are 302'd into a dead mobile mirror (rt.huyamba.xyz) — the VPS
     // fetches with a desktop UA. Its get_file token is NOT IP-bound (stream stays raw).
     'play.huyamba.mobi': 1,
@@ -104,7 +113,8 @@
           // the token mismatches → 410/buffering. youjizz streams on *.youjizz.com
           // (e.g. cdne-mobile.youjizz.com); porntrex streams on *.cdntrex.com.
           if (PROXY_URL_2_HOSTS[h] || /\.bigcdn\.cc$/.test(h) || /(?:^|\.)pornone\.com$/.test(h) ||
-              /(?:^|\.)youjizz\.com$/.test(h) || /\.cdntrex\.com$/.test(h)) base = PROXY_URL_2;
+              /(?:^|\.)youjizz\.com$/.test(h) || /\.cdntrex\.com$/.test(h) ||
+              /(?:^|\.)phncdn\.com$/.test(h)) base = PROXY_URL_2;   // pornhub HLS: same IP as its page (see PROXY_URL_2_HOSTS)
         } catch (e) {}
       }
     }
@@ -164,6 +174,9 @@
     // porno666: get_file tokens are IP-bound and the CDN 403s foreign Referers (ebun's farm) —
     // page and get_file share this host, so both go through the proxy with no Referer.
     'porno666.link': 1,
+    // familyporn: the device's get_file → CDN redirect answered 403 on the stand's hosting IP;
+    // page + get_file share this host, so both go through the VPS (one IP for the token).
+    'familyporn.tv': 1,
     // spankbang: Cloudflare challenges the device home IP too → force the page through
     // the proxy (routes to Val.town via PROXY_URL_VT, which passes the challenge).
     'ru.spankbang.com': 1, 'spankbang.com': 1, 'www.spankbang.com': 1,
@@ -811,7 +824,10 @@
 
     source.getStream(video).then(function (stream) {
       var quality = stream.quality || {};
-      var url = bestQualityUrl(quality) || stream.url;
+      // The adapter's `url` is its considered default (pornhub: the PROBED playable playlist and
+      // 720p on Android; pornve: 720p H.264 instead of 1080p AV1; ebun: the full file) — honour
+      // it. bestQualityUrl only fills in when an adapter hands a map without a choice.
+      var url = stream.url || bestQualityUrl(quality);
 
       if (!url) {
         Lampa.Noty.show(Lampa.Lang.translate('cherry_error'), { style: 'warn' });
@@ -3259,14 +3275,24 @@ SOURCES.push({
     // API itself is NOT proxied (device IP) so the listing stays reliable.
     // The residential proxy flakes (~40% of single fetches return an empty/blocked page → no
     // flashvars → "load error" on ~half the videos). RETRY up to 4× until flashvars appear.
-    function _fetchPage(tries) {
+    // Pornhub renders each page with ONE of two HLS signings, at random (2026-09, ~2/3 vs 1/3):
+    //   A) `ev-h.phncdn.com` + validfrom/validto/ipa=1/hash — plays (segments 200 when the
+    //      playlist and segments leave from the page-fetch IP with Referer pornhub — the VPS);
+    //   B) `hv-h.phncdn.com` + h=/e= — the edge answers 410 for the playlist and, after the
+    //      ev-h host swap, 404/470 for every segment from every egress we have. Dead for us.
+    // So re-render the page until it carries scheme A (≤7 fetches, ~1 s each via the VPS);
+    // fall back to the last complete page (scheme B → swap + probe below) only if none did.
+    function _isPlayableHls(html) { return /"videoUrl":"[^"]*\.m3u8\\?\?validfrom=/.test(html); }
+    function _fetchPage(tries, last) {
       var u = _isAndroid() ? buildProxyUrl(pageUrl, 'https://www.pornhub.com/') : pageUrl;
       return cherryFetch(u).then(function (html) {
-        if ((!html || html.indexOf('flashvars_') === -1) && tries > 0) return _fetchPage(tries - 1);
-        return html;
-      }).catch(function (e) { if (tries > 0) return _fetchPage(tries - 1); throw e; });
+        var ok = !!(html && html.indexOf('flashvars_') !== -1);
+        if (ok && _isPlayableHls(html)) return html;
+        if (tries > 0) return _fetchPage(tries - 1, ok ? html : last);
+        return ok ? html : (last || html);
+      }).catch(function (e) { if (tries > 0) return _fetchPage(tries - 1, last); if (last) return last; throw e; });
     }
-    return _fetchPage(4).then(function(html) {
+    return _fetchPage(6).then(function(html) {
       var fvMatch = html.match(/var\s+flashvars_\d+\s*=\s*(\{[\s\S]+?\});\s*\n/);
       if (!fvMatch) return { url: '', quality: {} };
 
@@ -3299,14 +3325,31 @@ SOURCES.push({
           // NOT the home IP). The referer makes the worker route the m3u8 + (rewritten) segments
           // through DJB2(pornhub.com) — the SAME SOCKS5 exit as the page fetch — so the token
           // stays valid, and the proxy adds CORS so the inner/built-in player (hls.js) can load it.
-          quality[lbl] = buildProxyUrl(hlsUrls[lbl], 'https://www.pornhub.com/');
+          // 2026-09: the flashvars carry HLS ONLY (no mp4) on rotating CDN edges, and the
+          // `hv-h.phncdn.com` edge answers 410 Gone for EVERY playlist (2014–2026 videos, from
+          // CF/VPS/direct alike) while `ev-h.phncdn.com` serves the same path + token (the
+          // h=/e= signature is host- and IP-independent). Map the dead edge away.
+          quality[lbl] = buildProxyUrl(hlsUrls[lbl].replace(/^https?:\/\/hv-h\.phncdn\.com\//, 'https://ev-h.phncdn.com/'), 'https://www.pornhub.com/');
         });
         // pornhub's per-quality HLS goes through the proxy (residential exit) which caps
         // throughput; 1080p (~4 Mbps) can out-run it and buffer. Default to 720p on Android
         // for smooth start (it still fits the proxy bandwidth) — 1080p stays in the quality
         // menu for users on a fast link. Browser keeps best (direct/faster path).
-        var defUrl = (_isAndroid() && quality['720p']) ? quality['720p'] : bestQualityUrl(quality);
-        return { url: defUrl, quality: quality };
+        // PROBE every quality's playlist through the proxy IN PARALLEL (~0.5 s total) and keep
+        // only the ones that answer a real #EXTM3U: hls.js has no second chance after a 410/404
+        // manifest (that was "pornhub не открывается"), and Lampa's player picks the HIGHEST
+        // entry of the map regardless of `url`, so the map itself must contain only playable
+        // playlists. If nothing verifies, hand the unfiltered map (nothing better exists).
+        var labels = Object.keys(quality);
+        return Promise.all(labels.map(function (lbl) {
+          return fetch(quality[lbl]).then(function (r) { return r.ok ? r.text() : ''; })
+            .then(function (t) { return /^\s*#EXTM3U/.test(t); }).catch(function () { return false; });
+        })).then(function (okList) {
+          var playable = {};
+          labels.forEach(function (lbl, i) { if (okList[i]) playable[lbl] = quality[lbl]; });
+          var map = Object.keys(playable).length ? playable : quality;
+          return { url: bestQualityUrl(map), quality: map };
+        });
       }
 
       return { url: '', quality: {} };
@@ -5533,6 +5576,11 @@ SOURCES.push({
             while ((fm = varM.exec(html)) !== null) {
                 quality[labels[fm[1]] || fm[1]] = fm[2];
             }
+            // pornve encodes 1080p in AV1 while 480p/720p are H.264 (stand codec check 2026-09-05).
+            // Lampa's player takes the HIGHEST entry of the quality map regardless of `url`, so on
+            // Android (TV players mostly lack AV1 decode → black screen) the 1080p entry is dropped
+            // from the map — same pattern as youjizz's ≤720p cap. Browser keeps all qualities.
+            if (_isAndroid() && quality['720p']) delete quality['1080p'];
             best = quality['1080p'] || quality['720p'] || quality['480p'] || best;
             if (best) return { url: best, quality: quality };
             return extractStreams(html);
