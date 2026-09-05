@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.23';
+  var CHERRY_VERSION = '0.13.24';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -735,10 +735,11 @@
         .then(function (res) {
           var got = (res && Array.isArray(res.records)) ? res.records.length : -1;
           console.log('[Cherry] Sync.run: server responded, records =', got);
-          if (res && Array.isArray(res.records)) {
-            Fav._merge(res.records);
-            Sync._refreshGrid();
-          }
+          // Merge only — no grid rebuild here. The favorites grid pulls on open and renders
+          // ONCE from the merged list (_gridLoad); rebuilding an already-built grid from
+          // inside the sync (the old _refreshGrid → comp.create()) mounted a second
+          // card set / left the empty-state box behind and dropped the D-pad focus.
+          if (res && Array.isArray(res.records)) Fav._merge(res.records);
           if (report) {
             var n = Fav.all().length;
             Lampa.Noty.show(Lampa.Lang.translate('cherry_sync_ok') + ' (' + n + ')');
@@ -749,18 +750,6 @@
           if (report) Lampa.Noty.show(Lampa.Lang.translate('cherry_sync_err'));
         })
         .then(function () { self._running = false; });
-    },
-
-    /** Best-effort: repaint the favorites grid if it's the active activity. */
-    _refreshGrid: function () {
-      try {
-        var act = Lampa.Activity.active();
-        if (!act || !act.is_favorites) return;
-        var comp = act.activity && act.activity.component;
-        // InteractionCategory exposes create() — re-run it to rebuild cards from
-        // the merged Fav.all(). Guarded: a missing/odd shape is silently ignored.
-        if (comp && typeof comp.create === 'function') comp.create();
-      } catch (e) {}
     }
   };
 
@@ -3118,14 +3107,20 @@ SOURCES.push({
 
   // The webmasters API intermittently returns an empty {videos:[]} (~50% from a hammered IP) —
   // retry up to `tries` times until it yields cards, so catalog/search don't flicker to empty.
-  _apiFetch: function(url, tries) {
+  // The webmasters API answers some IPs with a 200 HTML bot page or an empty list (the
+  // device's native fetch on Android) — JSON.parse fails, no videos. Re-asking the SAME
+  // route 4× only burned time; alternate native ↔ proxy between attempts instead: both
+  // the CF worker and the VPS return the JSON (verified). In the browser cherryFetch is the
+  // proxy already, so the alternation is a no-op there.
+  _apiFetch: function(url, tries, viaProxy) {
     var self = this;
-    return cherryFetch(url).then(function(text) {
+    var get = (viaProxy && _isAndroid()) ? _proxyText(url) : cherryFetch(url);
+    return get.then(function(text) {
       var data; try { data = JSON.parse(text); } catch (e) { data = null; }
       var videos = (data && (data.videos || (data.data && data.data.videos))) || [];
-      if (!videos.length && tries > 0) return self._apiFetch(url, tries - 1);
+      if (!videos.length && tries > 0) return self._apiFetch(url, tries - 1, !viaProxy);
       return videos.map(function(v) { return self._mapVideo(v); });
-    }).catch(function() { if (tries > 0) return self._apiFetch(url, tries - 1); return []; });
+    }).catch(function() { if (tries > 0) return self._apiFetch(url, tries - 1, !viaProxy); return []; });
   },
 
   search: function(query, page, sort) {
