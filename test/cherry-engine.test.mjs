@@ -3809,7 +3809,7 @@ describe('RU→EN search translation', function () {
   }
   function grabFn(name) { const i = PLUGIN.indexOf('function ' + name + '('); return PLUGIN.slice(i, balanced(i) + 1); }
   function grabVar(name) { const i = PLUGIN.indexOf('var ' + name + ' ='); return PLUGIN.slice(i, balanced(i) + 1) + ';'; }
-  const ctx = [grabVar('_SEARCH_SYN'), grabVar('_RU_EN'), grabVar('_RU_SOURCES'), grabFn('_normText'), grabFn('_translateQuery'), grabFn('_searchGroups')].join('\n');
+  const ctx = [grabVar('_SEARCH_SYN'), grabVar('_RU_EN'), grabVar('_RU_SOURCES'), grabFn('_normText'), grabFn('_translateQuery'), grabVar('_SEARCH_STOP'), PLUGIN.slice(PLUGIN.indexOf('var _RU_STEM_RX'), PLUGIN.indexOf('\n', PLUGIN.indexOf('var _RU_STEM_RX'))), 'var _RU_EN_BY_STEM = null;', grabFn('_ruStem'), grabFn('_ruLookup'), grabFn('_searchGroups')].join('\n');
   const M = new Function(ctx + '\nreturn {_translateQuery:_translateQuery,_searchGroups:_searchGroups,_RU_SOURCES:_RU_SOURCES};')();
 
   it('translates Russian concept queries to English (greedy phrase first)', function () {
@@ -3852,7 +3852,7 @@ describe('relevance ranking + self-heal (v0.13.12)', function () {
   }
   function grabFn(name) { const i = PLUGIN.indexOf('function ' + name + '('); return PLUGIN.slice(i, balanced(i) + 1); }
   function grabVar(name) { const i = PLUGIN.indexOf('var ' + name + ' ='); return PLUGIN.slice(i, balanced(i) + 1) + ';'; }
-  const ctx = [grabVar('_SEARCH_SYN'), grabVar('_RU_EN'), grabFn('_normText'), grabFn('_searchGroups'), grabFn('_relScore'), grabFn('_rankByRelevance')].join('\n');
+  const ctx = [grabVar('_SEARCH_SYN'), grabVar('_RU_EN'), grabFn('_normText'), grabVar('_SEARCH_STOP'), PLUGIN.slice(PLUGIN.indexOf('var _RU_STEM_RX'), PLUGIN.indexOf('\n', PLUGIN.indexOf('var _RU_STEM_RX'))), 'var _RU_EN_BY_STEM = null;', grabFn('_ruStem'), grabFn('_ruLookup'), grabFn('_searchGroups'), grabFn('_relScore'), grabFn('_rankByRelevance')].join('\n');
   const M = new Function(ctx + '\nreturn {_relScore:_relScore,_rankByRelevance:_rankByRelevance,_searchGroups:_searchGroups};')();
 
   it('ranks the exact multi-word phrase above scattered-word matches', function () {
@@ -4075,7 +4075,7 @@ describe('global ranking: tag-search sources get a site-relevant baseline (v0.13
   }
   function grabFn(name) { const i = PLUGIN.indexOf('function ' + name + '('); return PLUGIN.slice(i, balanced(i) + 1); }
   function grabVar(name) { const i = PLUGIN.indexOf('var ' + name + ' ='); return PLUGIN.slice(i, balanced(i) + 1) + ';'; }
-  const ctx = [grabVar('_SEARCH_SYN'), grabVar('_RU_EN'), grabFn('_normText'), grabFn('_searchGroups'), grabFn('_relScore'), grabFn('_rankByRelevance')].join('\n');
+  const ctx = [grabVar('_SEARCH_SYN'), grabVar('_RU_EN'), grabFn('_normText'), grabVar('_SEARCH_STOP'), PLUGIN.slice(PLUGIN.indexOf('var _RU_STEM_RX'), PLUGIN.indexOf('\n', PLUGIN.indexOf('var _RU_STEM_RX'))), 'var _RU_EN_BY_STEM = null;', grabFn('_ruStem'), grabFn('_ruLookup'), grabFn('_searchGroups'), grabFn('_relScore'), grabFn('_rankByRelevance')].join('\n');
   const M = new Function(ctx + '\nreturn {rank:_rankByRelevance};')();
 
   it('a site-relevant card (no title words) ranks with plain full matches, below phrase/lead-boosted ones, above partial matches', function () {
@@ -4151,8 +4151,9 @@ describe('v0.13.20 channels: ebun route, huyamba revival (play.huyamba.mobi), 24
     const literal = PLUGIN.slice(a, b + 2); // "_kvsEngine({ ... })"
     const _cats = new Function(grab('_cats') + '\nreturn _cats;')();
     // eslint-disable-next-line no-new-func
-    return new Function('_kvsEngine', '_cats', 'cherryFetch', '_kvsFlashvarsQuality', 'return ' + literal + ';')(
-      function (c) { return c; }, _cats, function () {}, function () {});
+    const _huyUrl = new Function(grab('_huyUrl') + '\nreturn _huyUrl;')();
+    return new Function('_kvsEngine', '_cats', 'cherryFetch', '_kvsFlashvarsQuality', '_huyUrl', 'return ' + literal + ';')(
+      function (c) { return c; }, _cats, function () {}, function () {}, _huyUrl);
   }
 
   it('huyamba listing fixture (play.huyamba.mobi): ≥20 cards, all with https thumb, RU title, duration, webm hover clip', function () {
@@ -4170,12 +4171,14 @@ describe('v0.13.20 channels: ebun route, huyamba revival (play.huyamba.mobi), 24
 
   it('huyamba URLs: `from=` paging (page= is ignored by the site), sort via ?by=, search ?from_videos=', function () {
     const cfg = huyambaCfg();
-    expect(cfg.browseUrl(1)).toBe('https://play.huyamba.mobi/videos/?from=1');
-    expect(cfg.browseUrl(3)).toBe('https://play.huyamba.mobi/videos/?from=3');
+    expect(cfg.browseUrl(1)).toBe('https://huyamba.tv/videos/?from=1');
+    expect(cfg.browseUrl(3)).toBe('https://huyamba.tv/videos/?from=3');
     expect(cfg.sortParam).toBe('by');
-    expect(cfg.searchUrl('блондинка', 1)).toBe('https://play.huyamba.mobi/search/%D0%B1%D0%BB%D0%BE%D0%BD%D0%B4%D0%B8%D0%BD%D0%BA%D0%B0/');
-    expect(cfg.searchUrl('teen', 2)).toBe('https://play.huyamba.mobi/search/teen/?from_videos=2');
-    expect(cfg.categoryFmt).toBe('https://play.huyamba.mobi/categories/{slug}/videos/?from={page}');
+    expect(cfg.searchUrl('блондинка', 1)).toBe('https://huyamba.tv/search/%D0%B1%D0%BB%D0%BE%D0%BD%D0%B4%D0%B8%D0%BD%D0%BA%D0%B0/');
+    expect(cfg.searchUrl('teen', 2)).toBe('https://huyamba.tv/search/teen/?from_videos=2');
+    expect(cfg.categoryFmt).toBe('https://huyamba.tv/categories/{slug}/videos/?from={page}');
+    // a favorite saved on the dead mirror still resolves (stream + related) on the live host
+    expect(cfg.pageUrl('https://play.huyamba.mobi/video/123/')).toBe('https://huyamba.tv/video/123/');
     // Only the category/listing pages carry the KVS ajax pager (data-parameters="…from:N");
     // the home page has none → 0 → _kvsPages falls back to _derivePages (stand: p2 100% new).
     expect(cfg.pagesRx(fixture('huyamba-category.html'))).toBeGreaterThanOrEqual(2);
@@ -4287,7 +4290,41 @@ describe('v0.13.21 xhamster: JSON cards, paging, URLs, HLS stream, related, mode
     const m = /<link rel="preload" href="(https:\/\/video-nss\.xhcdn\.com\/[^"]+\.m3u8)"/.exec(html);
     expect(m).toBeTruthy();
     expect(m[1]).toMatch(/\/media=hls4\/multi=.*1920x1080:1080p.*\.h264\.mp4\.m3u8$/);
-    expect(block("id: 'xhamster',", 'getModels:')).toContain('<link rel="preload" href="(https:\\/\\/video-nss');
+  });
+
+  // v0.13.26: the real getStream (pulled from plugin.js) — any *.xhcdn.com host, direct H.264 MP4
+  // map first, AV1 master → H.264 twin when it answers (stand 2026-10-07: 3 of 4 pages had moved
+  // to video7 / video-nss-a / video-b and the host-pinned regex returned no url).
+  function xhGetStream(pages) {
+    const src = block("id: 'xhamster',", 'getModels:');
+    const a = src.indexOf('getStream: function (video) {');
+    let depth = 0, i = src.indexOf('{', a), end = -1;
+    for (; i < src.length; i++) { if (src[i] === '{') depth++; else if (src[i] === '}') { if (--depth === 0) { end = i; break; } } }
+    const fnSrc = src.slice(src.indexOf('function', a), end + 1);
+    const bestQualityUrl = new Function(grab('bestQualityUrl') + '\nreturn bestQualityUrl;')();
+    const cherryFetch = function (u) { return pages[u] !== undefined ? Promise.resolve(pages[u]) : Promise.reject(new Error('404 ' + u)); };
+    return new Function('cherryFetch', 'bestQualityUrl', 'return ' + fnSrc + ';')(cherryFetch, bestQualityUrl);
+  }
+  it('getStream: fixture page → its direct H.264 MP4 map (the page carries one next to the HLS master)', async function () {
+    const html = fixture('xhamster-video.html');
+    const r = await xhGetStream({ 'https://x/v': html })({ url: 'https://x/v' });
+    expect(r.url).toMatch(/^https:\/\/[a-z0-9.-]+\.xhcdn\.com\/.*h264\.mp4/);
+    expect(Object.keys(r.quality).every(function (q) { return parseInt(q, 10) >= 360; })).toBe(true);
+  });
+  it('getStream: direct H.264 MP4 map wins (≥360p only), any xhcdn host', async function () {
+    const html = '<script>{"sources":{"mp4":{"144p":"https:\\/\\/video7.xhcdn.com\\/k\\/144p.h264.mp4","480p":"https:\\/\\/video7.xhcdn.com\\/k\\/480p.h264.mp4","720p":"https:\\/\\/video7.xhcdn.com\\/k\\/720p.h264.mp4"}}}</script>';
+    const r = await xhGetStream({ 'https://x/v': html })({ url: 'https://x/v' });
+    expect(Object.keys(r.quality).sort()).toEqual(['480p', '720p']);
+    expect(r.url).toBe('https://video7.xhcdn.com/k/720p.h264.mp4');
+  });
+  it('getStream: AV1 master on a moved host → H.264 twin when it answers, else AV1', async function () {
+    const av1 = 'https://video-b.xhcdn.com/key=abc/media=hls4/multi=a/022/_TPL_.av1.mp4.m3u8';
+    const h264 = av1.replace('.av1.mp4.m3u8', '.h264.mp4.m3u8');
+    const html = '<link rel="preload" href="' + av1 + '" as="fetch"/>';
+    const ok = await xhGetStream({ 'https://x/v': html, [h264]: '#EXTM3U\n#EXT-X-STREAM-INF' })({ url: 'https://x/v' });
+    expect(ok.url).toBe(h264);
+    const denied = await xhGetStream({ 'https://x/v': html })({ url: 'https://x/v' });
+    expect(denied.url).toBe(av1);
   });
 
   it('related: xplayerPluginSettings.relatedVideos on the video page (11 cards)', function () {
@@ -4395,7 +4432,7 @@ describe('v0.13.22 ebalovo: cards, URLs, stream, models', function () {
     const eb = PLUGIN.slice(PLUGIN.indexOf("id: 'ebalovo'"), PLUGIN.indexOf('search:', PLUGIN.indexOf("id: 'ebalovo'")));
     expect(eb).toContain('androidProxyStream: true');
     expect(PLUGIN).toContain('if (_isAndroid()) return (_forceProxyAndroid(u) || source.androidProxyStream) ? buildProxyUrl(u) : u;');
-    expect((PLUGIN.match(/^\s+androidProxyStream: true,/gm) || []).length).toBe(3); // ebalovo + lenkino (UA-bound tokens), pornobriz (WebView rejects the CDN response)
+    expect((PLUGIN.match(/^\s+androidProxyStream: true,/gm) || []).length).toBe(4); // ebalovo + lenkino (UA-bound tokens), pornobriz (WebView rejects the CDN response), perfektdamen (HLS without CORS, v0.13.26)
   });
 
   it('registration: RU-titled source, tile right after Huyamba, brand-domain base', function () {
@@ -4622,8 +4659,166 @@ describe('v0.13.25: pornhub HLS chain, familyporn routing, pornve AV1 avoidance'
     const fp = block("id: 'familyporn',", 'function _familypornCards(');
     expect(fp).not.toContain("delete quality['1080p']"); // untouched
   });
-  it('playVideo honours the adapter-chosen stream.url (probed/720p/full-file); bestQualityUrl is the fallback', function () {
-    expect(PLUGIN).toContain('var url = stream.url || bestQualityUrl(quality);');
-    expect(PLUGIN).not.toContain('var url = bestQualityUrl(quality) || stream.url;');
+  it('playVideo: the quality MAP decides (best entry first); v0.13.26 reverted url-first (240p on youjizz/jopaonline)', function () {
+    expect(PLUGIN).toContain('var url = bestQualityUrl(quality) || stream.url;');
+    expect(PLUGIN).not.toContain('var url = stream.url || bestQualityUrl(quality);');
+  });
+});
+
+// ── v0.13.26: full re-check (owner 2026-10-07: «не то видео», «поиск не везде», «похожие», «голосом») ──
+describe('v0.13.26: wrong-video sources, search translation, related sections, dead mirrors', function () {
+  const PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+  function balanced(startIdx) {
+    let depth = 0;
+    for (let k = PLUGIN.indexOf('{', startIdx); k < PLUGIN.length; k++) {
+      if (PLUGIN[k] === '{') depth++;
+      else if (PLUGIN[k] === '}' && --depth === 0) return k;
+    }
+    throw new Error('unbalanced from ' + startIdx);
+  }
+  function grabFn(name) { const i = PLUGIN.indexOf('function ' + name + '('); expect(i).toBeGreaterThan(-1); return PLUGIN.slice(i, balanced(i) + 1); }
+  function grabVar(name) { const i = PLUGIN.indexOf('var ' + name + ' ='); return PLUGIN.slice(i, balanced(i) + 1) + ';'; }
+  function grabLine(prefix) { const i = PLUGIN.indexOf(prefix); expect(i).toBeGreaterThan(-1); return PLUGIN.slice(i, PLUGIN.indexOf('\n', i)); }
+  function block(startMarker, endMarker) {
+    const a = PLUGIN.indexOf(startMarker); expect(a).toBeGreaterThan(-1);
+    const b = PLUGIN.indexOf(endMarker, a); expect(b).toBeGreaterThan(a);
+    return PLUGIN.slice(a, b);
+  }
+  function method(objStart, name) {   // "name: function (...) {...}" inside an adapter object literal
+    const a = PLUGIN.indexOf(name + ': function', PLUGIN.indexOf(objStart));
+    expect(a).toBeGreaterThan(-1);
+    return PLUGIN.slice(PLUGIN.indexOf('function', a), balanced(a) + 1);
+  }
+  const helpers = grabVar('_HTML_ENTITIES') + '\n' + ['parseDur', 'parseViews', '_attr', '_decodeHtml', '_titleFromUrl', '_jsonArrayAt'].map(grabFn).join('\n');
+
+  // «не то видео» #1 — pornhub related: the 2026-10 page ships relatedVideosData (array rows);
+  // before, the whole-page href scan produced ONE card titled «Pornhub» that opened a random video.
+  it('pornhub _parseRelated: reads relatedVideosData rows, prefers hdnea thumbs, drops seed + «Pornhub» junk', function () {
+    const parseRelated = method("id: 'pornhub',", '_parseRelated');
+    const parseHtml = method("id: 'pornhub',", '_parseHtmlCards');
+    const self = new Function(helpers + '\nvar o = { _mapVideo: function (v) { return v; } };\no._parseRelated = ' + parseRelated + ';\no._parseHtmlCards = ' + parseHtml + ';\nreturn o;')();
+    const html = 'x\n var relatedVideosData = [["https:\\/\\/pix-cdn77.phncdn.com\\/a.jpg?hash=1","Title One","5:00",96,"https:\\/\\/www.pornhub.com\\/view_video.php?viewkey=aaa111",13842,"https:\\/\\/ew.phncdn.com\\/x.mp4","Ch","u","b",{"highResThumb":"https:\\/\\/pix-fl.phncdn.com\\/h.jpg?hdnea=st=1"}],'
+      + '["https:\\/\\/pix\\/b.jpg","Has ]; inside","12:30",80,"https:\\/\\/www.pornhub.com\\/view_video.php?viewkey=seed99",5,"","","","",{}],'
+      + '["https:\\/\\/pix\\/c.jpg","Third","1:02:03",80,"https:\\/\\/www.pornhub.com\\/view_video.php?viewkey=ccc333","1.2K","","","","",{}]];\n var x = 1;';
+    const items = self._parseRelated(html, 'seed99');
+    expect(items.map(function (v) { return v.id; })).toEqual(['aaa111', 'ccc333']);
+    expect(items[0]).toMatchObject({ title: 'Title One', source: 'pornhub', duration: 300, url: 'https://www.pornhub.com/view_video.php?viewkey=aaa111' });
+    expect(items[0].thumb).toContain('hdnea=');
+    expect(items[1].duration).toBe(3723);
+    // no data block, only the site logo link → nothing (was: one «Pornhub» card)
+    expect(self._parseRelated('<a href="/view_video.php?viewkey=zzz9" title="Pornhub">logo</a>', 'seed99')).toEqual([]);
+  });
+  it('pornhub getRelated falls back to the VPS page when the native page yields < 4 cards', function () {
+    const gr = method("id: 'pornhub',", 'getRelated');
+    expect(gr).toContain('if (items.length >= 4) return items;');
+    expect(gr).toContain("cherryFetch(buildProxyUrl(video.url, 'https://www.pornhub.com/'))");
+  });
+
+  // «не то видео» #2 — lenporno: the card window reached 800 chars BACK → every related card had its
+  // neighbour's title/poster but opened the next video.
+  it('lenporno cards read FORWARD from their own link (title/thumb/duration belong to the same card)', function () {
+    const fn = new Function(helpers + '\n' + grabFn('_lenpornoCards') + '\nreturn _lenpornoCards;')();
+    const card = function (slug, id, title, dur) {
+      return '<div id="preview"><div class="innercont"><div class="preview_screen" id="' + id + '"><a href="https://www.lenporno.net/video/' + slug + '">'
+        + '<img src="https://www.lenporno.net/uploads/' + id + '/thumb1.1.jpg" alt="' + title + '" class="image"><div class="duration">' + dur + '</div><div class="views">10</div></a></div>'
+        + '<div class="preview_title"><a class="preview_link" href="https://www.lenporno.net/video/' + slug + '">' + title + '</a></div></div></div>';
+    };
+    const html = '<div class="title relattitle">Похожее видео</div>' + card('first-video', 11, 'Первое видео', '10:00') + card('second-video', 22, 'Второе видео', '20:00');
+    const items = fn(html);
+    expect(items.map(function (v) { return [v.id, v.title, v.duration]; })).toEqual([['first-video', 'Первое видео', 600], ['second-video', 'Второе видео', 1200]]);
+    expect(items[1].thumb).toBe('https://www.lenporno.net/uploads/22/thumb1.1.jpg');
+  });
+
+  // «не то видео» #3 — porno666: no player on the video page → the generic scan took a sidebar card's
+  // hover clip (…/{otherId}_preview2.mp4).
+  it('extractStreams never returns a KVS hover clip (data-preview …_preview.mp4) as the video', function () {
+    const a = PLUGIN.indexOf('function extractStreams(');   // its body holds quoted braces → slice to the next top-level function
+    const fn = new Function(grabLine('var _CLIP_URL_RX') + '\n' + PLUGIN.slice(a, PLUGIN.indexOf('\nfunction ', a + 10)) + '\nreturn extractStreams;')();
+    const sidebarOnly = '<img data-preview="https://porno666.link/get_file/1/abc/5000/5108/5108_preview2.mp4/">';
+    expect(fn(sidebarOnly).url || '').toBe('');
+    const withMain = sidebarOnly + '<script>var u = "https://x.test/get_file/1/def/6000/6293/6293_720p.mp4/?v=1";</script>';
+    expect(fn(withMain).url).toContain('6293_720p.mp4');
+    // the last-resort «any .mp4» scan skips clips too
+    expect(fn('<video poster="x"><a href="https://cdn.test/clips/9_trailer.mp4"></a> "https://cdn.test/v/77.mp4"').url).toBe('https://cdn.test/v/77.mp4');
+  });
+  it('porno666 resolves the stream from the same-domain /embed/{id} page (the video page has no player)', function () {
+    const p6 = block("id: 'porno666'", '// ---- 9d. Lenkino');
+    expect(p6).toContain("var embed = id ? 'https://porno666.link/embed/' + id : video.url;");
+    expect(p6).toContain('return cherryFetch(embed).then(_kvsFlashvarsQuality)');
+  });
+
+  // search: voice input on a RU TV is always Cyrillic
+  const sctx = [grabVar('_SEARCH_SYN'), grabVar('_RU_EN'), grabFn('_normText'), grabFn('_translateQuery'), grabVar('_SEARCH_STOP'),
+    grabLine('var _RU_STEM_RX'), 'var _RU_EN_BY_STEM = null;', grabFn('_ruStem'), grabFn('_ruLookup'), grabFn('_searchGroups')].join('\n');
+  const S = new Function(sctx + '\nreturn { _translateQuery: _translateQuery, _searchGroups: _searchGroups, _ruStem: _ruStem };')();
+  it('translation understands inflected Russian (what a recognizer returns) and two-word phrases', function () {
+    expect(S._translateQuery('блондинки')).toBe('blonde');
+    expect(S._translateQuery('Блондинка.')).toBe('blonde');
+    expect(S._translateQuery('азиатку')).toBe('asian');
+    expect(S._translateQuery('зрелых')).toBe('mature');
+    expect(S._translateQuery('большими сиськами')).toBe('big tits');
+    expect(S._translateQuery('минетом')).toBe('blowjob');
+    expect(S._translateQuery('Мия Халифа')).toBe('');              // a name: nothing to translate
+  });
+  it('filler words of a phrase are not AND-groups («в», «секс», "with"), unless the query is only that', function () {
+    expect(S._searchGroups('блондинка в машине').map(function (g) { return g[0]; })).toEqual(['блондинка', 'машине']);  // «в» dropped
+    expect(S._searchGroups('sex with stepmom').length).toBe(1);
+    expect(S._searchGroups('на публике')[0]).toContain('public');   // dictionary phrase with a filler word survives
+    expect(S._searchGroups('секс')).toEqual([['секс']]);
+  });
+  it('a Russian word also matches titles by its stem (≥4 chars), so «блондинки» ranks «Блондинка …»', function () {
+    expect(S._searchGroups('блондинки')[0]).toEqual(expect.arrayContaining(['блондинки', 'блондинк', 'blonde']));
+    expect(S._ruStem('мама')).toBe('мам');
+    expect(S._ruStem('milf')).toBe('milf');
+  });
+  it('per-channel search translates for English-title channels (same routing as all-sources search)', function () {
+    expect(PLUGIN).toContain('var _chQ = (!_RU_SOURCES[src.id] && _translateQuery(object.query)) || object.query;');
+    expect(PLUGIN).toContain('promise = src.search(_chQ, page, currentSort);');
+  });
+
+  // related: the site's own section only
+  it('_relatedSection parses only the marked section and returns [] when it is missing', async function () {
+    const rs = new Function('cherryFetch', grabFn('_relatedSection') + '\nreturn _relatedSection;');
+    const page = '<ul class="new"><a href="/v/1">new</a></ul><div class="row same_video"><a href="/v/2">rel</a><a href="/v/3">rel</a></div><div class="row footer"><a href="/v/4">x</a></div>';
+    const parser = function (h) { return (h.match(/\/v\/\d/g) || []).map(function (u) { return { url: u }; }); };
+    const get = rs(function () { return Promise.resolve(page); })(parser, /class="row same_video"/, /class="row (?!same_video)[^"]*"|<footer/);
+    expect((await get({ url: '/v/9' })).map(function (v) { return v.url; })).toEqual(['/v/2', '/v/3']);
+    const none = rs(function () { return Promise.resolve('<a href="/v/1">x</a>'); })(parser, /same_video/, null);
+    expect(await none({ url: '/v/9' })).toEqual([]);
+  });
+  it('tizam / hqporner / ebun related come from their «Похожие» sections', function () {
+    expect(block("id: 'tizam'", 'getStream:')).toContain('/class="row same_video"/');
+    expect(block("id: 'hqporner'", 'getStream:')).toContain('/Similar HD porn/, /<h2 class="major"|<footer/');
+    expect(block("id: 'ebun'", 'getStream:')).toContain('/id="list_videos_related_videos"/');
+  });
+
+  // dead mirrors
+  it('huyamba lives on huyamba.tv; pornobolt (origin down) is hidden; the KVS engine forwards `disabled`', function () {
+    const hu = block("// ---- 9. Huyamba", '// KVS flashvars');
+    expect(hu).toContain("host: 'huyamba.tv',");
+    expect(hu).toContain('return cherryFetch(_huyUrl(video.url)).then(_kvsFlashvarsQuality)');
+    expect(block("// ---- 16. Pornobolt", 'categoryFmt')).toContain('disabled: true,');
+    expect(PLUGIN).toContain('disabled: !!cfg.disabled,');
+  });
+  it('xvideos/xnxx related: HTML-escaped titles decoded, "1 h 5 min" / "45 sec" durations parsed', function () {
+    const fn = new Function(grabVar('_HTML_ENTITIES') + '\n' + grabFn('_decodeHtml') + '\n' + grabFn('_xvideosRelated') + '\nreturn _xvideosRelated;')();
+    const html = 'var video_related=[{"u":"/v1","tf":"Mom &amp; son&#039;s day","d":"1 h 5 min","i":"t"},{"u":"/v2","t":"Short","d":"45 sec","i":"t"},{"u":"/v3","t":"Ten","d":"10 min","i":"t"}];';
+    const r = fn(html, 'https://www.xnxx.com', 'xnxx');
+    expect(r[0].title).toBe("Mom & son's day");
+    expect(r.map(function (v) { return v.duration; })).toEqual([3900, 45, 600]);
+  });
+  it('ebun keeps ONLY the bare full file in the map when present (its 360p is a smaller cut)', function () {
+    const eb = PLUGIN.slice(PLUGIN.indexOf("id: 'ebun'"), PLUGIN.indexOf('function _ebunCards'));
+    const fnSrc = eb.slice(eb.indexOf('function ebunMap('), eb.indexOf('return cherryFetch(video.url)'));
+    const ebunMap = new Function(fnSrc + '\nreturn ebunMap;')();
+    expect(ebunMap({ mp4: 'FULL', '360p': 'CUT' })).toEqual({ mp4: 'FULL' });
+    expect(ebunMap({ '360p': 'a', '720p': 'b' })).toEqual({ '360p': 'a', '720p': 'b' });
+    expect(eb).not.toContain('ebunBest');
+  });
+  it('perfektdamen: one HLS master with a #.m3u8 hint (inner hls.js), stream proxied on Android (no CORS on the CDN)', function () {
+    const pd = PLUGIN.slice(PLUGIN.indexOf("id: 'perfektdamen'"), PLUGIN.indexOf('function _perfektCards'));
+    expect(pd).toContain("return master ? { url: master + '#.m3u8', quality: {} } : r;");
+    expect(pd).toContain('androidProxyStream: true,');
+    expect(/\.m3u8|mpegurl/i.test('https://x/get_file/1/a/794302_720p.mp4/#.m3u8')).toBe(true);   // playVideo's HLS switch
   });
 });

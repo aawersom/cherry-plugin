@@ -268,6 +268,16 @@ and 6 `Lampa.Template.add` registrations (`cherry_main`, `cherry_source_card`,
 **all_sources mechanics** (`_gridLoad`): runs `src.search(_q, page)` over every adapter in
 parallel (`Promise.all`, per-source failures swallowed), then filters + ranks + dedups.
 
+> **Voice / per-channel search (v0.13.26)** — a voice query on a RU TV is always Cyrillic and often
+> inflected («блондинки», «азиатку», «большими сиськами»). Two gaps made it fail: per-channel search
+> sent the raw query (eporner/youjizz/porntrex/familyporn/porndig/analdin/xozilla/perfektdamen → 0
+> cards), and `_translateQuery` only knew exact dictionary keys. Now: per-channel search uses the same
+> RU→EN routing (`_chQ`); `_ruLookup` falls back from the exact key to the stem (`_ruStem` strips one
+> case/number ending, also for two-word phrases); groups carry the Russian stem so RU titles rank;
+> filler words (`_SEARCH_STOP`: в/на/с/секс/порно/with/sex…) are not AND-groups when the phrase has a
+> meaningful word; ~80 everyday words added. End-to-end voice test (only the recognizer stubbed):
+> `test/tv-voice-e2e.page.js` — home tile «Блондинки в машине» → 200 cards; eporner «Блондинки» → 30 (was 0).
+
 > **RU→EN search (v0.13.10)** — the user searches mostly in Russian but ~18/24 sites have
 > ENGLISH titles, so a Cyrillic query sent verbatim returned garbage there. Now:
 > - `_translateQuery(q)` maps a Cyrillic query to English via `_RU_EN` (greedy phrase-first, e.g.
@@ -420,6 +430,46 @@ The card long-press menu (`cardRender.onMenu`, `plugin.js:834`) offers two relat
    (`all_sources:true`), always offered. Already paginates (the all_sources fan-out).
 
 ---
+
+### Related correctness pass (v0.13.26, stand 2026-10-07)
+- **pornhub** — the 2026-10 page ships `var relatedVideosData = [[thumb,title,"m:ss",rating,url,views,clip,…]]`;
+  the old parser fell to a whole-page href scan → ONE card titled «Pornhub» that opened a random video.
+  `_parseRelated` reads the rows (via `_jsonArrayAt`, string-aware), keeps the JSON/HTML fallbacks, drops
+  the seed and site-chrome titles, and retries on the VPS page when the native page gives < 4 cards → 20 cards.
+- **lenporno** — the card window reached 800 chars BACK, so every related card showed its neighbour's
+  title/poster and opened the next video. Forward window to the next card link → title/page match 100%.
+- **tizam / hqporner / ebun** — `_relatedSection(parser, markerRx, endRx)` parses only the site's «Похожие»
+  section (tizam `row same_video`: feed overlap 65% → 18%; hqporner «Similar HD porn»: 0 → 30; ebun
+  `list_videos_related_videos`: 0 → 9). No section → `[]` → the grid's title-keyword continuation.
+- Audit harness: `node test/tv-full-audit.mjs [ids]` — per channel: card title vs its own page title
+  (feed/search/related), search native + Cyrillic raw + translated, related count/self/dupes/feed overlap,
+  stream id. `tv-card-source.page.js` (card.source = adapter), `tv-card-align.page.js` (poster/clip ids),
+  `tv-stream-owner.page.js` (stream carries the card id), `tv-stream-length.page.js` (MP4 mvhd duration = card).
+
+### xhamster stream (v0.13.26)
+The HLS master moved off `video-nss.xhcdn.com` (video7 / video-nss-a / video-b) and the host-pinned regex
+returned no url on 3 of 4 pages. Order now: the page's direct H.264 MP4 map (`"mp4":{"480p":…}`, ≥360p) →
+the preload master on any `*.xhcdn.com` host, preferring its `.h264.mp4.m3u8` twin (path-token hosts serve
+it; `key=` hosts answer 403 → AV1 master). The masters are AV1 — black screen on TVs without AV1 decode.
+
+### Quality the user actually gets (v0.13.26)
+Lampa's `Player.play` with a quality map: the entry whose label equals `video_quality_default`
+(setting, **default 1080**) wins; otherwise it keeps the url handed in (`getUrlQuality(map, false)`).
+So the url playVideo hands matters whenever the map has no 1080p. v0.13.25 handed `stream.url` first —
+adapters whose url was merely the FIRST file parsed played 240p/360p (youjizz, jopaonline,
+perfektdamen). Rule now: **the map is the contract** — `bestQualityUrl(map) || stream.url`; an adapter
+that must avoid a file drops it from the map (pornve AV1 1080p, youjizz >720p, pornhub unplayable
+playlists, ebun keeps only its bare full file). Harness: `test/tv-quality-pick.page.js` (flags LOW).
+perfektdamen: every get_file answers the same HLS master from a «….mp4/» URL → one master with a
+`#.m3u8` fragment (never sent; makes playVideo pick the inner player and Lampa start hls.js) and
+`androidProxyStream` (the CDN has no CORS → hls.js manifestLoadError). Stand: PLAYS 2/2.
+
+### «Не то видео» — the shared fallback (v0.13.26)
+`extractStreams` collected every `get_file …mp4` on a page and, as a last resort, the first `.mp4` anywhere.
+On a page without a player both are the hover clips of OTHER cards (`data-preview="…/{otherId}_preview2.mp4"`).
+porno666 lost its player markup in 2026-10 → it played a 30-s clip of another video. `_CLIP_URL_RX`
+(preview|trailer|teaser|thumb) now excludes clips in both places; porno666 reads the same-domain
+`/embed/{id}` page (full flashvars). Stand: stream file duration = card duration on every readable channel.
 
 ## Model browsing
 
@@ -697,9 +747,9 @@ Only safe for plain pass-through proxies that do NOT rewrite M3U8.
 | 16 | `tizam` | Tizam | tv4.tizam.org | Deno | Direct MP4 | ✅ Working |
 | 17 | `perfektdamen` | PerfektDamen | perfektdamen.co | Deno | KVS CDN, IP-bound | ✅ Working |
 | 18 | `hellporno` | HellPorno | hellporno.com | CF datacenter | KVS `_kvsEngine` | ✅ Working |
-| 19 | `pornobolt` | Pornobolt | sex.pornobolt.in | CF datacenter | KVS pbcdn.tv CDN | ✅ Working |
+| 19 | `pornobolt` | Pornobolt | sex.pornobolt.in | — | — | ⛔ Hidden 2026-10-07 (v0.13.26): origin times out from every egress, no mirror among 20 domains; `disabled: true` keeps favorites/history resolvable |
 | 20 | `crocotube` | CrocoTube | crocotube.com | CF datacenter | KVS alphaxcdn.com CDN | ✅ Working |
-| 21 | `huyamba` | Huyamba | play.huyamba.mobi | VPS (page force-proxied on Android; mobile UA is 302'd to a dead mirror) | KVS `_kvsEngine` — flashvars 480/720/1080 (`_kvsFlashvarsQuality`), token not IP-bound | ✅ Revived 2026-09-04 (v0.13.20) |
+| 21 | `huyamba` | Huyamba | huyamba.tv | native (opens from the device) | KVS `_kvsEngine` — flashvars 480/720/1080 (`_kvsFlashvarsQuality`), token not IP-bound | ✅ Moved to huyamba.tv 2026-10-07 (v0.13.26; play.huyamba.mobi → 404). `_huyUrl` + engine `pageUrl` keep old favorites playable |
 | 21b | `ebalovo` | Ebalovo | www.ebalovo.porn (301 → current mirror, wec.epalovo.com today; cards normalised back to the brand domain) | CF; on Android page **and stream** via the proxy (`_ANDROID_FORCE_PROXY` + adapter `androidProxyStream`) | KVS-like cards via `_kvsParseCards` (duration from `data-eb`), path sorts (/xxx-top/, /porno-online/, / = newest; in categories `-rating` suffix), search /search/{q}/{p}/, models /female-models/; stream flashvars 480/720 (`_kvsFlashvarsQuality`) — token not IP-bound but **UA-bound** (desktop UA only; mobile mirror tokens 404) | ✅ Added 2026-09-04 (v0.13.22) |
 | 21c | `porno666` | Porno666 | porno666.link (mirrors wwwp.porno666.news / x.porno666.fo normalised to the brand host) | CF; on Android page + get_file force-proxied (`porno666.link`) | `_kvsEngine`, path-root feed sorts + `catSortQuery` (?sort_by= inside categories), 42 RU categories, search /search/{q}/{p}/, models /models/; flashvars 360/480/720/1080 labelled by *_text; get_file token IP-bound + CDN 403s foreign Referer (ebun's farm) | ✅ Added 2026-09-04 (v0.13.23) |
 | 21d | `lenkino` | Lenkino | www.lenkino.adult (301 → mirror wes.lenkino.adult; cards normalised to the brand domain) | CF; on Android page force-proxied + stream via `androidProxyStream` (UA-bound tokens, mobile mirror mob.lenkino.love mints dead tokens, foreign Referer → decoy ad clip) | `_kvsParseCards` cfg (`/{id}` links, itm-dur), feeds / and /top-porno (page/{p}), 42 RU categories /{slug}, search /search/{q}/page/{p}, pornstars /pornstars → /pornstar/{slug}; flashvars 480/720 | ✅ Added 2026-09-04 (v0.13.23) |

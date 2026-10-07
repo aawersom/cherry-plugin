@@ -546,7 +546,10 @@ describe('plugin.js source assertions (anti-drift)', () => {
   it('C9: related_video branch = getRelated(page 1) + title-search continuation (relevant + infinite)', () => {
     var at = SRC.indexOf('if (object.related_video)');
     expect(at).toBeGreaterThan(-1);
-    var body = SRC.slice(at, at + 2200);
+    var body = SRC.slice(at, at + 3200);
+    // v0.13.26: the seed never comes back (same url OR same title = re-upload), one card per title
+    expect(body).toContain("_relSeen[_normText(relVideo.title || '')] = 1;");
+    expect(body).toContain('rel = (rel || []).filter(_relFresh);');
     // Page 1 = the site's related block.
     expect(body).toMatch(/relSrc\.getRelated\(relVideo,\s*1\)/);
     // Page 2+ continuation = a TITLE-KEYWORD search on the same source (topically similar,
@@ -570,7 +573,7 @@ describe('plugin.js source assertions (anti-drift)', () => {
     expect(SRC).toMatch(/cherry_similar_titles[\s\S]{0,40}action:\s*'similar'/);
   });
   it('generalized getRelated: _kvsEngine reuses _kvsParseCards on the video page', () => {
-    expect(SRC).toMatch(/getRelated:\s*function[\s\S]{0,200}_kvsParseCards\(html,\s*cfg\)/);
+    expect(SRC).toMatch(/getRelated:\s*function[\s\S]{0,400}_kvsParseCards\(html,\s*cfg\)/);
   });
   it('generalized getRelated: a custom adapter wires its parser via _relatedFrom', () => {
     expect(SRC).toMatch(/getRelated:\s*_relatedFrom\(_porntrexCards\)/);
@@ -1889,7 +1892,9 @@ describe('all_sources pagination wiring', () => {
 describe('per-channel search pagination audit', () => {
   it('paginating searches pass the page param into the URL', () => {
     // representative paginating per-source searches: each must thread page/p into URL
-    expect(SRC).toMatch(/src\.search\(object\.query,\s*page,\s*currentSort\)/); // per-source grid load
+    expect(SRC).toMatch(/src\.search\(_chQ,\s*page,\s*currentSort\)/);          // per-source grid load
+    // …with the RU→EN routing of the all-sources search (voice input is Cyrillic, v0.13.26)
+    expect(SRC).toMatch(/var _chQ = \(!_RU_SOURCES\[src\.id\] && _translateQuery\(object\.query\)\) \|\| object\.query;/);
     expect(SRC).toMatch(/cfg\.searchUrl\(query,\s*page\)/);                     // KVS engine search
   });
 

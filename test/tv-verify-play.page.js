@@ -15,7 +15,8 @@
   var OrigHls = window.Hls;
   if (OrigHls && !OrigHls.__w) { var W = function (c) { var h = new OrigHls(c); try { h.on(OrigHls.Events.ERROR, function (e, d) { if (d.fatal) hlsErr.push(d.type + '/' + d.details + (d.response ? ' http' + d.response.code : '')); }); } catch (x) {} return h; }; for (var k in OrigHls) if (OrigHls.hasOwnProperty(k)) W[k] = OrigHls[k]; W.prototype = OrigHls.prototype; W.__w = 1; W.__o = OrigHls; window.Hls = W; }
   var handedUrl0 = null;
-  Lampa.Player.play = function (o) { handed = o; handedUrl0 = o && o.url; return origPlay.apply(this, arguments); };
+  var playerAtCall = null;
+  Lampa.Player.play = function (o) { handed = o; handedUrl0 = o && o.url; playerAtCall = Lampa.Storage.get('player', 'inner'); return origPlay.apply(this, arguments); };
   function nat(u, ref) { return new Promise(function (res) { var r = new Lampa.Reguest(); r.native(u, function (d) { r.clear(); res({ ok: true, head: String(d).slice(0, 30) }); }, function (e) { r.clear(); res({ ok: false, e: String(e && e.status || e) }); }, false, { dataType: 'text', timeout: 12000, headers: ref ? { 'Range': 'bytes=0-2000', 'Referer': ref } : { 'Range': 'bytes=0-2000' } }); }); }
   function finish() { Lampa.Player.play = origPlay; try { Lampa.Player.close && Lampa.Player.close(); } catch (e) {} if (window.Hls && window.Hls.__o) window.Hls = window.Hls.__o; }
   return s.browse('', 1, sort0).then(function (b) {
@@ -27,7 +28,8 @@
       out.handed = handed ? String(handed.url || '').slice(0, 90) : null;
       out.handedAtCall = handedUrl0 ? String(handedUrl0).slice(0, 90) : null; out.lampaQualityPref = Lampa.Storage.get('video_quality_default', '');
       out.via = !handed ? '' : (/sslip\.io/.test(handed.url) ? 'VPS' : (/workers\.dev/.test(handed.url) ? 'CF' : 'raw'));
-      out.kind = handed && /m3u8|mpegurl/i.test(handed.url) ? 'hls' : 'mp4';
+      // HLS = m3u8 url OR playVideo switched the player to inner for this call (adapter `hls` flag)
+      out.kind = handed && (/m3u8|mpegurl/i.test(handed.url) || (playerAtCall === 'inner' && out.player !== 'inner')) ? 'hls' : 'mp4';
       if (out.kind === 'hls') {
         var els = Array.prototype.slice.call(document.querySelectorAll('video')).filter(function (x) { return !/apple\.com|sylvan/.test(x.currentSrc || x.src || ''); });
         var el = els[els.length - 1];

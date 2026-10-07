@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Reset the Google-TV stand (every step time-capped so a wedged adb/webview can't hang the run):
 # relaunch Lampa, dismiss the native "Update available" dialog, re-forward CDP, wait for Lampa.
-ADB="/d/Android/Sdk/platform-tools/adb.exe"; READY="${READY_MJS:-$TEMP/ready.mjs}"
+ADB="/d/Android/Sdk/platform-tools/adb.exe"; READY="${READY_MJS:-$(dirname "$0")/tv-ready.mjs}"
 step(){ echo "[$(date +%T)] $1"; }
 for i in 1 2 3 4 5 6; do S=$(timeout 10 "$ADB" devices 2>/dev/null | grep emulator | awk '{print $2}'); [ "$S" = "device" ] && break; step "device state: ${S:-none}, waiting"; sleep 3; done
 [ "$S" = "device" ] || { echo "NO DEVICE"; exit 1; }
@@ -12,5 +12,5 @@ SOCK=$(timeout 10 "$ADB" shell cat /proc/net/unix 2>/dev/null | grep -o 'webview
 [ -z "$SOCK" ] && { echo "no webview socket"; exit 1; }
 timeout 10 "$ADB" forward --remove-all >/dev/null 2>&1; timeout 10 "$ADB" forward tcp:9229 localabstract:$SOCK >/dev/null
 step "forward → $SOCK"
-for i in $(seq 1 20); do sleep 3; R=$(timeout 12 node "$READY" 2>/dev/null); echo "  try $i: $R"; [ "$R" = "object|1" ] && { echo "LAMPA READY"; exit 0; }; done
+for i in $(seq 1 20); do sleep 3; R=$(timeout 12 node "$READY" 2>/dev/null); echo "  try $i: $R"; case "$i" in 4|8|12) [ "$R" = "undefined|0" ] && { step "still no Lampa - update dialog back? BACK again"; timeout 10 "$ADB" shell input keyevent KEYCODE_BACK; } ;; esac; [ "$R" = "object|1" ] && { echo "LAMPA READY"; exit 0; }; done
 echo "Lampa did not become ready"; exit 1
