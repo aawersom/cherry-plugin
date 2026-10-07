@@ -522,7 +522,8 @@ describe('plugin.js source assertions (anti-drift)', () => {
   it('UX-E: empty favorites surfaces a PERSISTENT hint via empty(), not a toast', () => {
     // P3.2: empty favorites now calls this.empty(cherry_fav_empty_hint) so the
     // hint stays on screen, instead of the old transient Lampa.Noty toast.
-    expect(SRC).toMatch(/is_favorites[\s\S]{0,120}\.empty\(\s*Lampa\.Lang\.translate\(\s*'cherry_fav_empty_hint'/);
+    // v0.13.27: the grid's empty state comes from _emptyState(reason) (Maker Empty module).
+    expect(SRC).toContain("(object.is_favorites ? 'cherry_fav_empty_hint' : (object.query ? 'cherry_search_empty' : 'cherry_empty'))");
   });
   it('UX-E: cherry_fav_empty_hint lang key registered', () => {
     expect(SRC).toMatch(/cherry_fav_empty_hint\s*:/);
@@ -950,11 +951,12 @@ describe('P0: plugin.js source assertions (anti-drift)', () => {
     );
   });
 
-  it('right edge opens the menu via InteractionCategory onRight', () => {
-    // The base class drives focus/nav; the plugin only overrides onRight, which
-    // opens the action menu at the grid's right edge. No geometric edge probe,
-    // no hand-rolled directional handler.
-    expect(SRC).toMatch(/comp\.onRight\s*=\s*function[\s\S]{0,80}openActionsMenu\(\)/);
+  it('right edge opens the menu via the screen hook (Lampa raises «right» at the edge)', () => {
+    // The framework drives focus/nav; the grid only declares right: openActionsMenu, which
+    // the adapter wires to Maker's onRight (legacy: comp.onRight). No geometric edge probe.
+    expect(SRC).toMatch(/right: openActionsMenu,/);
+    expect(SRC).toContain('onRight: function () { if (hooks.right) hooks.right(); },');
+    expect(SRC).toContain('comp.onRight = function () { if (hooks.right) hooks.right(); };');
     expect(SRC).not.toMatch(/function _atRightEdge\(/);
   });
 
@@ -1190,8 +1192,12 @@ describe('P1: plugin.js source assertions (anti-drift)', () => {
     expect(SRC).toMatch(/comp\.create\s*=\s*function[\s\S]{0,1900}\.build\(\s*\{/);
   });
 
-  it('nextPageReuest is overridden for framework-driven paging', () => {
-    expect(SRC).toMatch(/comp\.nextPageReuest\s*=\s*function\s*\(\s*object\s*,\s*resolve\s*,\s*reject\s*\)/);
+  it('paging is framework-driven: Maker onNext(resolve, reject) → hooks.load(this.object.page)', () => {
+    expect(SRC).toContain('onNext: function (resolve, reject) {');
+    expect(SRC).toContain('var self = this, page = this.object.page;');
+    // Next does not refresh total_pages from later pages → the adapter stops it at the end
+    expect(SRC).toContain('if (!items || !items.length || !(total > page)) self.total_pages = page;');
+    expect(SRC).toMatch(/comp\.nextPageReuest\s*=\s*function\s*\(\s*o\s*,\s*resolve\s*,\s*reject\s*\)/);   // legacy path
   });
 
   it('nextPageReuest resolves with {title, results, total_pages}', () => {
@@ -1202,12 +1208,13 @@ describe('P1: plugin.js source assertions (anti-drift)', () => {
     // Favorites + history (local lists) short-circuit. related_video AND
     // all_sources+query both fall through to _gridLoad so «Похожие» / global
     // search / similar-titles paginate.
-    expect(SRC).toMatch(/if\s*\(object\.is_favorites\s*\|\|\s*object\.is_history\)\s*\{[\s\S]{0,160}resolve\(\{\s*title:[\s\S]{0,80}total_pages:\s*1/);
+    expect(SRC).toContain('if (page > 1 && (object.is_favorites || object.is_history)) { ok([], page); return; }');
     expect(SRC).not.toMatch(/object\.is_favorites\s*\|\|\s*object\._related_items/);
   });
 
-  it('next page advances currentPage + 1', () => {
-    expect(SRC).toMatch(/var\s+nextPage\s*=\s*currentPage\s*\+\s*1/);
+  it('next page advances by one (Maker: object.page++ in Next; legacy: page + 1)', () => {
+    expect(SRC).toContain('var next = page + 1;');
+    expect(SRC).not.toMatch(/var\s+currentPage\s*=/);
   });
 
   it('hand-rolled infinite-scroll internals are gone (no sentinel/observer/maybeLoadMore)', () => {
@@ -1217,16 +1224,17 @@ describe('P1: plugin.js source assertions (anti-drift)', () => {
     expect(SRC).not.toMatch(/function\s+renderCards\s*\(/);
   });
 
-  it('cardRender wires onEnter/onMenu/onFocus per card', () => {
-    expect(SRC).toMatch(/comp\.cardRender\s*=\s*function\s*\(\s*object\s*,\s*element\s*,\s*card\s*\)/);
-    expect(SRC).toMatch(/card\.onEnter\s*=\s*function/);
-    expect(SRC).toMatch(/card\.onMenu\s*=\s*function/);
-    expect(SRC).toMatch(/card\.onFocus\s*=\s*function/);
+  it('the card hook wires enter / long press / focus through ui (Maker card.use or legacy card.*)', () => {
+    expect(SRC).toContain('function _card(ui, element) {');
+    expect(SRC).toContain('ui.onEnter(function () {');
+    expect(SRC).toContain('ui.onLong(function () {');
+    expect(SRC).toContain('ui.onFocus(function (target) {');
+    expect(SRC).toContain("onEnter: function (fn) { card.use({ onEnter: function () { fn(); } }); },");
+    expect(SRC).toContain("onLong:  function (fn) { card.use({ onLong: function () { fn(); } }); },");
   });
 
-  it('cardRender.onFocus wraps the base hook (preserves base scroll-into-view)', () => {
-    expect(SRC).toMatch(/var\s+f\s*=\s*card\.onFocus/);
-    expect(SRC).toMatch(/if\s*\(f\)\s*f\(target,\s*card_data\)/);
+  it('legacy onFocus wraps the base hook (preserves base scroll-into-view)', () => {
+    expect(SRC).toContain('var f = card.onFocus; card.onFocus = function (t, d) { if (f) f(t, d); fn(t); };');
   });
 
   it('onFocus starts a hover-preview for ANY card with element.preview (source-agnostic)', () => {
@@ -1396,18 +1404,19 @@ describe('UX-A: plugin.js source assertions (anti-drift)', () => {
     return SRC.slice(start, end > -1 ? end : start + 4500);
   })();
 
-  it('CherryMain is built on Lampa.InteractionCategory', () => {
-    expect(MAIN).toMatch(/new\s+Lampa\.InteractionCategory\(/);
+  it('CherryMain is built through the screen adapter (Maker, legacy fallback)', () => {
+    expect(MAIN).toContain('return _cherryScreen(object, {');
+    expect(MAIN).toContain("cols: 8, rootClass: 'cherry-cat cherry-home',");
   });
 
-  it('CherryMain.create emits the picker via this.build({results})', () => {
-    expect(MAIN).toMatch(/comp\.create\s*=\s*function/);
-    expect(MAIN).toMatch(/this\.build\(\s*\{[\s\S]{0,80}results:/);
+  it('CherryMain emits the picker as page 1 of its loader', () => {
+    expect(MAIN).toContain('function _load(page, ok) {');
+    expect(MAIN).toContain('ok(results, 1);');
   });
 
-  it('create toggles activity.loader around the build', () => {
-    expect(MAIN).toMatch(/this\.activity\.loader\(true\)/);
-    expect(MAIN).toMatch(/this\.activity\.loader\(false\)/);
+  it('the adapter toggles activity.loader around page 1 (legacy; Maker Base does it itself)', () => {
+    expect(SRC).toMatch(/comp\.create = function \(\) \{[\s\S]{0,200}this\.activity\.loader\(true\)/);
+    expect(SRC).toContain('self.activity.loader(false);');
   });
 
   it('picker emits search + favorites + per-source entries with _kind', () => {
@@ -1421,9 +1430,9 @@ describe('UX-A: plugin.js source assertions (anti-drift)', () => {
     expect(MAIN).not.toMatch(/SOURCES\.forEach\(/);
   });
 
-  it('cardRender.onEnter routes by element._kind', () => {
-    expect(MAIN).toMatch(/comp\.cardRender\s*=\s*function/);
-    expect(MAIN).toMatch(/card\.onEnter\s*=\s*function/);
+  it('the card hook routes Enter by element._kind', () => {
+    expect(MAIN).toContain('function _card(ui, element) {');
+    expect(MAIN).toContain('ui.onEnter(function () {');
     expect(MAIN).toMatch(/element\._kind\s*===\s*'search'/);
     expect(MAIN).toMatch(/element\._kind\s*===\s*'favorites'/);
     expect(MAIN).toMatch(/element\._kind\s*===\s*'source'/);
@@ -1816,7 +1825,7 @@ describe('Phase 3 A3(b): all_sources per-source title-match filter before slice'
 
   it('Cyrillic queries are RU→EN routed + build bilingual groups (no longer skipped)', () => {
     var at = SRC.indexOf('All-sources search');
-    var body = SRC.slice(at, at + 5000);
+    var body = SRC.slice(at, SRC.indexOf('// Paged modes need a source adapter.', at));
     // groups are built for ANY query now (bilingual RU→EN), not gated on isLatin
     expect(body).toMatch(/groups\s*=\s*object\.query\s*\?\s*_searchGroups\(object\.query\)/);
     expect(body).not.toMatch(/isLatin/);
@@ -1855,8 +1864,8 @@ describe('all_sources pagination wiring', () => {
   function allSourcesBody() {
     var at = SRC.indexOf('All-sources search');
     expect(at).toBeGreaterThan(-1);
-    // Window widened: the branch grew with the per-source timeout race wrapper + rank + dedup.
-    return SRC.slice(at, at + 6500);
+    // Bounded by the next branch: the fan-out grew with the progressive first screen (v0.13.27).
+    return SRC.slice(at, SRC.indexOf('// Paged modes need a source adapter.', at));
   }
 
   it('queries every source for the requested page (not hardcoded 1); RU→EN-routed query', () => {
@@ -1874,7 +1883,8 @@ describe('all_sources pagination wiring', () => {
   it('derives total_pages: generous forward (page+50) when a full batch returned, else page (last)', () => {
     var body = allSourcesBody();
     // Generous forward window so InteractionCategory keeps paginating (page+1 stopped after one page).
-    expect(body).toMatch(/resolve\(flat\.map\(toCard\),\s*anyFull\s*\?\s*\(page\s*\+\s*50\)\s*:\s*page\)/);
+    // + sources still pending on a progressive first screen may bring a full batch later
+    expect(body).toContain('resolve(cards, (anyFull || pending > 0) ? (page + 50) : page);');
   });
 
   it('first-screen-fast: each source races search against a per-source timeout', () => {
@@ -1944,7 +1954,7 @@ describe('«Все видео» — unified all-channel latest feed (all_videos)
   });
   it('the fan-out branch also fires for all_videos and browses (no query) per source', () => {
     var at = SRC.indexOf('All-sources search');
-    var body = SRC.slice(at, at + 2000);
+    var body = SRC.slice(at, SRC.indexOf('// Paged modes need a source adapter.', at));
     expect(body).toMatch(/object\.all_sources\s*&&\s*object\.query\)\s*\|\|\s*object\.all_videos/);
     expect(body).toMatch(/_isSearch\s*\?\s*src\.search\(_q,\s*page\)/);
     expect(body).toMatch(/:\s*src\.browse\(''\s*,\s*page/);
@@ -2531,9 +2541,12 @@ describe('nav recursion guard — fully retired (anti-drift)', () => {
   it('neither cherry component hand-rolls Lampa.Controller.add', () => {
     expect(SRC).not.toMatch(/Lampa\.Controller\.add\(\s*['"]cherry_(main|grid)['"]/);
   });
-  it('both cherry components are built on Lampa.InteractionCategory', () => {
-    var n = (SRC.match(/new\s+Lampa\.InteractionCategory\(/g) || []).length;
-    expect(n).toBe(2); // CherryMain + CherryGrid
+  it('both cherry screens go through _cherryScreen: Lampa.Maker first, InteractionCategory only as fallback', () => {
+    expect((SRC.match(/_cherryScreen\(object, \{/g) || []).length).toBe(2);   // CherryMain + CherryGrid
+    expect((SRC.match(/new\s+Lampa\.InteractionCategory\(/g) || []).length).toBe(1);   // _legacyScreen only
+    expect(SRC).toContain("if (Lampa.Maker && typeof Lampa.Maker.make === 'function') return _makerScreen(object, hooks);");
+    expect(SRC).toContain("var comp = Lampa.Maker.make('Category', object);");
+    expect(SRC).toContain("var cardModule = Lampa.Maker.module('Card').only('Card', 'Callback', 'Release');");
   });
 });
 
@@ -2613,7 +2626,7 @@ describe('UI/UX v2: P2.3 home letter tiles', () => {
   });
   it('cardRender injects a .cherry-tile into .card__view', () => {
     expect(MAIN).toContain('cherry-tile');
-    expect(MAIN).toMatch(/card\.render\(\)\.find\(\s*'\.card__view'\s*\)/);
+    expect(MAIN).toMatch(/ui\.html\.find\(\s*'\.card__view'\s*\)/);
   });
   it('action tiles get the brand tint class', () => {
     expect(MAIN).toContain('cherry-tile--action');
@@ -2631,10 +2644,10 @@ describe('UI/UX v2: P3.1 active filter in grid title', () => {
     expect(SRC).toMatch(/_filteredTitle[\s\S]{0,300}_findLabel\(/);
     expect(SRC).toMatch(/title:\s*_filteredTitle\(sort, category\)/);
   });
-  it('build()/resolve() use screenTitle (which already equals the filtered activity title)', () => {
+  it('the screen title is the (filtered) activity title — no extra suffix in build()', () => {
     // No _titleWithFilters anymore — would double the suffix on top of the activity title.
     expect(SRC).not.toMatch(/_titleWithFilters/);
-    expect(SRC).toMatch(/\.build\(\{\s*title:\s*screenTitle/);
+    expect(SRC).toContain('self.build({ title: object.title, results: items, total_pages: total || 1 });');   // legacy
   });
 });
 
@@ -2643,19 +2656,20 @@ describe('UI/UX v2: P3.2 error != empty + persistent fav hint', () => {
     expect(SRC).toMatch(/cherry_load_error:\s*\{\s*ru:\s*'Не удалось загрузить\. Проверьте соединение\.'/);
     expect(SRC).toMatch(/cherry_load_error:[\s\S]{0,120}en:\s*'Failed to load\. Check your connection\.'/);
   });
-  it('load failure branch calls empty(cherry_load_error) with a focusable retry', () => {
-    // UX-batch-1: error now passes a retry callback (D-pad recovery) as a 2nd arg.
-    expect(SRC).toMatch(/\.empty\(\s*Lampa\.Lang\.translate\(\s*'cherry_load_error'\s*\)\s*,\s*function/);
-    expect(SRC).toMatch(/cherry_retry:\s*\{\s*ru:\s*'Повторить'/);
+  it('a load failure is its own empty state (cherry_load_error); recovery = Lampa Empty «Обновить»', () => {
+    expect(SRC).toContain("return { descr: Lampa.Lang.translate(reason === 'error' ? 'cherry_load_error'");
+    expect(SRC).toContain("self.params.empty = hooks.empty('error');");
+    expect(SRC).not.toMatch(/cherry_retry/);   // the custom retry button is gone (Lampa adds «Обновить»)
   });
-  it('empty favorites calls empty(cherry_fav_empty_hint), not a toast', () => {
-    expect(SRC).toMatch(/\.empty\(\s*Lampa\.Lang\.translate\(\s*'cherry_fav_empty_hint'\s*\)\s*\)/);
+  it('empty favorites shows cherry_fav_empty_hint as the empty state, not a toast', () => {
+    expect(SRC).toContain("object.is_favorites ? 'cherry_fav_empty_hint'");
     // the old transient toast for empty favorites must be gone
     expect(SRC).not.toMatch(/cherry_fav_empty_hint'\),\s*\{\s*time:\s*10000/);
   });
-  it('custom comp.empty(msg, onRetry) override honours a message arg via Lampa.Empty', () => {
-    expect(SRC).toMatch(/comp\.empty\s*=\s*function\s*\(\s*msg\s*,\s*onRetry\s*\)/);
+  it('legacy comp.empty(descr) honours a message via Lampa.Empty; Maker gets params.empty', () => {
+    expect(SRC).toMatch(/comp\.empty\s*=\s*function\s*\(\s*descr\s*\)/);
     expect(SRC).toMatch(/new\s+Lampa\.Empty\(\{\s*descr:/);
+    expect(SRC).toContain("self.params.empty = hooks.empty('empty'); self.empty();");
   });
 });
 

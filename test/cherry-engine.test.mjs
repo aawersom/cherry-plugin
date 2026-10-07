@@ -4102,7 +4102,7 @@ describe('global ranking: tag-search sources get a site-relevant baseline (v0.13
     expect(PLUGIN).toContain("var _TAG_SEARCH = { hqporner: 1, perfektdamen: 1, porndig: 1, eporner: 1, pornhub: 1, analdin: 1, xozilla: 1, xhamster: 1 };");
     expect(PLUGIN).toContain('if (_TAG_SEARCH[r._srcId]) picked.forEach(function (v) { v._siteRelevant = true; });');
     expect(PLUGIN).toContain('if (v._siteRelevant) s = Math.max(s, groups.length * 10);');
-    expect(PLUGIN).toContain('picked.slice(0, 10).forEach(function (v, k) { v._srcRank = k; });');
+    expect(PLUGIN).toContain('picked.forEach(function (v, k) { v._srcRank = k; });');
     expect(PLUGIN).toContain("((a.v._srcRank || 0) - (b.v._srcRank || 0)) || a.i - b.i");
   });
 });
@@ -4211,7 +4211,7 @@ describe('v0.13.20 channels: ebun route, huyamba revival (play.huyamba.mobi), 24
     expect(act.map(function (s) { return s.id; })).toEqual(['a', 'c']);
     expect(block("id: '24rolika',", 'search:')).toContain('disabled: true');
     expect((PLUGIN.match(/_activeSources\(\)/g) || []).length).toBeGreaterThanOrEqual(3);
-    expect(PLUGIN).toContain('var promises = _act.map(function (src) {');
+    expect(PLUGIN).toContain('_act.forEach(function (src) {');   // fan-out (progressive since v0.13.27)
   });
 });
 
@@ -4820,5 +4820,56 @@ describe('v0.13.26: wrong-video sources, search translation, related sections, d
     expect(pd).toContain("return master ? { url: master + '#.m3u8', quality: {} } : r;");
     expect(pd).toContain('androidProxyStream: true,');
     expect(/\.m3u8|mpegurl/i.test('https://x/get_file/1/a/794302_720p.mp4/#.m3u8')).toBe(true);   // playVideo's HLS switch
+  });
+  it('_fixMojibake repairs UTF-8 read as cp1252/latin-1 (eporner API) and leaves normal text alone', function () {
+    const fn = new Function(grabVar('_CP1252') + '\n' + grabFn('_fixMojibake') + '\nreturn _fixMojibake;')();
+    expect(fn('HeiÃŸe Erwachsene Privatshow')).toBe('Heiße Erwachsene Privatshow');   // cp1252 Ÿ
+    expect(fn('WeiÃ\u009Fen')).toBe('Weißen');                                            // raw latin-1 C1
+    expect(fn('Mujer Adulta Soltera Muy Sexy En Un Directo Privado Con Poca Luz LevantÃ¡ndose')).toContain('Levantándose');
+    expect(fn('Блондинка в машине')).toBe('Блондинка в машине');
+    expect(fn('Plain title & co')).toBe('Plain title & co');
+    expect(fn('Ã alone at end Ã')).toBe('Ã alone at end Ã');   // no continuation char → untouched
+  });
+});
+
+// ── v0.13.27: Lampa.Maker screens, progressive global search, Extensions name ──
+describe('v0.13.27: Maker screen adapter, progressive search, plugin name', function () {
+  const PLUGIN = readFileSync(join(__dirname, '..', 'plugin.js'), 'utf8');
+  function block(a, b) { const i = PLUGIN.indexOf(a); expect(i).toBeGreaterThan(-1); const j = PLUGIN.indexOf(b, i); expect(j).toBeGreaterThan(i); return PLUGIN.slice(i, j); }
+  it('screens are built by Lampa.Maker when present (InteractionCategory/Card are deprecated there)', function () {
+    const ad = block('function _cherryScreen(object, hooks) {', '// Older Lampa (no Maker)');
+    expect(ad).toContain("if (Lampa.Maker && typeof Lampa.Maker.make === 'function') return _makerScreen(object, hooks);");
+    expect(ad).toContain("object.params.items = { mapping: 'grid', cols: hooks.cols,");
+    expect(ad).toContain("onInstance: function (card, element) {");
+    expect(ad).toContain("comp.stop = function () { if (hooks.pause) hooks.pause(); };");
+    // card modules are set on the element BEFORE the framework instantiates the card
+    expect(ad).toContain('function prep(items) {');
+    expect(ad).toContain('self.build({ results: prep(items), total_pages: total || 1 });');
+  });
+  it('late cards of the progressive page go through the same queue Next uses (Maker only)', function () {
+    const ad = block('function _makerScreen(object, hooks) {', '// Older Lampa (no Maker)');
+    expect(ad).toContain('if (!built || gone || !items || !items.length) return;');
+    expect(ad).toContain("self.loaded.push(prep(items));");
+    expect(ad).toContain("self.emit('pushLoaded');");
+    expect(ad).toContain('onDestroy: function () { gone = true;');
+  });
+  it('global search shows the first screen within FIRST_SCREEN_MS and appends later sources', function () {
+    const fan = block('if ((object.all_sources && object.query) || object.all_videos) {', '// Paged modes need a source adapter.');
+    expect(fan).toContain('var FIRST_SCREEN_MS = 1800;');
+    expect(fan).toContain("var progress = (page === 1 && typeof onProgress === 'function') ? onProgress : null;");
+    expect(fan).toContain('if (progress) setTimeout(function () { windowOver = true; _first(); }, FIRST_SCREEN_MS);');
+    expect(fan).toContain('if (pending === 0 || windowOver) _first();');
+    // nothing yet but sources still running → wait instead of flashing «nothing found»
+    expect(fan).toContain('if (!cards.length && pending > 0 && progress) return;');
+    expect(fan).toContain('var late = _merge([r]);');
+    expect(fan).toContain('if (late.length && progress) progress(late);');
+    // dedup survives across batches (a late source never repeats an on-screen video)
+    expect(fan.indexOf('var anyFull = false, pending = _act.length, _seenKey = {};')).toBeGreaterThan(-1);
+    expect(PLUGIN).toContain('function _gridLoad(object, page, resolve, reject, onProgress) {');
+  });
+  it('the plugin names itself in Lampa «Расширения» only when the record has no name', function () {
+    const fn = block('function _nameInExtensions() {', 'function startPlugin() {');
+    expect(fn).toContain("/cherry-plugin\\/plugin\\.js/.test(p.url || '') && !p.name");
+    expect(PLUGIN).toMatch(/addStyles\(\);\s*\n\s*_nameInExtensions\(\);/);
   });
 });

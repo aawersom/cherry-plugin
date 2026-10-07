@@ -137,6 +137,45 @@ template (`…/xv_THUMBNUM_t.jpg`, a 404 as a poster); `Fav.all()` normalizes `T
 
 ---
 
+## Screens on Lampa.Maker (v0.13.27)
+
+Lampa (lampa.mx, 2026-10) marks `InteractionCategory`, `InteractionMain`, `InteractionLine` and `Card`
+as deprecated and builds its own screens with `Lampa.Maker.make('Category', object)` — a module system
+(`Items` / `Create` / `Next` / `Empty`, optional `Pagination` / `Loading`) on an `Emit` base, with
+`onCreate` / `onNext(resolve, reject)` / `onInstance(card, data)` hooks; cards are `Card` instances
+configured through `card.use({ onFocus, onEnter, onLong })` (the `Callback` module raises them).
+
+Cherry's two screens (`cherry_main`, `cherry_grid`) describe themselves as hooks and `_cherryScreen`
+maps them onto Maker, or onto the legacy `InteractionCategory` when Maker is absent:
+
+| hook | Maker | legacy |
+|---|---|---|
+| `load(page, ok, fail, append)` | `onCreate` → `build({results,total_pages})`; `onNext` (page = `this.object.page`; stops by setting `total_pages`) | `create` / `nextPageReuest` |
+| `card(ui, element)` | `onInstance` → `card.use({onCreate})`; `ui.onEnter/onLong/onFocus` → `card.use(...)` | `cardRender` → `card.onEnter/onMenu/onFocus` |
+| `empty(reason)` | `params.empty` → Maker `Empty` module (Lampa adds «Обновить») | `Lampa.Empty({descr})` |
+| `right()` | `onRight` (Base controller raises it at the right edge) | `comp.onRight` |
+| `pause()` | `onPause` / `onDestroy` / `comp.stop` | `comp.stop` / `comp.pause` |
+
+Card modules are limited to `Card` (poster + title), `Callback` (events) and `Release` (removes the
+template's `{release_year}` line) — no TMDB badges, Lampa favourites/watched marks or Lampa's own
+long-press menu. The mask is set on each element (`params.module`) BEFORE the framework instantiates
+the card. Stand (2026-10-07): home 33 tiles + 28 health dots, channel/favorites/history/search/empty
+screens, D-pad + edge menu, long-press menu, Enter → play, related + pagination, Back focus restore,
+hover clips; no deprecation warnings. Harnesses: `test/tv-screen-check.page.js`, `tv-keys-probe.page.js`,
+`tv-preview-check.page.js`.
+
+**Progressive global search.** The all-sources fan-out shows page 1 after `FIRST_SCREEN_MS` (1.8 s) or
+once every source answered, then appends each later source (ranked within its batch, deduped by
+title+duration against the screen) through the adapter's `append` → Maker's `loaded` / `pushLoaded`
+queue. An empty first window keeps waiting instead of flashing «nothing found». Stand: first cards
+2.0 s vs 3.0–3.7 s before (on the owner's TV slow channels cap at 7 s). `test/tv-search-timing.page.js`.
+
+**Lampa 1.13.3 (official APK).** Tested on a separate AVD (`cherry113`): home, grids, HLS in the inner
+player (pornhub), MP4 in an external player (Just Player); the APK keeps `voiceStart` /
+`window.voiceResult` / `openPlayer`. The stand's 1.12.5 is an unofficial build (signing cert
+`ba7b86…`, WebView debugging on); every official release is signed `8adaaa…` and has WebView debugging
+off — so the main stand stays on its build for CDP harnesses.
+
 ## Component Lifecycle
 
 Both components are **`Lampa.InteractionCategory` subclasses**, not hand-rolled controllers:

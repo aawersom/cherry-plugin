@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.26';
+  var CHERRY_VERSION = '0.13.27';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -938,6 +938,163 @@
   }
 
   // ============================================================
+  // SCREEN ADAPTER — Cherry's two screens on Lampa's component framework.
+  // Lampa (lampa.mx 2026-10) marks InteractionCategory / InteractionMain / Card as deprecated
+  // («Component InteractionCategory is deprecated») and builds its own screens with
+  // Lampa.Maker.make('Category', object): a module system (Items / Create / Next / Empty) with
+  // onCreate / onNext / onInstance hooks; cards are configured through card.use({…}). A screen
+  // describes itself as hooks and this adapter maps them onto Maker, or onto the legacy
+  // InteractionCategory when Maker is absent (older Lampa builds) — the screen code exists once.
+  //   hooks.cols              grid columns (5 video cards / 8 home tiles)
+  //   hooks.rootClass         classes on the screen root (the Cherry CSS scope)
+  //   hooks.skeleton          shimmer placeholders while page 1 loads
+  //   hooks.load(page, ok, fail, append)   ok(items, total_pages); page 1 = the first screen; a
+  //                           page returning no items (or total_pages <= page) ends the list.
+  //                           append(items) (page 1, Maker only) adds late cards to the shown page
+  //   hooks.empty(reason)     → { descr } for the empty state ('empty' | 'error')
+  //   hooks.card(ui, element) ui = { html: $(card), onEnter(fn), onLong(fn), onFocus(fn(el)) }
+  //   hooks.right()           RIGHT pressed at the grid's right edge
+  //   hooks.pause()           screen paused / stopped / destroyed (stop hover previews)
+  // ============================================================
+  function _cherryScreen(object, hooks) {
+    if (Lampa.Maker && typeof Lampa.Maker.make === 'function') return _makerScreen(object, hooks);
+    return _legacyScreen(object, hooks);
+  }
+
+  function _skeletonOn(root) {
+    var h = '<div class="cherry-skeleton">';
+    for (var i = 0; i < 15; i++) h += '<div class="cherry-skeleton__card"></div>';
+    try { $(root).append(h + '</div>'); } catch (e) {}
+  }
+  function _skeletonOff(root) { try { $(root).find('.cherry-skeleton').remove(); } catch (e) {} }
+
+  function _makerScreen(object, hooks) {
+    object.params = object.params || {};
+    object.params.items = { mapping: 'grid', cols: hooks.cols, limit_view: hooks.cols * 2, limit_collection: hooks.cols * 8 };
+    // Card modules: poster + title (Card), focus/enter/long events (Callback) and Release (drops
+    // the template's {release_year} line when there is no year) — no TMDB badges, Lampa
+    // favourites/watched marks or Lampa's own long-press menu (Cherry has its own).
+    var cardModule = Lampa.Maker.module('Card').only('Card', 'Callback', 'Release');
+    function prep(items) {
+      (items || []).forEach(function (v) { v.params = v.params || {}; v.params.module = cardModule; });
+      return items || [];
+    }
+    var comp = Lampa.Maker.make('Category', object);
+    var built = false, gone = false;
+    comp.use({
+      onCreate: function () {
+        var self = this;
+        $(this.html).addClass(hooks.rootClass);
+        if (hooks.skeleton) _skeletonOn(this.html);
+        hooks.load(1, function (items, total) {
+          _skeletonOff(self.html);
+          if (!items || !items.length) { self.params.empty = hooks.empty('empty'); self.empty(); return; }
+          self.build({ results: prep(items), total_pages: total || 1 });
+          built = true;
+        }, function () {
+          _skeletonOff(self.html);
+          self.params.empty = hooks.empty('error');
+          self.empty();
+        }, function (items) {
+          // late cards for the page on screen: the same queue Next uses for a new page
+          if (!built || gone || !items || !items.length) return;
+          self.loaded.push(prep(items));
+          self.emit('pushLoaded');
+          self.emit('scroll');
+        });
+      },
+      onNext: function (resolve, reject) {
+        var self = this, page = this.object.page;
+        hooks.load(page, function (items, total) {
+          // Next does not refresh total_pages from later pages: stop it here at the end.
+          if (!items || !items.length || !(total > page)) self.total_pages = page;
+          resolve({ results: prep(items) });
+        }, reject);
+      },
+      onInstance: function (card, element) {
+        card.use({
+          onCreate: function () {
+            hooks.card({
+              html: $(this.html),
+              onEnter: function (fn) { card.use({ onEnter: function () { fn(); } }); },
+              onLong:  function (fn) { card.use({ onLong: function () { fn(); } }); },
+              onFocus: function (fn) { card.use({ onFocus: function (html) { fn(html); } }); }
+            }, element);
+          }
+        });
+      },
+      onRight: function () { if (hooks.right) hooks.right(); },
+      onPause: function () { if (hooks.pause) hooks.pause(); },
+      onDestroy: function () { gone = true; if (hooks.pause) hooks.pause(); }
+    });
+    comp.stop = function () { if (hooks.pause) hooks.pause(); };
+    return comp;
+  }
+
+  // Older Lampa (no Maker): the same hooks on InteractionCategory.
+  function _legacyScreen(object, hooks) {
+    var comp = new Lampa.InteractionCategory(object);
+    var page = 1;
+    comp.create = function () {
+      var self = this;
+      page = 1;
+      this.activity.loader(true);
+      if (hooks.skeleton) _skeletonOn(this.render());
+      hooks.load(1, function (items, total) {
+        _skeletonOff(self.render());
+        self.activity.loader(false);
+        if (!items || !items.length) { self.empty(hooks.empty('empty').descr); return; }
+        self.build({ title: object.title, results: items, total_pages: total || 1 });
+        try {
+          var root = self.render();
+          root.addClass(hooks.rootClass);
+          root.find('.category-full').addClass('mapping--grid cols--' + hooks.cols);
+        } catch (e) {}
+      }, function () {
+        _skeletonOff(self.render());
+        self.activity.loader(false);
+        self.empty(hooks.empty('error').descr);
+      });
+    };
+    comp.nextPageReuest = function (o, resolve, reject) {
+      var next = page + 1;
+      hooks.load(next, function (items, total) {
+        page = next;
+        resolve({ title: object.title, results: items || [], total_pages: (items && items.length) ? total : next });
+      }, reject);
+    };
+    // The base empty() may ignore a message on old builds — own it (Lampa.Empty descr).
+    comp.empty = function (descr) {
+      var self = this;
+      try {
+        var box = new Lampa.Empty({ descr: descr });
+        Lampa.Activity.all().forEach(function (a) {
+          if (self.activity === a.activity) {
+            var body = a.activity.render().find('.activity__body > div')[0];
+            if (body) body.appendChild(box.render(true));
+          }
+        });
+        this.start = box.start.bind(box);
+        this.activity.loader(false);
+        this.activity.toggle();
+      } catch (e) { Lampa.Noty.show(descr, { time: 8000 }); }
+    };
+    comp.cardRender = function (o, element, card) {
+      hooks.card({
+        html: card.render(),
+        onEnter: function (fn) { card.onEnter = function () { fn(); }; },
+        onLong:  function (fn) { card.onMenu = function () { fn(); return false; }; },
+        onFocus: function (fn) { var f = card.onFocus; card.onFocus = function (t, d) { if (f) f(t, d); fn(t); }; }
+      }, element);
+    };
+    comp.onRight = function () { if (hooks.right) hooks.right(); };
+    var _bStop = comp.stop ? comp.stop.bind(comp) : null, _bPause = comp.pause ? comp.pause.bind(comp) : null;
+    comp.stop  = function () { if (hooks.pause) hooks.pause(); if (_bStop) _bStop(); };
+    comp.pause = function () { if (hooks.pause) hooks.pause(); if (_bPause) _bPause(); };
+    return comp;
+  }
+
+  // ============================================================
   // CHERRY GRID COMPONENT
   // Shows a paginated, infinite-scroll grid of video cards.
   //
@@ -955,12 +1112,10 @@
    * @param {Object} object  Activity params
    */
   function CherryGrid(object) {
-    var comp = new Lampa.InteractionCategory(object);
 
     // Paging + filter state (the base class owns scroll/focus/nav; we own data).
     // Filters live in the activity params so a change reloads via Activity.push
     // (InteractionCategory does NOT re-render on a second create() call).
-    var currentPage     = 1;
     var currentSort     = object.sort || '';
     var currentCategory = object.category || '';
 
@@ -1057,7 +1212,7 @@
       return items;
     }
 
-    function _gridLoad(object, page, resolve, reject) {
+    function _gridLoad(object, page, resolve, reject, onProgress) {
       // Favorites — single page, no paging. Pull the shared bucket FIRST (capped at 2.5 s) so
       // a video favorited on another device shows up on THIS open, not the next one; no PIN
       // or a network failure → the local list, immediately. Resolving on a later tick also
@@ -1152,14 +1307,81 @@
         var _act = _activeSources();
         if (!_act.length) { resolve([], 1); return; }
         var _isSearch = !!object.query;
-        // First-screen-fast: one slow/hung source (or a stalled proxy) must NOT
-        // block the whole page. Each source races against a hard cap, resolving to
-        // an empty batch on timeout so Promise.all settles in ≤cap.
+        // A slow / hung source (or a stalled proxy) must not block the page: each source races a
+        // hard cap and settles to an empty batch on timeout.
         var ALL_SRC_TIMEOUT_MS = 7000;
+        // PROGRESSIVE first screen (v0.13.27, owner: «поиск ждёт самый медленный канал»): page 1
+        // shows what arrived within FIRST_SCREEN_MS (or everything, if all sources answered
+        // sooner); every later source is appended as it settles via `progress(cards)` — ranked
+        // within its own batch and deduped against what is already on screen. Without a
+        // `progress` sink (page 2+, legacy Lampa) the page waits for every source as before.
+        var FIRST_SCREEN_MS = 1800;
         // RU→EN routing: a Cyrillic query is translated for English-title sources (they can't match
         // Cyrillic), while Russian-title sources keep the original. No-op for Latin queries.
         var _enQuery = _isSearch ? _translateQuery(object.query) : '';
-        var promises = _act.map(function (src) {
+        // Synonym-expanded word GROUPS (AND match): "blonde milf" must hit both groups; a group hits
+        // if the title contains any member. BILINGUAL: a Russian word expands to [ru, stem, …EN] so
+        // the same groups filter+rank Russian-title and English-title results alike.
+        var groups = object.query ? _searchGroups(object.query) : [];
+        function _groupHits(title) {
+          var t = _normText(title), n = 0;
+          for (var g = 0; g < groups.length; g++) {
+            for (var k = 0; k < groups[g].length; k++) {
+              if (t.indexOf(groups[g][k]) !== -1) { n++; break; }
+            }
+          }
+          return n;
+        }
+        var anyFull = false, pending = _act.length, _seenKey = {};
+        // One source's batch → its top cards: stamp the origin channel (so «Похожие» opens the
+        // exact channel), keep cards matching ALL query groups (tag-search sources: site order,
+        // marked site-relevant; an empty match falls back to the source's top-N), slice 10.
+        function _pick(r) {
+          if (!r || !r.items || !r.items.length) return [];
+          r.items.forEach(function (v) { if (v && !v.source) v.source = r._srcId; });
+          if (r.items.length >= 10) anyFull = true;      // a full raw batch ⇒ a further page exists
+          var picked = r.items;
+          if (groups.length) {
+            var matched = r.items.filter(function (v) { return _groupHits(v.title) === groups.length; });
+            if (_TAG_SEARCH[r._srcId]) picked.forEach(function (v) { v._siteRelevant = true; });
+            else if (matched.length) picked = matched;
+          }
+          // _srcRank = position within its own source: score ties INTERLEAVE across sources.
+          picked = picked.slice(0, 10);
+          picked.forEach(function (v, k) { v._srcRank = k; });
+          return picked;
+        }
+        // Several batches → ranked, cross-source-deduped cards. Dedup key = normalized title
+        // (40 chars) + duration bucketed to 15 s — the same video posted on several sites; kept
+        // across the progressive batches so a late source never repeats an on-screen video.
+        function _merge(batches) {
+          var flat = [];
+          batches.forEach(function (r) { flat = flat.concat(_pick(r)); });
+          if (groups.length) flat = _rankByRelevance(flat, object.query);
+          flat = flat.filter(function (v) {
+            if (!v.title) return true;
+            var key = _normText(v.title).slice(0, 40) + '|' + (Math.round((v.duration || 0) / 15) * 15);
+            if (_seenKey[key]) return false;
+            _seenKey[key] = true;
+            return true;
+          });
+          _applyClientSort(flat);   // optional guaranteed client-side sort
+          return flat.map(toCard);
+        }
+        var arrived = [], firstDone = false, windowOver = false;
+        function _first() {
+          if (firstDone) return;
+          var cards = _merge(arrived);
+          // Nothing yet but sources still running → keep waiting for the first real results
+          // instead of flashing «nothing found».
+          if (!cards.length && pending > 0 && progress) return;
+          firstDone = true;
+          arrived = [];
+          resolve(cards, (anyFull || pending > 0) ? (page + 50) : page);
+        }
+        var progress = (page === 1 && typeof onProgress === 'function') ? onProgress : null;
+        if (progress) setTimeout(function () { windowOver = true; _first(); }, FIRST_SCREEN_MS);
+        _act.forEach(function (src) {
           var _q = (_enQuery && !_RU_SOURCES[src.id]) ? _enQuery : object.query;
           var fetch = (_isSearch
             ? src.search(_q, page)
@@ -1173,81 +1395,24 @@
             return { items: [], total_pages: 1, _srcId: src.id };
           });
           var timeout = new Promise(function (r) {
-            setTimeout(function () {
-              r({ items: [], total_pages: 1, _srcId: src.id });
-            }, ALL_SRC_TIMEOUT_MS);
+            setTimeout(function () { r({ items: [], total_pages: 1, _srcId: src.id }); }, ALL_SRC_TIMEOUT_MS);
           });
-          return Promise.race([fetch, timeout]);
-        });
-        Promise.all(promises).then(function (results) {
-          var flat = [];
-          // Track whether any source still has more pages to come: a source's raw
-          // batch reaching the slice cap (>=10) means it likely has another page.
-          var anyFull = false;
-          // A3(b): per-source title-match filter BEFORE slice(0,10). Unranked top-N
-          // from each source let irrelevant results dominate; keep only cards whose
-          // title contains the query. Skip the filter for non-ASCII (Cyrillic)
-          // queries — scraped titles are often English so a Cyrillic substring would
-          // wrongly empty every source. If a source's filtered slice is empty, fall
-          // back to its unfiltered top-N (don't drop a whole source).
-          // Synonym-expanded word GROUPS (AND match): "blonde milf" must hit both groups; a group
-          // hits if the title contains any member. BILINGUAL: a Russian word expands to [ru,…EN]
-          // (via _RU_EN) so the same groups filter+rank BOTH Russian-title and English-title results
-          // — Cyrillic queries are no longer skipped. Per-source empty filter → falls back to top-N.
-          var groups = object.query ? _searchGroups(object.query) : [];
-          function _groupHits(title) {
-            var t = _normText(title), n = 0;
-            for (var g = 0; g < groups.length; g++) {
-              for (var k = 0; k < groups[g].length; k++) {
-                if (t.indexOf(groups[g][k]) !== -1) { n++; break; }
-              }
+          Promise.race([fetch, timeout]).then(function (r) {
+            pending--;
+            if (!firstDone) {
+              arrived.push(r);
+              // all answered, or the first-screen window is over and this arrival may be the
+              // first non-empty one → show the first screen now
+              if (pending === 0 || windowOver) _first();
+              return;
             }
-            return n;
-          }
-          results.forEach(function (r) {
-            if (r && r.items && r.items.length) {
-              // Stamp each card with ITS originating source so «Похожие» opens the
-              // exact channel the card came from (don't clobber an existing source).
-              r.items.forEach(function (v) { if (v && !v.source) v.source = r._srcId; });
-              // A full raw batch (>=10) from any source implies a further page exists.
-              if (r.items.length >= 10) anyFull = true;
-              var picked = r.items;
-              if (groups.length) {
-                // Keep cards matching ALL query groups; fall back to top-N if none match.
-                var matched = r.items.filter(function (v) { return _groupHits(v.title) === groups.length; });
-                // Tag-search sources (_TAG_SEARCH) match by site tags: keep their site order
-                // UNFILTERED and mark the cards site-relevant so _rankByRelevance scores them as
-                // full matches (their titles rarely carry the words). Everyone else: title filter.
-                if (_TAG_SEARCH[r._srcId]) picked.forEach(function (v) { v._siteRelevant = true; });
-                else if (matched.length) picked = matched;
-              }
-              // _srcRank = position within its own source: the ranker breaks score ties by it so
-              // equal-score cards INTERLEAVE across sources instead of clustering by source.
-              picked.slice(0, 10).forEach(function (v, k) { v._srcRank = k; });
-              flat = flat.concat(picked.slice(0, 10));
-            }
+            var late = _merge([r]);
+            if (late.length && progress) progress(late);
+          }).catch(function (err) {
+            console.warn('[Cherry] loadAllSources error:', err);
+            pending--;
+            if (pending === 0 && !firstDone) _first();
           });
-          // Relevance rank (shared with single-channel search): rewards matching more query
-          // groups, the exact phrase, and titles that lead with the query; penalizes stuffing.
-          // Stable for ties → preserves per-source interleave.
-          if (groups.length) flat = _rankByRelevance(flat, object.query);
-          // Cross-source dedup: the same video posted on several sites → keep one (the
-          // highest-ranked, since we dedup AFTER the relevance sort). Key = normalized title
-          // (first 40 chars) + duration bucketed to 15s. Cards without a title can't be keyed.
-          var _seenKey = {};
-          flat = flat.filter(function (v) {
-            if (!v.title) return true;
-            var key = _normText(v.title).slice(0, 40) + '|' + (Math.round((v.duration || 0) / 15) * 15);
-            if (_seenKey[key]) return false;
-            _seenKey[key] = true;
-            return true;
-          });
-          // Optional guaranteed client-side sort ('relevance' = default order above).
-          _applyClientSort(flat);
-          resolve(flat.map(toCard), anyFull ? (page + 50) : page);
-        }).catch(function (err) {
-          console.warn('[Cherry] loadAllSources error:', err);
-          reject();
         });
         return;
       }
@@ -1574,124 +1739,33 @@
       return true;
     }
 
-    // ---- InteractionCategory overrides ------------------------------------
+    // ---- screen hooks (mapped onto Lampa.Maker / legacy by _cherryScreen) ----
 
-    comp.create = function () {
-      var _this = this;
-      currentPage = 1;
-      this.activity.loader(true);
-      // Skeleton: shimmer placeholder cards while the (possibly slow, multi-source) load runs —
-      // the screen gets structure + motion instead of a blank spinner. Removed before build().
-      try {
-        var _skel = '<div class="cherry-skeleton">';
-        for (var _s = 0; _s < 15; _s++) _skel += '<div class="cherry-skeleton__card"></div>';
-        _skel += '</div>';
-        _this.render().append(_skel);
-      } catch (e) {}
-
-      _seenIds = {};                 // reset dedup tracking for a fresh grid
-      _gridLoad(object, 1, function (items, total) {
-        try { _this.render().find('.cherry-skeleton').remove(); } catch (e) {}
-        currentPage = 1;
-        items = _dedupNew(items);    // seed seen-set (page 1 is all new)
-        // P3.2: empty favorites shows a PERSISTENT hint (not a transient toast).
-        if (!items.length && object.is_favorites) {
-          _this.activity.loader(false);
-          _this.empty(Lampa.Lang.translate('cherry_fav_empty_hint'));
-          return;
-        }
-        // Clear "nothing found" state for an empty first page (search or browse) — instead of
-        // a blank grid. Page 2+ emptiness is end-of-list, handled by pagination (not here).
-        if (!items.length) {
-          _this.activity.loader(false);
-          _this.empty(Lampa.Lang.translate(object.query ? 'cherry_search_empty' : 'cherry_empty'));
-          return;
-        }
-        // P3.1: header reflects the active sort/category filter.
-        _this.build({ title: screenTitle, results: items, total_pages: total });
-        _this.activity.loader(false);
-        // 16:9 landscape cards, 5 per row (CSS scoped via .cherry-cat + Lampa cols--5)
-        try {
-          var root = _this.render();
-          root.addClass('cherry-cat');
-          root.find('.category-full').addClass('mapping--grid cols--5');
-        } catch (e) {}
-      }, function () {
-        // P3.2: a load failure is DISTINCT from "no results". A focusable «Повторить»
-        // re-runs create() so a transient network failure is recoverable on the remote.
-        try { _this.render().find('.cherry-skeleton').remove(); } catch (e) {}
-        _this.activity.loader(false);
-        _this.empty(Lampa.Lang.translate('cherry_load_error'), function () {
-          _this.create();
-        });
-      });
-    };
-
-    comp.nextPageReuest = function (object, resolve, reject) {
-      // Favorites + history are the single-page local-list modes (no pages).
-      // «Похожие» (related_video) now paginates through _gridLoad like every other
-      // grid — the dedup guard caps fixed-block adapters after page 1. all_sources
-      // also falls through to _gridLoad.
-      if (object.is_favorites || object.is_history) {
-        resolve({ title: screenTitle, results: [], total_pages: 1 });
-        return;
-      }
-      var nextPage = currentPage + 1;
-      _gridLoad(object, nextPage, function (items, total) {
-        currentPage = nextPage;
+    // Page loader: page 1 = the first screen (seeds the dedup set); a later page keeps only cards
+    // not seen yet, and a page with no new card ends the list (sites that clamp / wrap / ignore
+    // the page param). Favorites + history are single-page local lists.
+    function _load(page, ok, fail, append) {
+      if (page > 1 && (object.is_favorites || object.is_history)) { ok([], page); return; }
+      if (page === 1) _seenIds = {};
+      _gridLoad(object, page, function (items, total) {
         var fresh = _dedupNew(items);
-        // No new cards on this page → the site clamped/wrapped/ignored the page →
-        // end of list. Resolve empty + cap total_pages so the base class stops.
-        if (!fresh.length) {
-          resolve({ title: screenTitle, results: [], total_pages: nextPage });
-          return;
-        }
-        resolve({ title: screenTitle, results: fresh, total_pages: total });
-      }, reject);
-    };
+        if (page > 1 && !fresh.length) { ok([], page); return; }
+        ok(fresh, total);
+      }, fail, append ? function (late) {
+        var fresh = _dedupNew(late);   // progressive all-sources page 1: late sources
+        if (fresh.length) append(fresh);
+      } : undefined);
+    }
 
-    // P3.2: custom empty() that honours a message arg. Mirrors sisi_full.js's
-    // proven override (Lampa.Empty descr). The base InteractionCategory.empty
-    // may ignore a message on this build, so we own it to guarantee a distinct
-    // error vs no-results message and a persistent favorites hint.
-    // onRetry (optional): when provided, a focusable «Повторить» button is added
-    // so the error state is recoverable with the D-pad (otherwise the only way out
-    // is Back). On Enter it re-runs the load via onRetry().
-    comp.empty = function (msg, onRetry) {
-      var _this = this;
-      var descr = typeof msg === 'string'
-        ? msg
-        : Lampa.Lang.translate('cherry_no_results');
-      try {
-        var box = new Lampa.Empty({ descr: descr });
-        var emptyEl = box.render(true);
-        // Append a focusable retry action into the empty box. class="selector" makes
-        // Lampa's controller collect it when start() focuses the empty area.
-        if (onRetry) {
-          try {
-            var $btn = $('<div class="selector cherry-retry-btn" style="display:inline-block;margin-top:1em;padding:.6em 1.4em;border-radius:.4em;background:#e75480;color:#fff;font-size:1.3em;font-weight:700;">'
-              + Lampa.Lang.translate('cherry_retry') + '</div>');
-            $btn.on('hover:enter', function () { onRetry(); });
-            $(emptyEl).append($btn);
-          } catch (e) {}
-        }
-        Lampa.Activity.all().forEach(function (active) {
-          if (_this.activity === active.activity) {
-            var body = active.activity.render().find('.activity__body > div')[0];
-            if (body) body.appendChild(emptyEl);
-          }
-        });
-        this.start = box.start.bind(box);
-        this.activity.loader(false);
-        this.activity.toggle();
-      } catch (e) {
-        // Last-resort fallback if Lampa.Empty is unavailable on this build.
-        Lampa.Noty.show(descr, { time: 8000 });
-      }
-    };
+    // Empty state: a load failure is distinct from «nothing found»; favorites get a persistent
+    // hint. (Lampa's Empty adds its own «Обновить» button, which re-runs the load.)
+    function _emptyState(reason) {
+      return { descr: Lampa.Lang.translate(reason === 'error' ? 'cherry_load_error'
+        : (object.is_favorites ? 'cherry_fav_empty_hint' : (object.query ? 'cherry_search_empty' : 'cherry_empty'))) };
+    }
 
-    comp.cardRender = function (object, element, card) {
-      card.onEnter = function () {
+    function _card(ui, element) {
+      ui.onEnter(function () {
         _stopCurrentPreview();
         // Model card → open that performer's videos via the model_url grid path.
         if (element._model) {
@@ -1718,7 +1792,7 @@
         var s = sourceById(element.source);
         if (s) playVideo(element, s);
         else Lampa.Noty.show(Lampa.Lang.translate('cherry_error'), { style: 'warn' });
-      };
+      });
 
       // Tag EVERY card with its origin channel (owner requirement: source must be
       // visible in all scenarios without exception — search, favorites, history,
@@ -1727,7 +1801,7 @@
         try {
           var os = sourceById(element.source);
           if (os) {
-            var $v = card.render().find('.card__view');
+            var $v = ui.html.find('.card__view');
             if ($v.length) $v.append('<div class="cherry-src-badge">' + os.name + '</div>');
           }
         } catch (e) {}
@@ -1741,13 +1815,14 @@
       try {
         var _adp = sourceById(element.source);
         if (_adp && typeof _adp.refreshThumb === 'function' && element.thumb) {
-          var _img = card.render().find('.card__img')[0];
+          var _img = ui.html.find('.card__img')[0];
           if (_img && _img.tagName === 'IMG') {
             var _heal = function () {
               if (_img.getAttribute('data-cherry-refreshed')) return;
               _img.setAttribute('data-cherry-refreshed', '1');
               _adp.refreshThumb(element).then(function (u) {
-                if (u && u !== element.thumb) { element.thumb = u; _img.src = u; }
+                // img/poster too: Lampa's card retries the poster from them on its own errors
+                if (u && u !== element.thumb) { element.thumb = element.img = element.poster = u; _img.src = u; }
               }).catch(function () {});
             };
             _img.addEventListener('error', _heal);
@@ -1761,7 +1836,7 @@
       // HD is merged INTO the duration pill ("HD · 12:34"), or shown alone if there is
       // no duration — so a card carries at most 3 badges (source TL, views BL, dur/HD BR).
       try {
-        var $v2 = card.render().find('.card__view');
+        var $v2 = ui.html.find('.card__view');
         if ($v2.length) {
           if (element.duration) {
             $v2.append('<div class="cherry-dur">' + (element.hd ? element.hd + ' · ' : '') + secToTime(element.duration) + '</div>');
@@ -1786,7 +1861,7 @@
         }
       } catch (e) {}
 
-      card.onMenu = function (target, card_data) {
+      ui.onLong(function () {
         var isFav   = Fav.has(element);
         var cardSrc = sourceById(element.source) || sourceById(object.source_id);
         // Order: «Похожие» (site's own related, only when adapter.getRelated exists)
@@ -1868,12 +1943,9 @@
           },
           onBack: function () { Lampa.Controller.toggle('content'); }
         });
-        return false;
-      };
+      });
 
-      var f = card.onFocus;
-      card.onFocus = function (target, card_data) {
-        if (f) f(target, card_data);
+      ui.onFocus(function (target) {
         _stopCurrentPreview();
         // Dwell-timer: only start preview after the focus rests ~600ms on a card.
         // D-pad scrolling through a row clears the timer (in _stopCurrentPreview)
@@ -1886,23 +1958,17 @@
             _startPreview(target, element.preview);
           }, 600);
         }
-      };
-    };
+      });
+    }
 
-    comp.onRight = function () {
-      openActionsMenu();
-    };
-
-    // P3.4: exposed so the persistent header filter button (addFilterButton)
-    // can open the same Поиск → Сортировка → Категории menu as the right edge.
+    var comp = _cherryScreen(object, {
+      cols: 5, rootClass: 'cherry-cat', skeleton: true,   // 16:9 landscape cards, 5 per row
+      load: _load, empty: _emptyState, card: _card,
+      right: openActionsMenu,          // RIGHT at the edge → Поиск / Сортировка / Категории
+      pause: _stopCurrentPreview       // no hover preview survives a pause / stop / destroy
+    });
+    // P3.4: the persistent header filter button (addFilterButton) opens the same menu.
     comp.openActionsMenu = openActionsMenu;
-
-    // Stop any playing preview when the component pauses / stops / dies.
-    var _baseStop  = comp.stop  ? comp.stop.bind(comp)  : null;
-    var _basePause = comp.pause ? comp.pause.bind(comp) : null;
-    comp.stop  = function () { _stopCurrentPreview(); if (_baseStop)  _baseStop(); };
-    comp.pause = function () { _stopCurrentPreview(); if (_basePause) _basePause(); };
-
     return comp;
   }
 
@@ -1923,7 +1989,6 @@
    * @param {Object} object  Activity params
    */
   function CherryMain(object) {
-    var comp = new Lampa.InteractionCategory(object);
 
     // Channel health dots (owner: "a small green/gray dot on the channel tile so I can see
     // whether it works"). Status is cached 6h in Storage and refreshed in the background
@@ -1965,14 +2030,12 @@
       next();
     }
 
-    // ---- InteractionCategory overrides ------------------------------------
-    // Home is a single-page source picker: [Поиск] + [Избранное] + one card per
-    // registered source. Enter routes to the right activity. Nav/scroll come
-    // free from the base class (same proven pattern as CherryGrid).
+    // ---- screen hooks -----------------------------------------------------
+    // Home is a single-page source picker: [Поиск] + [Все видео] + [Избранное] + [Синхронизация]
+    // + one tile per active source (+ «Продолжить»). Enter routes to the right activity.
 
-    comp.create = function () {
-      this.activity.loader(true);
-
+    function _load(page, ok) {
+      if (page > 1) { ok([], 1); return; }
       var results = [];
       // 1) Search entry — opens keyboard, then all-sources search grid.
       results.push({ title: Lampa.Lang.translate('cherry_search'), img: '', _kind: 'search', _initial: '⌕', _action: true });
@@ -2000,24 +2063,15 @@
         results.push({ title: Lampa.Lang.translate('cherry_continue'), img: '', _kind: 'continue', _initial: '▶', _action: true });
       }
 
-      this.build({ title: 'Cherry', results: results, total_pages: 1 });
-      this.activity.loader(false);
-      // Picker = small square tiles, 7 per row, so all 26 sources fit on screen.
-      // .cherry-cat → tile + focus styling; .cherry-home → square aspect override.
-      try {
-        var root = this.render();
-        root.addClass('cherry-cat cherry-home');
-        root.find('.category-full').addClass('mapping--grid cols--8');
-      } catch (e) {}
-
+      ok(results, 1);
       // Opening Cherry pulls the shared bucket (non-blocking, local-first).
       try { Sync.run(); } catch (e) {}
       // Paint cached channel health, then refresh stale entries in the background.
       try { _healthRefresh(); } catch (e) {}
-    };
+    }
 
-    comp.cardRender = function (object, element, card) {
-      card.onEnter = function () {
+    function _card(ui, element) {
+      ui.onEnter(function () {
         if (element._kind === 'search') {
           // Popular quick-picks + voice + manual type — avoids D-pad typing for common queries.
           _searchPicker('', function (q) {
@@ -2083,13 +2137,13 @@
             page:      1
           });
         }
-      };
+      });
 
       // Letter tile: the picker has no thumbnails, so paint a coloured initial
       // into .card__view. Search/Favorites get the brand action tint; sources
       // get a stable per-source hue. Visual only — routing above is untouched.
       try {
-        var $view = card.render().find('.card__view');
+        var $view = ui.html.find('.card__view');
         if ($view.length) {
           var cls = 'cherry-tile' + (element._action ? ' cherry-tile--action' : '');
           var bg  = element._action ? '' : ' style="background:' + (element._color || '#444') + '"';
@@ -2104,9 +2158,15 @@
           }
         }
       } catch (e) {}
-    };
+    }
 
-    return comp;
+    // Small square tiles, 8 per row, so every channel fits on screen.
+    // .cherry-cat → tile + focus styling; .cherry-home → square aspect override.
+    return _cherryScreen(object, {
+      cols: 8, rootClass: 'cherry-cat cherry-home',
+      load: _load, card: _card,
+      empty: function () { return { descr: Lampa.Lang.translate('cherry_empty') }; }
+    });
   }
 
   // ============================================================
@@ -2219,7 +2279,6 @@
       cherry_loading:     { ru: 'Загрузка…',           en: 'Loading…'           },
       cherry_error:       { ru: 'Ошибка загрузки',     en: 'Load error'         },
       cherry_load_error:  { ru: 'Не удалось загрузить. Проверьте соединение.', en: 'Failed to load. Check your connection.' },
-      cherry_retry:       { ru: 'Повторить',           en: 'Retry'              },
       cherry_add_fav:        { ru: 'Добавлено в избранное',  en: 'Added to favorites'    },
       cherry_rem_fav:        { ru: 'Убрано из избранного',   en: 'Removed from favorites' },
       cherry_add_fav_action: { ru: 'Добавить в избранное',   en: 'Add to favorites'       },
@@ -2314,6 +2373,22 @@
   // ============================================================
   // INIT
   // ============================================================
+  // Lampa's «Расширения» list shows the `name` of the plugin's record and «Без названия» when
+  // there is none (fresh install on Lampa 1.13.3, stand 2026-10-07). Fill it in once — only when
+  // empty, so a name the user typed is kept.
+  function _nameInExtensions() {
+    try {
+      var list = Lampa.Storage.get('plugins', []), changed = false;
+      if (!Array.isArray(list)) return;
+      list.forEach(function (p) {
+        if (p && typeof p === 'object' && /cherry-plugin\/plugin\.js/.test(p.url || '') && !p.name) {
+          p.name = 'Cherry'; if (!p.author) p.author = '@aawersom'; changed = true;
+        }
+      });
+      if (changed) Lampa.Storage.set('plugins', list);
+    } catch (e) {}
+  }
+
   function startPlugin() {
     // First run: if key was never explicitly saved, store the default and notify user.
     if (Lampa.Storage.get('cherry_proxy_key', null) === null) {
@@ -2325,6 +2400,7 @@
 
     addLang();
     addStyles();
+    _nameInExtensions();
 
     // UX-C: register preview toggle in Lampa settings. Long-press on the main
     // title remains as a fallback when SettingsApi is unavailable.
@@ -2687,6 +2763,26 @@ var _HTML_ENTITIES = {
     Eacute: 'É', Aacute: 'Á', Iacute: 'Í', Oacute: 'Ó', Uacute: 'Ú',
     Ntilde: 'Ñ', Ccedil: 'Ç', Auml: 'Ä', Ouml: 'Ö', Uuml: 'Ü'
 };
+// Repair text whose UTF-8 bytes were decoded as Windows-1252 / Latin-1 upstream (eporner's API:
+// «HeiÃŸe Erwachsene … WeiÃ\u009fen» for «Heiße … Weißen», stand 2026-10-07). Only text with the
+// telltale lead byte (Â Ã Ð Ñ + a continuation char) is touched; every char is mapped back to its
+// byte and the bytes are re-decoded as UTF-8 — anything that does not round-trip stays as is.
+var _CP1252 = { 0x20AC: 0x80, 0x201A: 0x82, 0x0192: 0x83, 0x201E: 0x84, 0x2026: 0x85, 0x2020: 0x86, 0x2021: 0x87,
+    0x02C6: 0x88, 0x2030: 0x89, 0x0160: 0x8A, 0x2039: 0x8B, 0x0152: 0x8C, 0x017D: 0x8E, 0x2018: 0x91, 0x2019: 0x92,
+    0x201C: 0x93, 0x201D: 0x94, 0x2022: 0x95, 0x2013: 0x96, 0x2014: 0x97, 0x02DC: 0x98, 0x2122: 0x99, 0x0161: 0x9A,
+    0x203A: 0x9B, 0x0153: 0x9C, 0x017E: 0x9E, 0x0178: 0x9F };
+function _fixMojibake(str) {
+    str = String(str == null ? '' : str);
+    if (!/[ÂÃÐÑ][\u0080-¿Œ-Ÿˆ˜–-›€™]/.test(str)) return str;
+    var hex = '';
+    for (var i = 0; i < str.length; i++) {
+        var c = str.charCodeAt(i), b = c <= 0xFF ? c : _CP1252[c];
+        if (b === undefined) return str;
+        hex += '%' + (b < 16 ? '0' : '') + b.toString(16);
+    }
+    try { return decodeURIComponent(hex); } catch (e) { return str; }
+}
+
 function _decodeHtml(str) {
     return String(str == null ? '' : str)
         .replace(/&(#x?[0-9a-f]+|[a-z][a-z0-9]*);/gi, function (m, e) {
@@ -4030,7 +4126,7 @@ SOURCES.push({
     return {
       id: String(v.id),
       source: 'eporner',
-      title: v.title || '',
+      title: _fixMojibake(v.title || ''),   // the API double-encodes non-ASCII titles
       thumb: (v.default_thumb && v.default_thumb.src) ? v.default_thumb.src : '',
       url: v.url || ('https://www.eporner.com/video-' + v.id + '/'),
       duration: parseInt(v.length_sec, 10) || 0,
