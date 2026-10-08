@@ -4079,7 +4079,7 @@ describe('global ranking: tag-search sources get a site-relevant baseline (v0.13
   const ctx = [grabVar('_SEARCH_SYN'), grabVar('_RU_EN'), grabFn('_normText'), grabVar('_SEARCH_STOP'), PLUGIN.slice(PLUGIN.indexOf('var _RU_STEM_RX'), PLUGIN.indexOf('\n', PLUGIN.indexOf('var _RU_STEM_RX'))), 'var _RU_EN_BY_STEM = null;', grabFn('_ruStem'), grabFn('_ruLookup'), grabFn('_searchGroups'), grabFn('_relScore'), grabFn('_rankByRelevance')].join('\n');
   const M = new Function(ctx + '\nreturn {rank:_rankByRelevance};')();
 
-  it('a site-relevant card (no title words) ranks with plain full matches, below phrase/lead-boosted ones, above partial matches', function () {
+  it('a site-relevant card (no title words) ranks BELOW every full title match, above partial matches (v0.13.32)', function () {
     const items = [
       { title: 'random tag hit with no words', _siteRelevant: true },  // tag-search fallback
       { title: 'blonde teen scene' },                                   // exact phrase + leads → top
@@ -4087,10 +4087,9 @@ describe('global ranking: tag-search sources get a site-relevant baseline (v0.13
       { title: 'just a teen' }                                          // partial (missing group)
     ];
     const r = M.rank(items.slice(), 'blonde teen').map(function (v) { return v.title; });
-    expect(r[0]).toBe('blonde teen scene');
-    expect(r.indexOf('random tag hit with no words')).toBeLessThan(r.indexOf('just a teen'));
-    // scores as a plain full match (tie-class with 'a teen who is blonde'), below the boosted title
-    expect(r.indexOf('random tag hit with no words')).toBeGreaterThan(0);
+    // owner 2026-10-08 «низкое качество поиска»: tag-only hits ranked level with full matches
+    // filled the first screen with unrelated titles; now every title naming the query comes first
+    expect(r).toEqual(['blonde teen scene', 'a teen who is blonde', 'random tag hit with no words', 'just a teen']);
   });
 
   it('without the flag the same card sinks below partial matches', function () {
@@ -4101,8 +4100,13 @@ describe('global ranking: tag-search sources get a site-relevant baseline (v0.13
 
   it('anti-drift: _TAG_SEARCH map exists and the fan-out marks fallback cards from those sources', function () {
     expect(PLUGIN).toContain("var _TAG_SEARCH = { hqporner: 1, perfektdamen: 1, porndig: 1, eporner: 1, pornhub: 1, analdin: 1, xozilla: 1, xhamster: 1 };");
-    expect(PLUGIN).toContain('if (_TAG_SEARCH[r._srcId]) picked.forEach(function (v) { v._siteRelevant = true; });');
-    expect(PLUGIN).toContain('if (v._siteRelevant) s = Math.max(s, groups.length * 10);');
+    expect(PLUGIN).toContain('else if (_TAG_SEARCH[r._srcId]) picked.forEach(function (v) { v._siteRelevant = true; });');
+    expect(PLUGIN).toContain('if (v._siteRelevant) s = Math.max(s, groups.length * 10 - 5);');
+    // a code / catalogue number keeps only titles that carry it (no tag «relatives»)
+    expect(PLUGIN).toContain('if (_isCodeQuery) picked = matched;');
+    const cx = new RegExp(PLUGIN.match(/var _isCodeQuery = !!object\.query && \/(.+?)\/i\.test/)[1], 'i');
+    expect(['SSIS-839', 'mogi 159', 'abp123'].every((q) => cx.test(q))).toBe(true);
+    expect(['first time dp', 'blonde milf', 'двойное проникновение', '4k'].some((q) => cx.test(q))).toBe(false);
     expect(PLUGIN).toContain('picked.forEach(function (v, k) { v._srcRank = k; });');
     expect(PLUGIN).toContain("((a.v._srcRank || 0) - (b.v._srcRank || 0)) || a.i - b.i");
   });

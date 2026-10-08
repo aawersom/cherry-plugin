@@ -264,3 +264,15 @@ describe('spankbang', () => {
     expect(block).toMatch(/disabled: true,/);
   });
 });
+
+describe('v0.13.32: every card title is cleaned on the screen', () => {
+  it('toCard runs _cleanTitle; _cleanTitle drops zero-width spaces and repairs cp1252 mojibake', () => {
+    expect(SRC).toContain('v.title  = _cleanTitle(v.title);');
+    const clean = new Function(TITLE_SRC + '\nreturn _cleanTitle;')();
+    expect(clean('Fiona ​sprouts ​gets')).toBe('Fiona sprouts gets');
+    expect(clean('Saba â€“ Homemade')).toBe('Saba – Homemade');
+  });
+  it('«Похожие» continuation is ranked against the seed keywords', () => {
+    expect(SRC).toContain('if (items && items.length) { _relDone(_rankByRelevance(items, relKw)); return; }');
+  });
+});

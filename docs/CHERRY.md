@@ -7,7 +7,7 @@ Lampa components (`cherry_main`, `cherry_grid`), routes all external HTTP throug
 Cloudflare Worker proxy, and exposes a uniform `SourceAdapter` interface over 25 heterogeneous
 backends.
 
-Entry file: `plugin.js` (single-file, ~8000 lines, v0.13.31)
+Entry file: `plugin.js` (single-file, ~8000 lines, v0.13.32)
 
 > **Line references (`plugin.js:NNN`) below are historical** — the file roughly doubled since they
 > were written. Search by symbol name (e.g. `function CherryGrid(`, `function buildProxyUrl(`,
@@ -428,6 +428,17 @@ is available in every mode — the mitigation for sites whose server sort is a n
 > whole chain on ONE route: VPS first, the CF worker when the VPS gets a bot page (~1.5 KB stub, VPS IP
 > flagged after heavy use). Budget ≤ 3 renders via VPS + ≤ 4 via CF. `_apiFetch` retries bypass the
 > page cache too. Harnesses: `tv-ph-renders`, `tv-ph-sign-route`, `tv-ph-page-health`.
+
+> **Search quality (v0.13.32, owner: «низкое качество поиска»).** Measured with
+> `tv-search-quality.page.js` (global search, top-12 cards naming every query group): «блондинка анал»
+> 7→12, «азиатка массаж» 1→12, «first time dp» 4→12, «лесбиянки» 8→12, «SSIS-839» 2 of 115 → 2 of 2.
+> - `_rankByRelevance`: a `_siteRelevant` card (tag-search source, title lacks the words) scores
+>   `groups*10 − 5` — below every full title match, above partial ones (was level with full matches,
+>   so tag hits like «slippery pleasures» filled the first screen).
+> - Code / catalogue queries (`_isCodeQuery`: letters + optional `-`/space + ≥2 digits) keep only titles
+>   that carry the code — no tag «relatives».
+> - `toCard` runs `_cleanTitle` on every card (entities, cp1252/CJK mojibake, zero-width spaces).
+> - «Похожие» page 2+ (keyword search on the channel) is ranked against the seed keywords.
 > - The server bucket keeps every distinct query (tombstones are never purged) — tiny records, same
 >   growth model as favorites.
 > Tests: `test/cherry-favsync.test.mjs` → «Sync: recent search queries». Live check (2026-10-08):
