@@ -4618,9 +4618,10 @@ describe('v0.13.24: favorites single build + pornhub API route alternation', fun
   });
   it('pornhub _apiFetch alternates native and proxy between attempts (viaProxy flips), browser unaffected', function () {
     const ph = PLUGIN.slice(PLUGIN.indexOf("id: 'pornhub',"), PLUGIN.indexOf("id: 'xvideos',"));
-    expect(ph).toContain('_apiFetch: function(url, tries, viaProxy) {');
-    expect(ph).toContain("var get = (viaProxy && _isAndroid()) ? _proxyText(url) : cherryFetch(url);");
-    expect(ph).toContain('return self._apiFetch(url, tries - 1, !viaProxy);');
+    expect(ph).toContain('_apiFetch: function(url, tries, viaProxy, retry) {');
+    // v0.13.31: a retry bypasses the page cache (it would re-read the same empty answer)
+    expect(ph).toContain("var get = (viaProxy && _isAndroid()) ? _proxyText(url) : (retry ? _cherryFetchNow(url) : cherryFetch(url));");
+    expect(ph).toContain('return self._apiFetch(url, tries - 1, !viaProxy, true);');
     expect((ph.match(/self\._apiFetch\(url, 4\)/g) || []).length).toBeGreaterThanOrEqual(2); // callers unchanged
   });
 });
@@ -4633,19 +4634,24 @@ describe('v0.13.25: pornhub HLS chain, familyporn routing, pornve AV1 avoidance'
     const b = PLUGIN.indexOf(endMarker, a); expect(b).toBeGreaterThan(a);
     return PLUGIN.slice(a, b);
   }
-  it('pornhub: page is re-rendered until the ev-h/validfrom HLS scheme (≤7 fetches), hv-h mapped to ev-h, playlist probed', function () {
+  it('pornhub (v0.13.31): the edge is proven by a real segment, other edge next, then another render / route', function () {
     const ph = block("id: 'pornhub',", "id: 'xvideos',");
-    expect(ph).toContain('function _isPlayableHls(html)');
-    expect(ph).toContain('return _fetchPage(6).then(');
-    expect(ph).toContain('if (ok && _isPlayableHls(html)) return html;');
-    expect(ph).toContain("hlsUrls[lbl].replace(/^https?:\\/\\/hv-h\\.phncdn\\.com\\//, 'https://ev-h.phncdn.com/')");
-    expect(ph).toContain('return Promise.all(labels.map(function (lbl) {'); // every quality probed in parallel
-    expect(ph).toContain('var map = Object.keys(playable).length ? playable : quality;');
-    // the detector accepts the flashvars-escaped scheme-A url and rejects scheme B
-    const m = ph.match(/function _isPlayableHls\(html\) \{ return (\/.*?\/)\.test\(html\); \}/);
-    const re = new Function('return ' + m[1])();
-    expect(re.test('"videoUrl":"https:\\/\\/ev-h.phncdn.com\\/hls\\/x\\/master.m3u8?validfrom=1&validto=2&ipa=1"')).toBe(true);
-    expect(re.test('"videoUrl":"https:\\/\\/hv-h.phncdn.com\\/hls\\/x\\/master.m3u8?h=abc&e=1788"')).toBe(false);
+    // master → media playlist → first segment (2-byte Range) on the page's own edge, then the other
+    expect(ph).toContain('function _delivers(master, viaCF) {');
+    expect(ph).toContain('return seg ? _probeOk(seg) : false;');
+    expect(ph).toContain('if (ok) return _map(hls, same, viaCF);');
+    expect(ph).toContain('if (okAlt) return _map(hls, _otherEdge, viaCF);');
+    // ≤ 3 renders via the VPS, then ≤ 4 via the CF worker; a bot page leaves the route at once
+    expect(ph).toContain('return _try(false, 2, false)');
+    expect(ph).toContain('.then(function (r) { return r || _try(true, 3, true); })');
+    expect(ph).toContain('if (!media) return null;                      // bot page: don\'t hammer this route');
+    expect(ph).toContain('return Promise.all(labels.map(function (lbl) {'); // every quality's playlist still probed
+    // the edge swap is symmetric
+    const sw = ph.slice(ph.indexOf('var EDGE_RX'), ph.indexOf('function same(u)'));
+    const other = new Function(sw + '\nreturn _otherEdge;')();
+    expect(other('https://hv-h.phncdn.com/hls/x/master.m3u8?h=a')).toBe('https://ev-h.phncdn.com/hls/x/master.m3u8?h=a');
+    expect(other('https://ev-h.phncdn.com/hls/x/master.m3u8?validfrom=1')).toBe('https://hv-h.phncdn.com/hls/x/master.m3u8?validfrom=1');
+    expect(other('https://cv-h.phncdn.com/x')).toBe('https://cv-h.phncdn.com/x');
   });
   it('pornhub: page hosts and *.phncdn.com are routed to the VPS (one IP for page + playlist + segments)', function () {
     const vps = block('var PROXY_URL_2_HOSTS = {', '};');

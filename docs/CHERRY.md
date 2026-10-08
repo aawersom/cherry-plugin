@@ -7,7 +7,7 @@ Lampa components (`cherry_main`, `cherry_grid`), routes all external HTTP throug
 Cloudflare Worker proxy, and exposes a uniform `SourceAdapter` interface over 25 heterogeneous
 backends.
 
-Entry file: `plugin.js` (single-file, ~8000 lines, v0.13.30)
+Entry file: `plugin.js` (single-file, ~8000 lines, v0.13.31)
 
 > **Line references (`plugin.js:NNN`) below are historical** — the file roughly doubled since they
 > were written. Search by symbol name (e.g. `function CherryGrid(`, `function buildProxyUrl(`,
@@ -418,6 +418,16 @@ is available in every mode — the mitigation for sites whose server sort is a n
 > Verified on the stand: `tv-v0130-check.page.js` via `tv-ui-run` (offline → error + Обновить → cards;
 > empty search; badge; background check; menu; find copy; dialog), `tv-latest-feed.page.js`; unit
 > `cherry-favavail-0.13.30.test.mjs`. `tv-ui-run` now exposes the same `window.__C` as `tv-page-run`.
+
+> **pornhub playback (v0.13.31).** The CDN flipped again: scheme A (`validfrom/ipa` on ev-h) plays,
+> scheme B (`h/e`) plays on hv-h for some videos and 410s for others, and ev-h serves B's playlists but
+> **470 for every segment** — the v0.13.25 hard-coded hv-h→ev-h swap broke every B page, and a
+> playlist-only probe could not see it. `getStream` now (1) proves the edge with a real chain —
+> master → media playlist → first segment via `_probeOk` (2-byte Range) — on the page's own edge, then
+> the other; (2) re-renders the page (uncached, `_cherryFetchNow`) when neither delivers; (3) keeps the
+> whole chain on ONE route: VPS first, the CF worker when the VPS gets a bot page (~1.5 KB stub, VPS IP
+> flagged after heavy use). Budget ≤ 3 renders via VPS + ≤ 4 via CF. `_apiFetch` retries bypass the
+> page cache too. Harnesses: `tv-ph-renders`, `tv-ph-sign-route`, `tv-ph-page-health`.
 > - The server bucket keeps every distinct query (tombstones are never purged) — tiny records, same
 >   growth model as favorites.
 > Tests: `test/cherry-favsync.test.mjs` → «Sync: recent search queries». Live check (2026-10-08):

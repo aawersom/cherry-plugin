@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.30';
+  var CHERRY_VERSION = '0.13.31';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -254,9 +254,25 @@
     });
   }
 
+  // Can this URL deliver bytes? GET with a 2-byte Range (a CDN that refuses the token answers 4xx
+  // before any body), bounded like every request; the body is dropped, never read.
+  function _probeOk(u) {
+    return new Promise(function (resolve) {
+      var ctl = (typeof AbortController === 'function') ? new AbortController() : null;
+      var timer = setTimeout(function () { try { if (ctl) ctl.abort(); } catch (e) {} resolve(false); }, FETCH_TIMEOUT_MS);
+      fetch(u, { headers: { Range: 'bytes=0-1' }, signal: ctl ? ctl.signal : undefined }).then(function (r) {
+        clearTimeout(timer);
+        try { if (ctl) ctl.abort(); } catch (e) {}
+        resolve(r.ok);
+      }, function () { clearTimeout(timer); resolve(false); });
+    });
+  }
+
   // Short page cache: one view used to download the same page three times (getStream, the
   // related probe, then the «Похожие» grid) — slower, and enough to trip a site's rate limit
   // (pornhub, 2026-10-08). Same url+referer within 3 min shares one request; failures are not kept.
+  // A RETRY that expects a different body (bot page, other signing) must call _cherryFetchNow —
+  // through the cache it would get the same page back.
   var HTML_CACHE_MS = 180000, HTML_CACHE_MAX = 6, _htmlCache = {}, _htmlOrder = [];
 
   // Monotonic count of page requests that FAILED (network, timeout, proxy/site 5xx / 403 …) —
@@ -3619,15 +3635,16 @@ SOURCES.push({
   // route 4× only burned time; alternate native ↔ proxy between attempts instead: both
   // the CF worker and the VPS return the JSON (verified). In the browser cherryFetch is the
   // proxy already, so the alternation is a no-op there.
-  _apiFetch: function(url, tries, viaProxy) {
+  _apiFetch: function(url, tries, viaProxy, retry) {
     var self = this;
-    var get = (viaProxy && _isAndroid()) ? _proxyText(url) : cherryFetch(url);
+    // a retry must reach the network: through the page cache it would re-read the same empty answer
+    var get = (viaProxy && _isAndroid()) ? _proxyText(url) : (retry ? _cherryFetchNow(url) : cherryFetch(url));
     return get.then(function(text) {
       var data; try { data = JSON.parse(text); } catch (e) { data = null; }
       var videos = (data && (data.videos || (data.data && data.data.videos))) || [];
-      if (!videos.length && tries > 0) return self._apiFetch(url, tries - 1, !viaProxy);
+      if (!videos.length && tries > 0) return self._apiFetch(url, tries - 1, !viaProxy, true);
       return videos.map(function(v) { return self._mapVideo(v); });
-    }).catch(function() { if (tries > 0) return self._apiFetch(url, tries - 1, !viaProxy); return []; });
+    }).catch(function() { if (tries > 0) return self._apiFetch(url, tries - 1, !viaProxy, true); return []; });
   },
 
   search: function(query, page, sort) {
@@ -3793,92 +3810,111 @@ SOURCES.push({
     var pageUrl = video.url;
     if (!pageUrl) return Promise.resolve({ url: '', quality: {} });
 
-    // On Android, proxy the video PAGE explicitly with referer=www.pornhub.com so it shares the
-    // SAME proxy exit IP (the worker selects the SOCKS5 port by referer-domain) as the m3u8 +
-    // segments → the ipa=1 IP-bound token stays valid. The page host varies (rt.pornhub.com from
-    // the API, www.pornhub.com from search) — proxying explicitly normalizes both. The catalog
-    // API itself is NOT proxied (device IP) so the listing stays reliable.
-    // The residential proxy flakes (~40% of single fetches return an empty/blocked page → no
-    // flashvars → "load error" on ~half the videos). RETRY up to 4× until flashvars appear.
-    // Pornhub renders each page with ONE of two HLS signings, at random (2026-09, ~2/3 vs 1/3):
-    //   A) `ev-h.phncdn.com` + validfrom/validto/ipa=1/hash — plays (segments 200 when the
-    //      playlist and segments leave from the page-fetch IP with Referer pornhub — the VPS);
-    //   B) `hv-h.phncdn.com` + h=/e= — the edge answers 410 for the playlist and, after the
-    //      ev-h host swap, 404/470 for every segment from every egress we have. Dead for us.
-    // So re-render the page until it carries scheme A (≤7 fetches, ~1 s each via the VPS);
-    // fall back to the last complete page (scheme B → swap + probe below) only if none did.
-    function _isPlayableHls(html) { return /"videoUrl":"[^"]*\.m3u8\\?\?validfrom=/.test(html); }
-    function _fetchPage(tries, last) {
-      var u = _isAndroid() ? buildProxyUrl(pageUrl, 'https://www.pornhub.com/') : pageUrl;
-      return cherryFetch(u).then(function (html) {
-        var ok = !!(html && html.indexOf('flashvars_') !== -1);
-        if (ok && _isPlayableHls(html)) return html;
-        if (tries > 0) return _fetchPage(tries - 1, ok ? html : last);
-        return ok ? html : (last || html);
-      }).catch(function (e) { if (tries > 0) return _fetchPage(tries - 1, last); if (last) return last; throw e; });
+    // ROUTE. The page, its playlists and segments leave through ONE exit: scheme-A tokens carry
+    // ipa=1 (bound to the IP that fetched the page). The VPS first (unmetered video); when pornhub
+    // answers it with a bot page (a ~1.5 KB stub without the player — the VPS IP gets flagged after
+    // heavy use, 2026-10-08), the CF worker (residential exit for pornhub) for the whole chain.
+    // The page host varies (rt. from the API, www. from search) — proxying normalizes both.
+    var REF = 'https://www.pornhub.com/';
+    function _page(viaCF, fresh) {
+      if (_isAndroid()) {
+        var u = buildProxyUrl(pageUrl, REF, viaCF);
+        return fresh ? _cherryFetchNow(u) : cherryFetch(u);
+      }
+      if (viaCF) return _getText(buildProxyUrl(pageUrl, REF, true));
+      // a retry must reach the network: through the page cache it would get the same page back
+      return fresh ? _cherryFetchNow(pageUrl) : cherryFetch(pageUrl);
     }
-    return _fetchPage(6).then(function(html) {
-      var fvMatch = html.match(/var\s+flashvars_\d+\s*=\s*(\{[\s\S]+?\});\s*\n/);
-      if (!fvMatch) return { url: '', quality: {} };
-
+    function _media(html) {
+      var fvMatch = html && html.match(/var\s+flashvars_\d+\s*=\s*(\{[\s\S]+?\});\s*\n/);
+      if (!fvMatch) return null;
       var flashvars;
-      try { flashvars = JSON.parse(fvMatch[1]); } catch (e) { return { url: '', quality: {} }; }
-
-      var defs = flashvars.mediaDefinitions || [];
-      var hlsUrls = {};
-      var mp4Urls = {};
-
-      defs.forEach(function(def) {
+      try { flashvars = JSON.parse(fvMatch[1]); } catch (e) { return null; }
+      var hls = {}, mp4 = {};
+      (flashvars.mediaDefinitions || []).forEach(function(def) {
         var qNum = parseInt(def.quality, 10) || 0;
         if (!qNum) return;
         var vUrl = (def.videoUrl || '').replace(/\\\//g, '/').replace(/\/\/\//g, '//');
         if (!vUrl) return;
         var label = def.quality + 'p';
-        if (def.format === 'hls')      hlsUrls[label] = vUrl;
-        else if (def.format === 'mp4') mp4Urls[label] = vUrl;
+        if (def.format === 'hls')      hls[label] = vUrl;
+        else if (def.format === 'mp4') mp4[label] = vUrl;
       });
+      return { hls: hls, mp4: mp4 };
+    }
 
-      if (Object.keys(mp4Urls).length) {
-        return { url: bestQualityUrl(mp4Urls), quality: mp4Urls };
-      }
-
-      if (Object.keys(hlsUrls).length) {
-        var quality = {};
-        Object.keys(hlsUrls).forEach(function(lbl) {
-          // Always proxy WITH referer=pornhub.com. pornhub is force-proxied on Android too
-          // (its page is fetched via the proxy, so the ipa=1 token binds to the proxy exit IP,
-          // NOT the home IP). The referer makes the worker route the m3u8 + (rewritten) segments
-          // through DJB2(pornhub.com) — the SAME SOCKS5 exit as the page fetch — so the token
-          // stays valid, and the proxy adds CORS so the inner/built-in player (hls.js) can load it.
-          // 2026-09: the flashvars carry HLS ONLY (no mp4) on rotating CDN edges, and the
-          // `hv-h.phncdn.com` edge answers 410 Gone for EVERY playlist (2014–2026 videos, from
-          // CF/VPS/direct alike) while `ev-h.phncdn.com` serves the same path + token (the
-          // h=/e= signature is host- and IP-independent). Map the dead edge away.
-          quality[lbl] = buildProxyUrl(hlsUrls[lbl].replace(/^https?:\/\/hv-h\.phncdn\.com\//, 'https://ev-h.phncdn.com/'), 'https://www.pornhub.com/');
+    // EDGE. The page's tokens play on only one of the two phncdn edges, and pornhub keeps flipping
+    // which: 2026-09 hv-h answered 410 for every playlist and ev-h played; 2026-10-08 scheme A
+    // (validfrom/ipa) plays on ev-h, scheme B (h/e) plays on hv-h for some videos and 410s for others,
+    // while ev-h serves B's playlists but 470 for every SEGMENT. A playlist check can't see that — so
+    // prove master → media playlist → first segment (2 bytes) on the page's own edge, then on the
+    // other. Neither → another render (each render is signed anew; A comes ~1 in 3–5).
+    var EDGE_RX = /^https?:\/\/(hv-h|ev-h)\.phncdn\.com\//;
+    function _otherEdge(u) {
+      return u.replace(EDGE_RX, function (m, e) { return 'https://' + (e === 'hv-h' ? 'ev-h' : 'hv-h') + '.phncdn.com/'; });
+    }
+    function same(u) { return u; }
+    function _firstUri(text, base) {
+      var line = String(text || '').split('\n').map(function (l) { return l.trim(); })
+        .filter(function (l) { return l && l.charAt(0) !== '#'; })[0];
+      if (!line) return '';
+      try { return new URL(line, base).href; } catch (e) { return ''; }
+    }
+    function _delivers(master, viaCF) {
+      var mu = buildProxyUrl(master, REF, viaCF);
+      return _getText(mu).then(function (m) {
+        var next = _firstUri(m, mu);
+        if (!next) return false;
+        // a master lists media playlists; a single-rendition playlist lists segments directly
+        if (!/\.m3u8/i.test(decodeURIComponent(next))) return _probeOk(next);
+        return _getText(next).then(function (t) {
+          var seg = _firstUri(t, next);
+          return seg ? _probeOk(seg) : false;
         });
-        // pornhub's per-quality HLS goes through the proxy (residential exit) which caps
-        // throughput; 1080p (~4 Mbps) can out-run it and buffer. Default to 720p on Android
-        // for smooth start (it still fits the proxy bandwidth) — 1080p stays in the quality
-        // menu for users on a fast link. Browser keeps best (direct/faster path).
-        // PROBE every quality's playlist through the proxy IN PARALLEL (~0.5 s total) and keep
-        // only the ones that answer a real #EXTM3U: hls.js has no second chance after a 410/404
-        // manifest (that was "pornhub не открывается"), and Lampa's player picks the HIGHEST
-        // entry of the map regardless of `url`, so the map itself must contain only playable
-        // playlists. If nothing verifies, hand the unfiltered map (nothing better exists).
-        var labels = Object.keys(quality);
-        return Promise.all(labels.map(function (lbl) {
-          return fetch(quality[lbl]).then(function (r) { return r.ok ? r.text() : ''; })
-            .then(function (t) { return /^\s*#EXTM3U/.test(t); }).catch(function () { return false; });
-        })).then(function (okList) {
-          var playable = {};
-          labels.forEach(function (lbl, i) { if (okList[i]) playable[lbl] = quality[lbl]; });
-          var map = Object.keys(playable).length ? playable : quality;
-          return { url: bestQualityUrl(map), quality: map };
-        });
-      }
+      }).catch(function () { return false; });
+    }
+    // The proxied map on the proven edge + route, then keep only the qualities whose playlist answers:
+    // hls.js has no second chance after a 410/404 manifest, and Lampa plays the HIGHEST entry of the
+    // map regardless of `url`, so the map itself must hold only playable playlists.
+    function _map(hls, edge, viaCF) {
+      var quality = {}, labels = Object.keys(hls);
+      labels.forEach(function (lbl) { quality[lbl] = buildProxyUrl(edge(hls[lbl]), REF, viaCF); });
+      return Promise.all(labels.map(function (lbl) {
+        return fetch(quality[lbl]).then(function (r) { return r.ok ? r.text() : ''; })
+          .then(function (t) { return /^\s*#EXTM3U/.test(t); }).catch(function () { return false; });
+      })).then(function (okList) {
+        var playable = {};
+        labels.forEach(function (lbl, i) { if (okList[i]) playable[lbl] = quality[lbl]; });
+        var m = Object.keys(playable).length ? playable : quality;
+        return { url: bestQualityUrl(m), quality: m };
+      });
+    }
 
-      return { url: '', quality: {} };
-    }).catch(function() { return { url: '', quality: {} }; });
+    var NONE = { url: '', quality: {} };
+    // One render on one route → a proven map, NONE (the page has no playable media at all), or null
+    // (this route refused / no edge delivered → the caller tries another render or route).
+    function _try(viaCF, rendersLeft, fresh) {
+      return _page(viaCF, fresh).then(function (html) {
+        var media = _media(html);
+        if (!media) return null;                      // bot page: don't hammer this route
+        if (Object.keys(media.mp4).length) return { url: bestQualityUrl(media.mp4), quality: media.mp4 };
+        var hls = media.hls;
+        if (!Object.keys(hls).length) return NONE;
+        var top = bestQualityUrl(hls), alt = _otherEdge(top);
+        return _delivers(top, viaCF).then(function (ok) {
+          if (ok) return _map(hls, same, viaCF);
+          return (alt !== top ? _delivers(alt, viaCF) : Promise.resolve(false)).then(function (okAlt) {
+            if (okAlt) return _map(hls, _otherEdge, viaCF);
+            return rendersLeft > 0 ? _try(viaCF, rendersLeft - 1, true) : null;
+          });
+        });
+      }, function () { return null; });
+    }
+    // ≤ 3 renders via the VPS, then ≤ 4 via the CF worker (≤ 7 page fetches per play).
+    return _try(false, 2, false)
+      .then(function (r) { return r || _try(true, 3, true); })
+      .then(function (r) { return r || NONE; })
+      .catch(function () { return NONE; });
   }
 });
 
