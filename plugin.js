@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.29';
+  var CHERRY_VERSION = '0.13.30';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -259,6 +259,16 @@
   // (pornhub, 2026-10-08). Same url+referer within 3 min shares one request; failures are not kept.
   var HTML_CACHE_MS = 180000, HTML_CACHE_MAX = 6, _htmlCache = {}, _htmlOrder = [];
 
+  // Monotonic count of page requests that FAILED (network, timeout, proxy/site 5xx / 403 …) —
+  // a 404/410 is an answer, not a failure. Adapters swallow errors into an empty list (72
+  // `.catch(→ {items:[]})`), so a dead connection looked like «ничего не найдено»; _gridLoad
+  // compares this counter before/after a load to tell «error, retry» from «really empty».
+  var _netFails = 0;
+  function _countFail(err) {
+    if (!/^HTTP 4(04|10)$/.test((err && err.message) || '')) _netFails++;
+    throw err;
+  }
+
   /** @param {string} url @param {string=} referer @returns {Promise<string>} */
   function cherryFetch(url, referer) {
     var key = url + '|' + (referer || ''), hit = _htmlCache[key];
@@ -269,7 +279,7 @@
     _htmlOrder.push(key);
     while (_htmlOrder.length > HTML_CACHE_MAX) delete _htmlCache[_htmlOrder.shift()];
     p.catch(function () { if (_htmlCache[key] && _htmlCache[key].p === p) delete _htmlCache[key]; });
-    return p;
+    return p.catch(_countFail);
   }
 
   function _cherryFetchNow(url, referer) {
@@ -300,9 +310,9 @@
    */
   function _fetchAny(url, referer) {
     if (_isAndroid()) {
-      return _nativeFetch(url).catch(function () { return _proxyTextAny(url, referer); });
+      return _nativeFetch(url).catch(function () { return _proxyTextAny(url, referer); }).catch(_countFail);
     }
-    return _proxyTextAny(url, referer);
+    return _proxyTextAny(url, referer).catch(_countFail);
   }
 
   // Status-tolerant proxy GET with the same failover as _proxyText: a non-2xx page is still
@@ -326,7 +336,7 @@
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body
-    });
+    }).catch(_countFail);
   }
 
   /**
@@ -730,6 +740,58 @@
   };
 
   // ============================================================
+  // AVAIL — is a saved video still playable? (device-local, favorites only)
+  // ============================================================
+  // `cherry_avail` = { 'id@source': { f: consecutive failed checks, t: last check ms } }.
+  // A failed play or background check counts; a success resets it. «Недоступно» needs TWO
+  // consecutive failures (a site's brief rate limit must not label a live video), and a check
+  // that met a network failure is inconclusive (not counted). Not synced: it is an observation of
+  // this device's route, and the bucket schema stays untouched.
+  var Avail = {
+    _key: 'cherry_avail',
+    DEAD_AFTER: 2,
+    OK_RECHECK_MS: 3 * 86400000,      // a playable video is re-checked after 3 days
+    BAD_RECHECK_MS: 10 * 60000,       // a failed one on the next open ≥ 10 min later
+    _map: function () { var m = Lampa.Storage.get(this._key, {}); return (m && typeof m === 'object' && !Array.isArray(m)) ? m : {}; },
+    _k: function (v) { return v.id + '@' + v.source; },
+    dead: function (v) { var e = this._map()[this._k(v)]; return !!(e && e.f >= this.DEAD_AFTER); },
+    due: function (v, now) {
+      var e = this._map()[this._k(v)];
+      if (!e) return true;
+      return (now - e.t) > (e.f ? this.BAD_RECHECK_MS : this.OK_RECHECK_MS);
+    },
+    /** @param {VideoCard} v @param {boolean} ok @returns {boolean} dead after this record */
+    record: function (v, ok) {
+      var m = this._map(), k = this._k(v), e = m[k] || { f: 0, t: 0 };
+      e.f = ok ? 0 : (e.f || 0) + 1;
+      e.t = Date.now();
+      m[k] = e;
+      Lampa.Storage.set(this._key, m);
+      return e.f >= this.DEAD_AFTER;
+    },
+    /** Drop entries of videos no longer in favorites (keeps the map bounded). */
+    prune: function (keep) {
+      var m = this._map(), want = {}, self = this, changed = false;
+      keep.forEach(function (v) { want[self._k(v)] = 1; });
+      Object.keys(m).forEach(function (k) { if (!want[k]) { delete m[k]; changed = true; } });
+      if (changed) Lampa.Storage.set(this._key, m);
+    }
+  };
+
+  // «Найти копию»: the same video re-uploaded elsewhere — an all-channels search on the title's
+  // distinctive words (up to 8, relevance-ranked by the global search), not the 4-word «Похожие названия».
+  function _findCopy(element) {
+    Lampa.Activity.push({
+      component:   'cherry_grid',
+      title:       Lampa.Lang.translate('cherry_find_copy') + ': ' + element.title,
+      source_id:   element.source,
+      query:       _searchKeywords(_cleanTitle(element.title), 8),
+      all_sources: true,
+      page:        1
+    });
+  }
+
+  // ============================================================
   // SYNC  — PIN-based cross-device favorites sync via the CF Worker.
   // ============================================================
   // One POST to `${PROXY_URL}/favs?pin=<pin>&key=<proxyKey>` does pull+merge+push:
@@ -852,6 +914,15 @@
     return null;
   }
 
+  // «Все видео» promises the newest videos: the channel's «Свежее» sort, wherever it sits in the
+  // list (sorts[0] is «По популярности» on youjizz, xhamster, huyamba, ebalovo, porno666, lenkino,
+  // pornobriz, ebun). No such sort → '' = the site's own default listing (home / latest-updates).
+  function _latestSort(src) {
+    var sorts = (src && src.cfg && src.cfg.sorts) || [];
+    for (var i = 0; i < sorts.length; i++) if (sorts[i].label === 'Свежее') return sorts[i].id;
+    return '';
+  }
+
   // Sources offered to the user — tiles, «Все видео» / global search fan-out, health dots.
   // A `disabled: true` adapter (site down) stays registered so favorites/history/related
   // for its cards still resolve through sourceById, but it is not shown as a channel.
@@ -890,6 +961,7 @@
 
     _streamWithRetry(video, source).then(function (stream) {
       if (gen !== _playGen) return;
+      if (Fav.has(video)) try { Avail.record(video, true); } catch (e) {}
       var quality = stream.quality || {};
       // The QUALITY MAP is the contract: it holds only what may be played, and its best entry is
       // the default (Lampa itself switches to the entry matching «video_quality_default», 1080 by
@@ -1001,7 +1073,24 @@
     }).catch(function (err) {
       if (gen !== _playGen) return;
       console.warn('[Cherry] getStream error:', err);
-      Lampa.Noty.show(Lampa.Lang.translate('cherry_error'), { style: 'warn' });
+      if (!Fav.has(video)) { Lampa.Noty.show(Lampa.Lang.translate('cherry_error'), { style: 'warn' }); return; }
+      // A saved video that does not play: say so and offer the way out right here.
+      try { Avail.record(video, false); } catch (e) {}
+      var back = function () { try { Lampa.Controller.toggle('content'); } catch (e) {} };
+      Lampa.Select.show({
+        title: Lampa.Lang.translate('cherry_unavailable_title'),
+        items: [
+          { title: Lampa.Lang.translate('cherry_find_copy'), action: 'copy' },
+          { title: Lampa.Lang.translate('cherry_rem_fav_action'), action: 'remove' },
+          { title: Lampa.Lang.translate('cherry_close'), action: 'close' }
+        ],
+        onSelect: function (item) {
+          back();
+          if (item.action === 'copy') _findCopy(video);
+          else if (item.action === 'remove') { Fav.toggle(video); Lampa.Noty.show(Lampa.Lang.translate('cherry_rem_fav')); }
+        },
+        onBack: back
+      });
     });
   }
 
@@ -1304,6 +1393,16 @@
         return;
       }
 
+      // From here on every mode hits the network. An EMPTY result while page requests failed is a
+      // load error («Не удалось загрузить» + Lampa's «Обновить»), not «ничего не найдено». A single
+      // channel needs one failure; the all-sources fan-out (below) only when about every channel
+      // failed (no connection) — one dead site among 27 must not hide a real «nothing found».
+      var _fails0 = _netFails, _failNeed = 1, _ok = resolve;
+      resolve = function (items, total) {
+        if ((!items || !items.length) && _netFails - _fails0 >= _failNeed) { reject(new Error('network')); return; }
+        _ok(items, total);
+      };
+
       // «Похожие» — infinite scroll (REQ: scroll everywhere). The site's own related
       // block (getRelated) is a FIXED list that ignores `page`, so on its own it can't
       // scroll. So the grid continues into the channel's OWN feed, which paginates
@@ -1374,6 +1473,7 @@
       if ((object.all_sources && object.query) || object.all_videos) {
         var _act = _activeSources();
         if (!_act.length) { resolve([], 1); return; }
+        _failNeed = _act.length;
         var _isSearch = !!object.query;
         // A slow / hung source (or a stalled proxy) must not block the page: each source races a
         // hard cap and settles to an empty batch on timeout.
@@ -1453,7 +1553,7 @@
           var _q = (_enQuery && !_RU_SOURCES[src.id]) ? _enQuery : object.query;
           var fetch = (_isSearch
             ? src.search(_q, page)
-            : src.browse('', page, (src.cfg && src.cfg.sorts && src.cfg.sorts[0] && src.cfg.sorts[0].id) || '')
+            : src.browse('', page, _latestSort(src))
           ).then(function (r) {
             r = r || { items: [] };
             r._srcId = src.id;
@@ -1832,7 +1932,45 @@
         : (object.is_favorites ? 'cherry_fav_empty_hint' : (object.query ? 'cherry_search_empty' : 'cherry_empty'))) };
     }
 
+    // Favorites: «Недоступно» badge on cards whose video stopped playing, kept current by a light
+    // background check while the screen is open (2 at a time, ≤ 20 per open, due cards only).
+    var _favCards = {};           // 'id@source' → card jQuery, for live badge updates
+    var _availStop = false;
+    function _availBadge($card, dead) {
+      $card.find('.cherry-dead').remove();
+      if (dead) $card.find('.card__view').append('<div class="cherry-dead">' + Lampa.Lang.translate('cherry_unavailable') + '</div>');
+    }
+    function _availCheck() {
+      if (!object.is_favorites) return;
+      var favs = Fav.all(), now = Date.now();
+      Avail.prune(favs);
+      var queue = favs.filter(function (v) { return Avail.due(v, now); }).slice(0, 20);
+      function next() {
+        if (_availStop || !queue.length) return;
+        var v = queue.shift(), src = sourceById(v.source);
+        if (!src) { next(); return; }
+        var f0 = _netFails;
+        Promise.race([
+          Promise.resolve(src.getStream(v)).catch(function () { return null; }),
+          new Promise(function (r) { setTimeout(function () { r(null); }, 30000); })
+        ]).then(function (st) {
+          var ok = !!(st && (st.url || bestQualityUrl(st.quality)));
+          // A miss while page requests failed says nothing about the video → not counted.
+          if (ok || _netFails === f0) {
+            var dead = Avail.record(v, ok), $c = _favCards[v.id + '@' + v.source];
+            if ($c) _availBadge($c, dead);
+          }
+          next();
+        });
+      }
+      next(); next();
+    }
+
     function _card(ui, element) {
+      if (object.is_favorites && element.id != null) {
+        _favCards[element.id + '@' + element.source] = ui.html;
+        _availBadge(ui.html, Avail.dead(element));
+      }
       ui.onEnter(function () {
         _stopCurrentPreview();
         // Model card → open that performer's videos via the model_url grid path.
@@ -1953,6 +2091,11 @@
             : Lampa.Lang.translate('cherry_add_fav_action'),
           action: 'fav'
         });
+        // A saved video: look for the same upload on the other channels (first when it is dead).
+        if (isFav) {
+          var copyItem = { title: Lampa.Lang.translate('cherry_find_copy'), action: 'copy' };
+          if (Avail.dead(element)) items.unshift(copyItem); else items.push(copyItem);
+        }
         // Browse all videos of the card's performer (only sources that surface
         // a listing-level model field — currently pornhub).
         if (element.model && element.model.name) {
@@ -1973,6 +2116,9 @@
                   : Lampa.Lang.translate('cherry_rem_fav')
               );
               Lampa.Controller.toggle('content');
+            } else if (item.action === 'copy') {
+              Lampa.Controller.toggle('content');
+              _findCopy(element);
             } else if (item.action === 'similar') {
               var query = _searchKeywords(element.title, 4);
               Lampa.Activity.push({
@@ -2033,8 +2179,11 @@
       cols: 5, rootClass: 'cherry-cat', skeleton: true,   // 16:9 landscape cards, 5 per row
       load: _load, empty: _emptyState, card: _card,
       right: openActionsMenu,          // RIGHT at the edge → Поиск / Сортировка / Категории
-      pause: _stopCurrentPreview       // no hover preview survives a pause / stop / destroy
+      // no hover preview survives a pause / stop / destroy; the availability check stops with it
+      pause: function () { _stopCurrentPreview(); _availStop = true; }
     });
+    // Background availability check once the favorites grid is on screen.
+    if (object.is_favorites) setTimeout(_availCheck, 3000);
     // P3.4: the persistent header filter button (addFilterButton) opens the same menu.
     comp.openActionsMenu = openActionsMenu;
     return comp;
@@ -2293,6 +2442,7 @@
       /* ---- P3.3 Source attribution badge + duration/views (3 corners max) --- */
       /* Larger + bolder for 10-foot legibility; sit above the scrim (z-index:2). */
       '.cherry-cat .cherry-src-badge{position:absolute;top:.4em;left:.5em;z-index:2;background:rgba(0,0,0,.85);color:#fff;font-size:.85em;font-weight:700;padding:.12em .5em;border-radius:.25em;max-width:80%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+      '.cherry-cat .cherry-dead{position:absolute;top:.4em;right:.5em;z-index:3;background:rgba(170,30,30,.92);color:#fff;font-size:.95em;font-weight:700;padding:.18em .55em;border-radius:.25em;}',
       '.cherry-cat .cherry-dur{position:absolute;bottom:.4em;right:.5em;z-index:2;background:rgba(0,0,0,.8);color:#fff;font-size:1em;font-weight:700;padding:.18em .55em;border-radius:.25em;}',
       '.cherry-cat .cherry-views{position:absolute;bottom:.4em;left:.5em;z-index:2;background:rgba(0,0,0,.8);color:#fff;font-size:1em;font-weight:700;padding:.18em .55em;border-radius:.25em;}',
 
@@ -2347,6 +2497,10 @@
       cherry_loading:     { ru: 'Загрузка…',           en: 'Loading…'           },
       cherry_error:       { ru: 'Ошибка загрузки',     en: 'Load error'         },
       cherry_load_error:  { ru: 'Не удалось загрузить. Проверьте соединение.', en: 'Failed to load. Check your connection.' },
+      cherry_unavailable:       { ru: 'Недоступно',            en: 'Unavailable'          },
+      cherry_unavailable_title: { ru: 'Видео недоступно',      en: 'Video unavailable'    },
+      cherry_find_copy:         { ru: 'Найти копию',           en: 'Find a copy'          },
+      cherry_close:             { ru: 'Закрыть',               en: 'Close'                },
       cherry_add_fav:        { ru: 'Добавлено в избранное',  en: 'Added to favorites'    },
       cherry_rem_fav:        { ru: 'Убрано из избранного',   en: 'Removed from favorites' },
       cherry_add_fav_action: { ru: 'Добавить в избранное',   en: 'Add to favorites'       },
