@@ -1,15 +1,17 @@
-(async function () {
-  // Where does pornhub getStream spend its time? Times the page fetch and the full getStream for a few
-  // favorites (read-only).   node test/tv-page-run.mjs test/tv-ph-timing.page.js x
-  var C = window.__C, ph = C.SOURCES.filter(function (x) { return x.id === 'pornhub'; })[0];
-  var favs = C.Fav.all().filter(function (v) { return v.source === 'pornhub'; }).slice(0, 5), out = [];
-  function cap(p, ms) { return Promise.race([Promise.resolve(p).then(function (v) { return v; }, function (e) { return { err: String(e) }; }), new Promise(function (r) { setTimeout(function () { r({ err: 'cap' }); }, ms); })]); }
-  for (var i = 0; i < favs.length; i++) {
-    var v = favs[i], t0 = Date.now();
-    var h = await cap(C.cherryFetch(v.url), 120000), t1 = Date.now();
-    var st = await cap(ph.getStream(v), 180000), t2 = Date.now();
-    out.push({ id: v.url.split('viewkey=')[1], pageMs: t1 - t0, pageLen: typeof h === 'string' ? h.length : h, streamMs: t2 - t1,
-      q: st && Object.keys(st.quality || {}), err: st && st.err });
-  }
+(async function (arg) {
+  // Time the pornhub webmasters API by route from the device: pure native, cherryFetch
+  // (native → proxy on error), and the proxy directly. Explains the first-screen latency.
+  //   node test/tv-page-run.mjs test/tv-ph-timing.page.js run
+  var C = window.__C;
+  var url = 'https://www.pornhub.com/webmasters/search?search=&page=1&ordering=mostviewed&thumbsize=medium_hd';
+  function cnt(t) { try { var d = JSON.parse(t); return (d.videos || []).length; } catch (e) { return 'nojson:' + String(t).slice(0, 40).replace(/\s+/g, ' '); } }
+  function timed(p) { var t0 = Date.now(); return p.then(function (t) { return { ms: Date.now() - t0, videos: cnt(t) }; }, function (e) { return { ms: Date.now() - t0, err: String(e && e.status || e).slice(0, 60) }; }); }
+  function nat(u) { return new Promise(function (res, rej) { var r = new Lampa.Reguest(); r.native(u, function (d) { r.clear(); res(String(d)); }, function (e) { r.clear(); rej(e); }, false, { dataType: 'text', timeout: 15000 }); }); }
+  var out = {};
+  out.native = await timed(nat(url));
+  out.cherryFetch = await timed(C.cherryFetch(url));
+  out.proxy = await timed(fetch(C.buildProxyUrl(url)).then(function (r) { return r.text(); }));
+  var s = C.SOURCES.filter(function (x) { return x.id === 'pornhub'; })[0];
+  var t0 = Date.now(); var b = await s.browse('', 1, 'mostviewed'); out.browse = { ms: Date.now() - t0, n: (b.items || []).length };
   return out;
 })
