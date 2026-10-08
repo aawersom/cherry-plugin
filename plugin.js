@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.31';
+  var CHERRY_VERSION = '0.13.32';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -1352,6 +1352,9 @@
     // Mutate in place so id/url/source/preview/model/views/duration ride along
     // and surface as `element` in cardRender. source MUST be set (Fav 7-field).
     function toCard(v) {
+      // One place for every adapter's titles: entities, mojibake («Saba â€“ Homemade»), zero-width
+      // spaces («Fiona ​sprouts») — parsers fixed one site at a time; the screen fixes all.
+      v.title  = _cleanTitle(v.title);
       v.img    = v.thumb;
       v.poster = v.thumb;
       // HD/4K no longer rides Lampa's native quality slot — it is merged into the
@@ -1461,7 +1464,9 @@
             ? relSrc.search(relKw, cp).then(function (r) { return (r && r.items) || []; }).catch(function () { return []; })
             : Promise.resolve([]);
           searchP.then(function (items) {
-            if (items && items.length) { _relDone(items); return; }
+            // the site's search order is by date/popularity: put the cards that share the seed's
+            // title words first (same ranker as search; a no-op for a short or empty list)
+            if (items && items.length) { _relDone(_rankByRelevance(items, relKw)); return; }
             if (!relSrc.browse) { resolve([], page); return; }
             relSrc.browse('', cp, relSort).then(function (r) { _relDone((r && r.items) || []); })
               .catch(function () { resolve([], page); });
@@ -1507,6 +1512,7 @@
         // if the title contains any member. BILINGUAL: a Russian word expands to [ru, stem, …EN] so
         // the same groups filter+rank Russian-title and English-title results alike.
         var groups = object.query ? _searchGroups(object.query) : [];
+        var _isCodeQuery = !!object.query && /[a-z]{2,}[\s-]?\d{2,}/i.test(object.query);
         function _groupHits(title) {
           var t = _normText(title), n = 0;
           for (var g = 0; g < groups.length; g++) {
@@ -1527,7 +1533,10 @@
           var picked = r.items;
           if (groups.length) {
             var matched = r.items.filter(function (v) { return _groupHits(v.title) === groups.length; });
-            if (_TAG_SEARCH[r._srcId]) picked.forEach(function (v) { v._siteRelevant = true; });
+            // A code / catalogue number (SSIS-839, MOGI 159) is matched literally or not at all: a
+            // tag search can't «relate» to it, so only titles that carry it are kept.
+            if (_isCodeQuery) picked = matched;
+            else if (_TAG_SEARCH[r._srcId]) picked.forEach(function (v) { v._siteRelevant = true; });
             else if (matched.length) picked = matched;
           }
           // _srcRank = position within its own source: score ties INTERLEAVE across sources.
@@ -3026,7 +3035,8 @@ function _fixMojibake(str) {
 // A stored card title as it should be shown: entities decoded, mojibake repaired, and the
 // «&#'s» leftover of a half-stripped «&#039;» (youjizz titles saved before v0.13.26) mended.
 function _cleanTitle(str) {
-    return _fixMojibake(_decodeHtml(String(str == null ? '' : str).replace(/&#'/g, "'")));
+    return _fixMojibake(_decodeHtml(String(str == null ? '' : str).replace(/&#'/g, "'")))
+        .replace(/[​-‍⁠﻿]/g, '');
 }
 
 function _decodeHtml(str) {
@@ -3262,9 +3272,11 @@ function _rankByRelevance(items, query) {
         .map(function (v, i) {
             var s = _relScore(v.title, groups, phrase, firstWord);
             // Site-ranked results from tag-search sources: the site matched the query (tags), only
-            // the title lacks the words — rank them with plain full matches, just below phrase/
-            // lead-boosted ones, instead of sinking them with the missing-group penalty.
-            if (v._siteRelevant) s = Math.max(s, groups.length * 10);
+            // the title lacks the words. They rank BELOW every title that names the whole query
+            // (worst full match ≈ groups*10 − 2) but above partial matches: ranked level with full
+            // matches they filled a third of the first screen with titles like «slippery pleasures»
+            // for «азиатка массаж» (owner 2026-10-08: «низкое качество поиска»).
+            if (v._siteRelevant) s = Math.max(s, groups.length * 10 - 5);
             return { v: v, s: s, i: i };
         })
         // Ties: interleave across sources (position within own source), then original order.
