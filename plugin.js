@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.27';
+  var CHERRY_VERSION = '0.13.28';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -463,6 +463,11 @@
       var list = Lampa.Storage.get(this._key, []);
       if (!Array.isArray(list)) return [];
       var migrated = false;
+      // Search-query records share the sync bucket; a v0.13.27-or-older device merges them in
+      // as favorites — drop them here so they never show as cards (and heal such a device).
+      var n = list.length;
+      list = list.filter(function (v) { return !(v && v.source === _RECENT_SRC); });
+      if (list.length !== n) migrated = true;
       var recs = list.map(function (v) {
         if (v && typeof v.added === 'number' && typeof v.deleted === 'number') return v;
         migrated = true;
@@ -742,9 +747,10 @@
       self._running = true;
       var url = PROXY_URL + '/favs?pin=' + encodeURIComponent(pin) +
                 '&key=' + encodeURIComponent(getProxyKey());
-      var localCount = Fav._records().length;
-      console.log('[Cherry] Sync.run: POST', url, '| local records =', localCount);
-      return cherryPostJson(url, { records: Fav._records() })
+      // One bucket carries favorites AND recent search queries (records with source _RECENT_SRC).
+      var local = Fav._records().concat(_recentRecords());
+      console.log('[Cherry] Sync.run: POST', url, '| local records =', local.length);
+      return cherryPostJson(url, { records: local })
         .then(function (res) {
           var got = (res && Array.isArray(res.records)) ? res.records.length : -1;
           console.log('[Cherry] Sync.run: server responded, records =', got);
@@ -752,7 +758,11 @@
           // ONCE from the merged list (_gridLoad); rebuilding an already-built grid from
           // inside the sync (the old _refreshGrid → comp.create()) mounted a second
           // card set / left the empty-state box behind and dropped the D-pad focus.
-          if (res && Array.isArray(res.records)) Fav._merge(res.records);
+          if (res && Array.isArray(res.records)) {
+            var isRq = function (r) { return r && r.source === _RECENT_SRC; };
+            Fav._merge(res.records.filter(function (r) { return !isRq(r); }));
+            _recentMerge(res.records.filter(isRq));
+          }
           if (report) {
             var n = Fav.all().length;
             Lampa.Noty.show(Lampa.Lang.translate('cherry_sync_ok') + ' (' + n + ')');
@@ -3035,17 +3045,61 @@ var _POPULAR_TERMS = ['мамка', 'молодая', 'анал', 'блонди�
 // Recent queries (last 10) — kept DISCREET on purpose: they surface ONLY inside Cherry's own
 // search picker (never on the Lampa home or its global search — Cherry's Input uses nosave, so
 // Lampa's search history never records them), under a neutral storage key, without a heading,
-// with a one-tap clear. Lampa.Storage is device-local.
-var _RECENT_KEY = 'cherry_rq', _RECENT_MAX = 10;
-function _recentQueries() { var l = Lampa.Storage.get(_RECENT_KEY, []); return Array.isArray(l) ? l : []; }
+// with a one-tap clear. Shared across devices through the favorites PIN bucket (Sync.run): each
+// query is a record { id: normalized query, source: _RECENT_SRC, title, added, deleted } that the
+// worker merges exactly like a favorite (last write wins, a clear is a tombstone) — no worker change.
+var _RECENT_KEY = 'cherry_rq', _RECENT_MAX = 10, _RECENT_KEEP = 50, _RECENT_SRC = '__rq';
+function _recentTs(r) { return Math.max(r.added || 0, r.deleted || 0); }
+// Raw records; plain strings from before the sync (v0.13.27 and older) become low-priority
+// records in their old order, so any real action on another device wins over them.
+function _recentRecords() {
+    var l = Lampa.Storage.get(_RECENT_KEY, []);
+    if (!Array.isArray(l)) return [];
+    return l.map(function (x, i) {
+        if (x && typeof x === 'object') return x;
+        var q = String(x || '').trim();
+        return q ? { id: _normText(q) || q.toLowerCase(), source: _RECENT_SRC, title: q, added: l.length - i, deleted: 0 } : null;
+    }).filter(function (r) { return r && r.id; });
+}
+function _recentSave(recs) {
+    recs.sort(function (a, b) { return _recentTs(b) - _recentTs(a); });
+    Lampa.Storage.set(_RECENT_KEY, recs.slice(0, _RECENT_KEEP));
+}
+function _recentQueries() {
+    return _recentRecords().filter(function (r) { return r.added > r.deleted; })
+        .sort(function (a, b) { return b.added - a.added; })
+        .slice(0, _RECENT_MAX).map(function (r) { return r.title; });
+}
 function _recentAdd(q) {
     q = String(q || '').trim();
     if (!q) return;
-    var l = _recentQueries().filter(function (x) { return _normText(x) !== _normText(q); });
-    l.unshift(q);
-    Lampa.Storage.set(_RECENT_KEY, l.slice(0, _RECENT_MAX));
+    var id = _normText(q) || q.toLowerCase();
+    var recs = _recentRecords();
+    // Strictly increasing stamps: two searches in the same millisecond still keep their order.
+    var now = Math.max(Date.now(), recs.reduce(function (m, r) { return Math.max(m, _recentTs(r)); }, 0) + 1);
+    recs = recs.filter(function (r) { return r.id !== id; });
+    recs.push({ id: id, source: _RECENT_SRC, title: q, added: now, deleted: 0 });
+    _recentSave(recs);
+    try { Sync.schedule(); } catch (e) {}
 }
-function _recentClear() { Lampa.Storage.set(_RECENT_KEY, []); }
+// Remote records from the bucket: per id the newer of max(added, deleted) wins (= worker's rule).
+function _recentMerge(remote) {
+    if (!Array.isArray(remote) || !remote.length) return;
+    var byId = {};
+    _recentRecords().forEach(function (r) { byId[r.id] = r; });
+    remote.forEach(function (r) {
+        if (r && r.id && r.source === _RECENT_SRC && (!byId[r.id] || _recentTs(r) > _recentTs(byId[r.id]))) byId[r.id] = r;
+    });
+    _recentSave(Object.keys(byId).map(function (k) { return byId[k]; }));
+}
+function _recentClear() {
+    var now = Date.now();
+    _recentSave(_recentRecords().map(function (r) {
+        if (r.added > r.deleted) r.deleted = Math.max(now, r.added + 1);
+        return r;
+    }));
+    try { Sync.schedule(); } catch (e) {}
+}
 
 // Voice availability — two distinct mechanisms:
 //  • NATIVE (LAMPA Android TV app): recognition runs in the app via AndroidJS.voiceStart()
