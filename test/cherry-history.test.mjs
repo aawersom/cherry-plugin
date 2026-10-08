@@ -36,6 +36,8 @@ function sliceObject(src, decl) {
 }
 
 const HIST_SRC = sliceObject(SRC, 'var Hist = ');
+// Hist.all() repairs titles on read with the real helpers (_cleanTitle → _decodeHtml/_fixMojibake).
+const TITLE_SRC = SRC.slice(SRC.indexOf('var _HTML_ENTITIES'), SRC.indexOf('// ---- Search text normalization'));
 
 function makeSandbox(opts) {
   opts = opts || {};
@@ -47,7 +49,7 @@ function makeSandbox(opts) {
     }
   };
   // eslint-disable-next-line no-new-func
-  var factory = new Function('Lampa', HIST_SRC + '\nreturn Hist;');
+  var factory = new Function('Lampa', TITLE_SRC + '\n' + HIST_SRC + '\nreturn Hist;');
   var Hist = factory(Lampa);
   return { Hist: Hist, store: store };
 }

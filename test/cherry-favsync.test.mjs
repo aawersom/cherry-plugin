@@ -38,6 +38,8 @@ function sliceObject(src, decl) {
 
 const FAV_SRC  = sliceObject(SRC, 'var Fav = ');
 const SYNC_SRC = sliceObject(SRC, 'var Sync = ');
+// Fav.all() repairs titles on read with the real helpers (_cleanTitle → _decodeHtml/_fixMojibake).
+const TITLE_SRC = SRC.slice(SRC.indexOf('var _HTML_ENTITIES'), SRC.indexOf('// ---- Search text normalization'));
 // Recent-query helpers share the bucket with favorites (Sync.run sends/splits both).
 const RECENT_SRC = sliceObject(SRC, 'function _normText(') + '\n'
   + SRC.slice(SRC.indexOf('var _RECENT_KEY'), SRC.indexOf('function _recentClear'))
@@ -76,7 +78,7 @@ function makeSandbox(opts) {
   // eslint-disable-next-line no-new-func
   var factory = new Function(
     'Lampa', 'PROXY_URL', 'getProxyKey', 'cherryPostJson', 'console',
-    RECENT_SRC + '\n' + FAV_SRC + '\n' + SYNC_SRC
+    TITLE_SRC + '\n' + RECENT_SRC + '\n' + FAV_SRC + '\n' + SYNC_SRC
       + '\nreturn { Fav: Fav, Sync: Sync, Recent: { add: _recentAdd, get: _recentQueries, clear: _recentClear, records: _recentRecords } };'
   );
   var objs = factory(Lampa, PROXY_URL, getProxyKey, cherryPostJson, consoleObj);

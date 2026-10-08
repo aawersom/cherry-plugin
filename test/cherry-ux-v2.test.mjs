@@ -581,7 +581,7 @@ describe('plugin.js source assertions (anti-drift)', () => {
     expect(SRC).toMatch(/getRelated:\s*_relatedFrom\(_3movsCards\)/);
   });
   it('per-site getRelated: shared _xvideosRelated helper parses video_related JSON', () => {
-    expect(SRC).toMatch(/function _xvideosRelated\(html, host, sourceId\)/);
+    expect(SRC).toMatch(/function _xvideosRelated\(html, host, sourceId, idPrefix\)/);
     expect(SRC).toMatch(/video_related\\s\*=\\s\*\(\\\[\[\\s\\S\]\*\?\\\]\)/);
   });
   it('per-site getRelated: eporner _epornerRelated parses mbcontent cards', () => {
@@ -589,10 +589,10 @@ describe('plugin.js source assertions (anti-drift)', () => {
     expect(SRC).toMatch(/class="mbcontent"/);
   });
   it('per-site getRelated: xvideos uses _xvideosRelated (NOT the thumb-block parser)', () => {
-    expect(SRC).toMatch(/_xvideosRelated\(html, 'https:\/\/www\.xvideos\.com', 'xvideos'\)/);
+    expect(SRC).toMatch(/_xvideosRelated\(html, 'https:\/\/www\.xvideos\.com', 'xvideos', 'xv'\)/);
   });
   it('per-site getRelated: xnxx wired via _xvideosRelated', () => {
-    expect(SRC).toMatch(/_xvideosRelated\(html, 'https:\/\/www\.xnxx\.com', 'xnxx'\)/);
+    expect(SRC).toMatch(/_xvideosRelated\(html, 'https:\/\/www\.xnxx\.com', 'xnxx', 'xnxx-'\)/);
   });
   it('per-site getRelated: eporner wired via _epornerRelated', () => {
     expect(SRC).toMatch(/_epornerRelated\(html\)\.filter/);

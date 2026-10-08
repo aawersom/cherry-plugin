@@ -7,7 +7,7 @@ Lampa components (`cherry_main`, `cherry_grid`), routes all external HTTP throug
 Cloudflare Worker proxy, and exposes a uniform `SourceAdapter` interface over 25 heterogeneous
 backends.
 
-Entry file: `plugin.js` (single-file, ~7800 lines, v0.13.28)
+Entry file: `plugin.js` (single-file, ~7900 lines, v0.13.29)
 
 > **Line references (`plugin.js:NNN`) below are historical** — the file roughly doubled since they
 > were written. Search by symbol name (e.g. `function CherryGrid(`, `function buildProxyUrl(`,
@@ -378,6 +378,27 @@ is available in every mode — the mitigation for sites whose server sort is a n
 >   active. Legacy string lists (≤ v0.13.27) migrate on read as low-priority records (`added` = 1…n).
 > - Old plugins (≤ v0.13.27) would merge `__rq` records into favorites; `Fav._records()` drops
 >   `source === '__rq'` and rewrites storage, so such a device heals on update.
+
+> **Stability + correctness pass (v0.13.29).** From the 2026-10-08 audit, user surface only:
+> - **Bounded requests.** `_getText(u, opts)` is the one proxy request primitive (`_proxyText`,
+>   `_proxyTextAny`, `cherryPost`): `FETCH_TIMEOUT_MS` = 15 s over headers AND body, AbortController
+>   when present; non-2xx rejects `Error('HTTP n')` carrying `.body`, so status-tolerant callers keep
+>   the page. A timeout falls through to the existing secondary→CF failover. Native path keeps its 4 s.
+> - **Page cache.** `cherryFetch` shares one request per `url|referer` for 3 min (6 pages max, failures
+>   dropped). One view used to download the same page 3× (getStream → related probe → «Похожие»).
+> - **Play.** `_streamWithRetry` retries `getStream` once (1.5 s) on a throw OR an empty stream;
+>   `_playGen` lets only the latest `playVideo` open the player (double Enter = one player, right card).
+> - **Fav.toggle** stamps never go backwards (`max(now, other stamp + 1)`), so a record written by a
+>   clock-ahead device stays removable/re-addable.
+> - **Titles repaired on read** in `Fav.all()` / `Hist.all()` via `_cleanTitle` (entities, the «&#'s»
+>   leftover, Latin-1 and now CJK mojibake — `_fixMojibake` lead range U+00C2…U+00F4); storage is not
+>   rewritten (no LWW race).
+> - **xvideos/xnxx «Похожие» ids** carry the feed prefix (`'xv'` / `'xnxx-'` + eid) — a bare eid gave
+>   the same video two ids (Fav/Hist/progress/dedup).
+> - **Client sort** (`_applyClientSort`) now applies to favorites, history and «Похожие».
+> - **spankbang `disabled: true`** — Cloudflare challenge on every proxy tier; saved cards still resolve.
+> Verified on the stand: `test/tv-v0129-check.page.js` (titles, related ids, cache, double Enter),
+> `tv-verify-play` on 10 channels, `tv-full-audit` on all channels; unit `cherry-stability-0.13.29.test.mjs`.
 > - The server bucket keeps every distinct query (tombstones are never purged) — tiny records, same
 >   growth model as favorites.
 > Tests: `test/cherry-favsync.test.mjs` → «Sync: recent search queries». Live check (2026-10-08):
