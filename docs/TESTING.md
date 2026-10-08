@@ -3,7 +3,7 @@
 ## Текущая архитектура тестов
 
 ```
-npx vitest run                       → ~698 unit-тестов (mock-based, без сети, на пуш)
+npx vitest run                       → 836 unit-тестов (v0.13.28; mock-based, без сети, на пуш)
 npm run test:ui  (node ui-e2e.mjs)   → UI/UX E2E в реальной Lampa (Playwright) — Фаза 3
 node test/stream-matrix.cjs          → матрица стриминга (browse+getStream+reach+affinity) — Фаза 1
 node test/stream-matrix.cjs --cats   → свип всех категорий (мёртвые/разреженные слаги) — Фаза 2
@@ -170,7 +170,7 @@ KVS-источники (Tier B) выдают токены, привязанны�
 
 ## Unit-тесты (vitest)
 
-~463 теста в 5 файлах (default-паттерн `**/*.test.{js,mjs}`):
+Тесты в 7 файлах (default-паттерн `**/*.test.{js,mjs}`; счётчики it() ниже — на момент написания, итог см. в конце раздела):
 
 | Файл | Тестируемые функции | ~it()/test() |
 |---|---|---|
@@ -178,6 +178,7 @@ KVS-источники (Tier B) выдают токены, привязанны�
 | `test/worker-utils.test.js` | `isPrivateHostname`, `timingSafeEqual` (падает в Node: импортит `cloudflare:sockets` — это проверка воркера, не плагина) | 22 |
 | `test/cherry-engine.test.mjs` | `_attr`, `_decodeHtml`, `_kvsPages`, `_kvsParseCards`, `_kvsEngine`, `_buildCatUrl`, `_cats` | 220 |
 | `test/cherry-stream-fix.test.mjs` | stream extraction fixes (porndig srcSet, KVS get_file strip, Playerjs, FluidPlayer) | 32 |
+| `test/cherry-favsync.test.mjs` | PIN-синхронизация: `Fav` (миграция, tombstones, LWW-merge), `Sync` (PIN, POST, debounce), **недавние запросы в общем бакете (v0.13.28)** — реальные объекты из plugin.js в песочнице | ~40 |
 | `test/cherry-history.test.mjs` | watch history / resume («РП» tile last, is_history grid, progress bar) | 26 |
 | `test/cherry-ux-v2.test.mjs` | UX + anti-drift (sorts/categories, px Android branch, force-proxy hosts, pornhub weekly default, HLS-first xvideos/xnxx) | 280 |
 
@@ -187,7 +188,7 @@ KVS-источники (Tier B) выдают токены, привязанны�
 
 ```
 npx vitest run
-# Ожидаем: 698 passed (worker-utils.test.js — отдельный fail: cloudflare:sockets недоступен в Node)
+# Ожидаем: 836 passed (v0.13.28; worker-utils.test.js — отдельный fail: cloudflare:sockets недоступен в Node)
 ```
 
 ---

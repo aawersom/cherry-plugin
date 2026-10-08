@@ -7,7 +7,11 @@ Lampa components (`cherry_main`, `cherry_grid`), routes all external HTTP throug
 Cloudflare Worker proxy, and exposes a uniform `SourceAdapter` interface over 25 heterogeneous
 backends.
 
-Entry file: `plugin.js` (single-file, ~4350 lines)
+Entry file: `plugin.js` (single-file, ~7800 lines, v0.13.28)
+
+> **Line references (`plugin.js:NNN`) below are historical** — the file roughly doubled since they
+> were written. Search by symbol name (e.g. `function CherryGrid(`, `function buildProxyUrl(`,
+> `var Sync = {`), not by line number.
 
 > **Nav rewrite (2026-06-04):** `cherry_grid` and `cherry_main` were migrated from a
 > hand-rolled `Lampa.Controller.add({up,down,left,right})` to extending
@@ -178,7 +182,12 @@ off — so the main stand stays on its build for CDP harnesses.
 
 ## Component Lifecycle
 
-Both components are **`Lampa.InteractionCategory` subclasses**, not hand-rolled controllers:
+> **Since v0.13.27 this section describes the LEGACY path.** Both screens are built by
+> `_cherryScreen(object, hooks)` → `Lampa.Maker.make('Category')` (see *Screens on Lampa.Maker*);
+> `InteractionCategory` is used only when Maker is absent. The hook tables below keep the legacy
+> names (`create` / `nextPageReuest` / `cardRender`) — the mapping to Maker is in the table above.
+
+Both components were **`Lampa.InteractionCategory` subclasses** (2026-06-04 → v0.13.26), not hand-rolled controllers:
 
 ```javascript
 function CherryGrid(object) {
@@ -354,6 +363,26 @@ is available in every mode — the mitigation for sites whose server sort is a n
 > own picker (Cherry's `Lampa.Input` uses `nosave`, so Lampa's global search history never sees
 > them), neutral storage key `cherry_rq`, no heading, one-tap «✕ Очистить недавние». Both entry
 > points (home tile and in-grid «Поиск») go through `onPick`, so voice/typed/picked all land there.
+
+> **Recent queries sync across devices (v0.13.28).** The ↺ list rides the favorites PIN bucket —
+> no worker change: the worker's `mergeFavs` already merges ANY record by `id@source`, last write
+> wins on `max(added, deleted)`. `cherry_rq` now holds records
+> `{ id: _normText(q), source: '__rq' (_RECENT_SRC), title: q, added, deleted }`:
+> - `_recentAdd` upserts with a strictly increasing stamp and calls `Sync.schedule()`;
+>   `_recentClear` TOMBSTONES (`deleted = now`) instead of emptying, so the clear reaches other
+>   devices; a later search of the same query revives it.
+> - `Sync.run` POSTs `Fav._records().concat(_recentRecords())` and splits the answer by `source`:
+>   favorites → `Fav._merge`, `__rq` → `_recentMerge`. Pull points are unchanged (startup, Cherry
+>   home open, favorites open), so a query typed on the TV shows in the picker on the next open elsewhere.
+> - Local store keeps the 50 newest records (tombstones included), the picker shows the 10 newest
+>   active. Legacy string lists (≤ v0.13.27) migrate on read as low-priority records (`added` = 1…n).
+> - Old plugins (≤ v0.13.27) would merge `__rq` records into favorites; `Fav._records()` drops
+>   `source === '__rq'` and rewrites storage, so such a device heals on update.
+> - The server bucket keeps every distinct query (tombstones are never purged) — tiny records, same
+>   growth model as favorites.
+> Tests: `test/cherry-favsync.test.mjs` → «Sync: recent search queries». Live check (2026-10-08):
+> two sandboxed «devices» on the real worker with a throwaway PIN — add on A → visible on B, clear on
+> B → empty on A, re-search on A → back on B, favorites untouched.
 
 > **Search endpoints that silently ignored the query (v0.13.15).** Five adapters returned the
 > SAME generic list for any query (found by comparing two queries — identical first card), so in
@@ -586,7 +615,7 @@ extra force-proxy rule (see **Android fetch model** below).
 
 | Tier | Var | Endpoint | Used for |
 |------|-----|----------|----------|
-| Primary | `PROXY_URL` | `cherry-proxy.aawersom.workers.dev` (CF Worker + SOCKS5) | default; pornhub via residential SOCKS5 |
+| Primary | `PROXY_URL` | `cherry-proxy.aawersom.workers.dev` (CF Worker; residential SOCKS5 pool dead since 2026-09) | default + favorites/recents sync bucket (`/favs`). pornhub moved to the VPS in v0.13.25 |
 | Secondary | `PROXY_URL_2` | `185-36-141-21.sslip.io` (self-hosted **VPS**, stable IP; rewrites m3u8 with referer) | CF-ASN-blocked + KVS IP-bound sites + **pornhub page + phncdn HLS** (v0.13.25) |
 | Tertiary | `PROXY_URL_3` | `''` (unused) | reserved for residential VPS |
 | Val.town | `PROXY_URL_VT` | `aawersom--0d56e6a4…web.val.run` (free HTTP val) | **spankbang** only (passes CF challenge) |
@@ -754,10 +783,10 @@ Only safe for plain pass-through proxies that do NOT rewrite M3U8.
 | `parseDur(str)` | Parses "MM:SS", "HH:MM:SS", or raw seconds integer to seconds |
 | `parseViews(str)` | Parses "1.2K", "3M" or plain integer to number |
 | `extractStreams(html)` | Multi-pattern extractor: KVS get_file, `<source>` tags (res/label), JWPlayer file, generic MP4 |
-| `stripTags(str)` | Strips HTML tags + decodes 5 common HTML entities |
+| `stripTags(str)` | Strips HTML tags, then full entity decode via `_decodeHtml` (v0.13.13) |
 | `bestQualityUrl(quality)` | Selects highest numeric label key from quality map |
 | `_attr(html, rx, group?)` | Extracts regex group from HTML string |
-| `_decodeHtml(str)` | Decodes 6 HTML entities |
+| `_decodeHtml(str)` | Single-pass decoder: numeric, hex and named entities (`_HTML_ENTITIES`) |
 | `_splitCards(html, splitRx)` | Splits HTML into per-card chunks |
 | `_kvsPickBest(urls)` | Ranks KVS MP4 URLs by resolution label embedded in filename |
 
@@ -767,13 +796,13 @@ Only safe for plain pass-through proxies that do NOT rewrite M3U8.
 
 | # | id | name | host | Proxy tier | Stream method | Status |
 |---|---|---|---|---|---|---|
-| 1 | `pornhub` | Pornhub | pornhub.com | CF SOCKS5 (RESIDENTIAL) | HLS via phncdn CDN; referer propagated in M3U8 rewrite for IP-affinity | ✅ Working |
+| 1 | `pornhub` | Pornhub | pornhub.com | **VPS** (page + `*.phncdn.com`, one egress IP, v0.13.25); webmasters API native↔proxy | HLS only; page re-rendered until the playable `ev-h`/`validfrom` scheme, Referer on segments | ✅ Working |
 | 2 | `xvideos` | Xvideos | xvideos.com | CF datacenter | HLS from CDN | ✅ Working |
 | 3 | `xnxx` | Xnxx | xnxx.com | VPS | HLS-first (adaptive 1080p+); MP4 fallback in quality map | ✅ Working |
-| 4 | `eporner` | Eporner | eporner.com | VPS (video pages) + Android force-proxy | JSON API browse; video page via VPS. getStream hash/xhr needs RE | ⚠ listing OK, stream RE |
+| 4 | `eporner` | Eporner | eporner.com | VPS (video pages) + Android force-proxy | JSON API browse (`_fixMojibake` for double-UTF-8 titles, v0.13.27); video page via VPS | ✅ Plays (stand `tv-verify-play`, v0.13.25) |
 | 4b | `xhamster` | xHamster | ru.xhamster.com | VPS (page force-proxied on Android: native fetch trips on HTTP 103; CF got 503) | JSON `window.initials` → videoThumbProps (title RU-localised, thumb webp, h264 hover clip); stream = preloaded HLS master (`<link rel=preload>`, token not IP-bound) → inner player on Android; related = xplayerPluginSettings.relatedVideos; pornstars JSON | ✅ Added 2026-09-04 (v0.13.21) |
-| 5 | `spankbang` | Spankbang | ru.spankbang.com | **Val.town** (+ Android force-proxy) | Val.town IP passes CF challenge; listing + signed-token mp4 (`sb-cd.com`) | ✅ Working |
-| 6 | `hqporner` | HQPorner | hqporner.com | VPS (page + bigcdn) + Android force-proxy | page via VPS; embed `mydaddy.cc` + CDN `*.bigcdn.cc` both VPS (IP-bound token). Player markup redesigned → stream RE | ⚠ cards OK, stream RE |
+| 5 | `spankbang` | Spankbang | ru.spankbang.com | **Val.town** (+ Android force-proxy) | listing + signed-token mp4 (`sb-cd.com`) | ⛔ Dark since 2026-09: Cloudflare challenge on every egress incl. Val.town; needs FlareSolverr (owner's decision). Tile stays with a gray health dot |
+| 6 | `hqporner` | HQPorner | hqporner.com | VPS (page + bigcdn) + Android force-proxy | page via VPS; embed `mydaddy.cc` + CDN `*.bigcdn.cc` both VPS (IP-bound token). | ✅ Plays (stand `tv-verify-play`, v0.13.25) |
 | 7 | `youjizz` | YouJizz | youjizz.com | VPS (+ `*.youjizz.com` CDN) | Direct MP4 (Android: protocol-relative normalized → no chooser) | ✅ Working |
 | 8 | `pornone` | PornOne | pornone.com | VPS | KVS IP-bound tokens — page + CDN both via VPS IP for token affinity | ✅ Working |
 | 9 | `porntrex` | Porntrex | porntrex.com | VPS (+ `*.cdntrex.com`) | KVS IP-bound tokens — page + CDN both via VPS IP | ✅ Working |
@@ -783,8 +812,8 @@ Only safe for plain pass-through proxies that do NOT rewrite M3U8.
 | 13 | `pornve` | PornVe | pornve.com | CF datacenter | `videoUrl:` JS var | ✅ Working (token may expire) |
 | 14 | `familyporn` | FamilyPorn | familyporn.tv | CF datacenter | KVS CDN | ✅ Working (token may expire) |
 | 15 | `porndig` | Porndig | porndig.com | CF datacenter | Custom VHS player (videos.porndig.com); `"srcSet"` JSON extraction with `\/`-unescape; skips preview entries | ✅ Working |
-| 16 | `tizam` | Tizam | tv4.tizam.org | Deno | Direct MP4 | ✅ Working |
-| 17 | `perfektdamen` | PerfektDamen | perfektdamen.co | Deno | KVS CDN, IP-bound | ✅ Working |
+| 16 | `tizam` | Tizam | tv4.tizam.org | VPS | Direct MP4 | ✅ Working |
+| 17 | `perfektdamen` | PerfektDamen | perfektdamen.co | VPS | every get_file answers one HLS master → `#.m3u8` fragment + `androidProxyStream` (v0.13.26) | ✅ Working |
 | 18 | `hellporno` | HellPorno | hellporno.com | CF datacenter | KVS `_kvsEngine` | ✅ Working |
 | 19 | `pornobolt` | Pornobolt | sex.pornobolt.in | — | — | ⛔ Hidden 2026-10-07 (v0.13.26): origin times out from every egress, no mirror among 20 domains; `disabled: true` keeps favorites/history resolvable |
 | 20 | `crocotube` | CrocoTube | crocotube.com | CF datacenter | KVS alphaxcdn.com CDN | ✅ Working |
@@ -964,12 +993,6 @@ both work. Val.town carries only the light listing (free tier, huge headroom).
 | Call | Purpose |
 |---|---|
 | `Lampa.Player.play({title, url, poster, quality})` | Hands off resolved stream to Lampa player |
-
-### Lampa.Listener
-| Call | Purpose |
-|---|---|
-| `Lampa.Listener.follow('app', fn)` | Waits for `app:ready` event before initialising |
-| `Lampa.Listener.follow('player', fn)` | Single block: revokes HLS blob URLs + pushes related panel (REQ-4) on `e.type==='destroy'` |
 
 ### Lampa.SettingsApi
 Preview toggle (`cherry_preview_enabled`) registered via

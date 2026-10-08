@@ -175,8 +175,9 @@ curl "https://aawersom--0d56e6a4635611f1a1321607ee4eb77e.web.val.run/proxy?url=h
 ```powershell
 cd d:\Works\Lampa
 npx vitest run
-# Ожидаем: ~463 теста, все зелёные (5 файлов: plugin-helpers, worker-utils,
-#                                    cherry-engine, cherry-stream-fix, cherry-ux-v2)
+# Ожидаем: 836 passed (v0.13.28; 6 файлов зелёные). test/worker-utils.test.js падает при загрузке —
+# импортит cloudflare:sockets, которого нет в Node (известно, не регрессия).
+# После правки тестов сверять ЧИСЛО тестов: файл с синтаксической ошибкой молча выпадает из прогона.
 ```
 
 ---
@@ -185,20 +186,21 @@ npx vitest run
 
 ```
 1. Правка  →  d:\Works\Lampa\plugin.js
-2. Тесты   →  npx vitest run  (~463 должны быть green)
+2. Тесты   →  npx vitest run  (836 green, см. п.4)
 3. Синк    →  cp plugin.js plugin-release\plugin.js
-4. Пуш     →  cd plugin-release && git add . && git commit -m "..." && git push
+4. Пуш     →  cd plugin-release && git add . && git commit -m "..." && git push origin main
+              + основной репо: git push origin master; gh release create vX; проверить md5 LIVE (норм. CRLF/BOM)
 5. Если менялся CF воркер (src/index.js):
               cd workers\cherry-proxy && npx wrangler deploy && git add . && git commit && git push
-6. Если менялся Deno прокси (deno.js):
-              cd workers\cherry-proxy && git add deno.js && git commit && git push
-              (Deno Deploy задеплоится автоматически)
+6. Если менялся VPS-прокси (workers/cherry-proxy-deno/main.js):
+              бэкап на VPS → sftp /opt/cherry-proxy/main.js → systemctl restart cherry-proxy.service (см. §3)
+              (Deno Deploy выведен 2026-06-06)
 ```
 
 ---
 
 ## Что НЕ деплоится автоматически
 
-- Основной репо `d:\Works\Lampa` — **без remote**, только локальная история.  
-  Если нужен бэкап — создать репо на GitHub и добавить: `git remote add origin <url>`
+- Основной репо `d:\Works\Lampa` смотрит на тот же `aawersom/cherry-plugin` (ветка master);
+  `plugin-release` — ветка main (её отдаёт GitHub Pages). Бэкап перед релизом — `backups/<дата>-<тема>/`.
 - CI/CD пайплайнов нет — всё ручной деплой.

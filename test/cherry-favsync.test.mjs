@@ -38,6 +38,10 @@ function sliceObject(src, decl) {
 
 const FAV_SRC  = sliceObject(SRC, 'var Fav = ');
 const SYNC_SRC = sliceObject(SRC, 'var Sync = ');
+// Recent-query helpers share the bucket with favorites (Sync.run sends/splits both).
+const RECENT_SRC = sliceObject(SRC, 'function _normText(') + '\n'
+  + SRC.slice(SRC.indexOf('var _RECENT_KEY'), SRC.indexOf('function _recentClear'))
+  + sliceObject(SRC, 'function _recentClear(');
 
 /**
  * Build a fresh { Fav, Sync, store, fetchMock, Lampa } sandbox.
@@ -72,10 +76,11 @@ function makeSandbox(opts) {
   // eslint-disable-next-line no-new-func
   var factory = new Function(
     'Lampa', 'PROXY_URL', 'getProxyKey', 'cherryPostJson', 'console',
-    FAV_SRC + '\n' + SYNC_SRC + '\nreturn { Fav: Fav, Sync: Sync };'
+    RECENT_SRC + '\n' + FAV_SRC + '\n' + SYNC_SRC
+      + '\nreturn { Fav: Fav, Sync: Sync, Recent: { add: _recentAdd, get: _recentQueries, clear: _recentClear, records: _recentRecords } };'
   );
   var objs = factory(Lampa, PROXY_URL, getProxyKey, cherryPostJson, consoleObj);
-  return { Fav: objs.Fav, Sync: objs.Sync, store: store, lastPost: lastPost, PROXY_URL: PROXY_URL };
+  return { Fav: objs.Fav, Sync: objs.Sync, Recent: objs.Recent, store: store, lastPost: lastPost, PROXY_URL: PROXY_URL };
 }
 
 // ==================================================================
@@ -326,5 +331,77 @@ describe('favsync: plugin.js source assertions (anti-drift)', () => {
     var at = SRC.indexOf('function CherryMain(object)');
     var body = SRC.slice(at, SRC.indexOf('function addStyles', at));
     expect(body).toMatch(/try\s*\{\s*Sync\.run\(\)/);
+  });
+});
+
+// ------------------------------------------------------------------
+// Recent search queries ride the same PIN bucket (records with source '__rq')
+// ------------------------------------------------------------------
+describe('Sync: recent search queries', () => {
+  it('legacy string list migrates in order; display stays strings, newest first', () => {
+    var sb = makeSandbox({ initial: { cherry_rq: ['мамка', 'Big Tits'] } });
+    expect(sb.Recent.get()).toEqual(['мамка', 'Big Tits']);
+    sb.Recent.add('SSIS-839');
+    expect(sb.Recent.get()).toEqual(['SSIS-839', 'мамка', 'Big Tits']);
+    var rec = sb.store.cherry_rq.find(r => r.title === 'SSIS-839');
+    expect(rec).toMatchObject({ id: 'ssis 839', source: '__rq', deleted: 0 });
+    expect(rec.added).toBeGreaterThan(1000);   // a real stamp beats the legacy ones
+  });
+
+  it('run sends favorites + queries in one POST and splits the answer', async () => {
+    var sb = makeSandbox({
+      initial: { cherry_sync_pin: '4321', cherry_rq: ['local q'] },
+      response: { records: [
+        { id: 'v1', source: 'xvideos', title: 'V', added: 5, deleted: 0 },
+        { id: 'ssis 839', source: '__rq', title: 'SSIS-839', added: Date.now() + 1e6, deleted: 0 }
+      ] }
+    });
+    await sb.Sync.run();
+    expect(sb.lastPost.body.records.some(r => r.source === '__rq' && r.title === 'local q')).toBe(true);
+    expect(sb.Recent.get()[0]).toBe('SSIS-839');               // pulled from the other device
+    expect(sb.Fav.all().map(v => v.id)).toEqual(['v1']);       // the query is NOT a favorite
+  });
+
+  it('merge is last-write-wins: a newer remote clear hides the query, an older one does not', async () => {
+    var sb = makeSandbox({});
+    sb.Recent.add('anal');
+    var t = sb.store.cherry_rq[0].added;
+    // older remote tombstone → the local search stays
+    var older = makeSandbox({ initial: { cherry_sync_pin: '4321', cherry_rq: sb.store.cherry_rq.slice() },
+      response: { records: [{ id: 'anal', source: '__rq', title: 'anal', added: t - 10, deleted: t - 5 }] } });
+    await older.Sync.run();
+    expect(older.Recent.get()).toEqual(['anal']);
+    var newer = makeSandbox({ initial: { cherry_sync_pin: '4321', cherry_rq: sb.store.cherry_rq.slice() },
+      response: { records: [{ id: 'anal', source: '__rq', title: 'anal', added: t, deleted: t + 10 }] } });
+    await newer.Sync.run();
+    expect(newer.Recent.get()).toEqual([]);
+  });
+
+  it('clear tombstones (so the clear reaches other devices) and a re-search revives the query', () => {
+    var sb = makeSandbox({});
+    sb.Recent.add('a'); sb.Recent.add('b');
+    sb.Recent.clear();
+    expect(sb.Recent.get()).toEqual([]);
+    expect(sb.Recent.records().length).toBe(2);                 // kept as tombstones
+    expect(sb.Recent.records().every(r => r.deleted > r.added)).toBe(true);
+    sb.Recent.add('a');
+    expect(sb.Recent.get()).toEqual(['a']);
+  });
+
+  it('local store is capped (tombstones included), display at 10', () => {
+    var sb = makeSandbox({});
+    for (var i = 0; i < 70; i++) sb.Recent.add('q' + i);
+    expect(sb.store.cherry_rq.length).toBe(50);
+    expect(sb.Recent.get().length).toBe(10);
+    expect(sb.Recent.get()[0]).toBe('q69');
+  });
+
+  it('query records that an old plugin merged into favorites are dropped from Fav', () => {
+    var sb = makeSandbox({ initial: { cherry_favs: [
+      { id: 'v1', source: 'xvideos', title: 'V', added: 5, deleted: 0 },
+      { id: 'ssis 839', source: '__rq', title: 'SSIS-839', added: 9, deleted: 0 }
+    ] } });
+    expect(sb.Fav.all().map(v => v.id)).toEqual(['v1']);
+    expect(sb.store.cherry_favs.length).toBe(1);               // healed in storage
   });
 });

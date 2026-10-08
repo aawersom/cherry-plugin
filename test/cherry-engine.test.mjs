@@ -4046,7 +4046,7 @@ describe('favorites: newest-first + pull-on-open (v0.13.17)', function () {
   });
   it('sort semantics: newest first, legacy added=1 last, tombstoned excluded', function () {
     var store = {};
-    var ctx = 'var Lampa={Storage:{get:function(k,d){return k in store?store[k]:d;},set:function(k,v){store[k]=v;}}};var Sync={schedule:function(){}};'
+    var ctx = 'var Lampa={Storage:{get:function(k,d){return k in store?store[k]:d;},set:function(k,v){store[k]=v;}}};var Sync={schedule:function(){}};var _RECENT_SRC="__rq";'
       + 'var Fav=' + PLUGIN.slice(PLUGIN.indexOf('var Fav = {') + 'var Fav = '.length, PLUGIN.indexOf('_merge: function (remote)')) + '_merge:function(){}};'
       + 'return Fav;';
     var Fav = new Function('store', ctx)(store);
@@ -4608,7 +4608,9 @@ describe('v0.13.24: favorites single build + pornhub API route alternation', fun
     expect(PLUGIN).not.toMatch(/_refreshGrid\s*[:(]/); // no definition, no call (comments may mention it)
     const sync = PLUGIN.slice(PLUGIN.indexOf('var Sync = {'), PLUGIN.indexOf('function secToTime(')).replace(/\/\/.*$/gm, ''); // code only
     expect(sync).not.toContain('comp.create()');
-    expect(sync).toContain('if (res && Array.isArray(res.records)) Fav._merge(res.records);');
+    // favorites and recent-query records share the bucket; each half is only merged
+    expect(sync).toContain('Fav._merge(res.records.filter(function (r) { return !isRq(r); }));');
+    expect(sync).toContain('_recentMerge(res.records.filter(isRq));');
     // the favorites grid still pulls on open and renders once (guarded by _favDone)
     expect(PLUGIN).toContain('Promise.resolve(Sync.run()).then(_favRender, _favRender)');
     expect(PLUGIN).toContain('if (_favDone) return;');

@@ -25,11 +25,6 @@ Out-of-scope bugs spotted during tasks. Critical/high → fix in flight. Medium/
 **Scope:** Pre-existing — affects ALL cards (browse/search/related), not introduced by Phase 1. The model badge already uses the safe `.text()` pattern (`modelBadge.text(...)`).
 **Fix (fundamental):** set title via `card.find('.cherry-card__title').text(video.title)` after template instantiation, remove `{title}` from template. Same for any other interpolated untrusted field. Caught by: security reviewer (Phase 1).
 
-### BL-2 (low, pre-existing) — thumb/preview src set without scheme allowlist
-**Where:** `plugin.js` renderCards `.attr('src', video.thumb)`, `_startPreview` videoEl.src
-**Risk:** Low (javascript:/data: URLs inert for img/video media loads), but malformed values could trigger unexpected requests.
-**Fix:** validate `https?://` or `//` prefix centrally in renderCards before assignment. Caught by: security reviewer (Phase 1).
-
 ### BL-4 (low) — row-mode card creation duplicates CherryGrid.renderCards
 **Where:** `plugin.js` `renderRows()` (CherryMain) vs `renderCards()` (CherryGrid)
 **Risk:** cherry_card instantiation (title/duration/views/thumb) + hover:enter→playVideo wiring exist in two places. A future card-markup or play-wiring change must be made twice.
@@ -443,3 +438,10 @@ overlap (small site, `hd` ≈ everything) — works. Nothing to fix; cosmetic op
 - (ak) **Плагин «Без названия» в «Расширениях»** на свежей установке → **v0.13.27:** `_nameInExtensions` заполняет имя, только если пусто.
 - (al) **spankbang:** FlareSolverr на VPS технически возможен (RAM 490 МБ + swap 2 ГБ), но постоянный сервис на сервере владельца заблокирован политикой безопасности автономного режима — нужно явное разрешение владельца (контейнер установлен и удалён, VPS в исходном состоянии).
 - (am) **CF-воркер:** OAuth wrangler истёк; без интерактивного `wrangler login` (или API-токена Cloudflare) деплой невозможен. Нужен сам владелец, 1 минута. Креды residential-пула по решению владельца не трогаем.
+
+## 2026-10-08 — синхронизация истории поиска между устройствами (v0.13.28, владелец: «была синхронизация видео, сделай и поиска»)
+- (an) **Сделано (код + тесты, НЕ выкачено):** недавние запросы (↺ в пикере поиска, `cherry_rq`) ездят в том же PIN-бакете, что и избранное — записями `{id: _normText(q), source:'__rq', title, added, deleted}`. Воркер не менялся (его `mergeFavs` уже склеивает любые записи по `id@source`, LWW) — деплой воркера и не нужен (OAuth истёк, см. (am)). Очистка = tombstone, доходит до других устройств. Описание: `docs/CHERRY.md` → «Recent queries sync across devices (v0.13.28)». Тесты: `test/cherry-favsync.test.mjs` → «Sync: recent search queries» (+6), vitest 836 зелёных. Живая проверка на реальном воркере (одноразовый PIN, два «устройства»-песочницы): добавление A→B, очистка B→A, повторный поиск A→B, избранное не задето.
+- (ao) **Риск окна обновления:** плагин ≤ v0.13.27 вольёт записи `__rq` в избранное (пустые карточки с названием запроса) до своего обновления; v0.13.28 их выкидывает из `cherry_favs` при чтении. Поэтому сначала выкатить плагин, потом искать/писать в бакет.
+- (ap) Бакет на сервере хранит каждый уникальный запрос навсегда (tombstones не чистятся) — как и избранное; записи мелкие, лимит KV 25 МБ далеко.
+- (aq) Стенд-эмулятор был выключен — UI-проверка пикера на стенде не делалась (логика пикера не менялась: `_recentQueries()` по-прежнему отдаёт строки).
+- Попутно приведена в соответствие документация: CHERRY.md (pornhub→VPS, spankbang ⛔, tizam/perfektdamen→VPS, eporner/hqporner играют, Component Lifecycle = легаси при Maker, дубль `Lampa.Listener`, хелперы `stripTags/_decodeHtml`, предупреждение об устаревших `plugin.js:NNN`), DEPLOY.md (Deno-шаг → VPS, число тестов, remote/релиз), TESTING.md (836, `cherry-favsync`), PARSERS.md (таблица статусов помечена как историческая); удалён дубль BL-2 в этом файле.
