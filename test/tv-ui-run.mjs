@@ -17,6 +17,10 @@ const evalJS = async (expr, t = 120000) => { const r = await Promise.race([send(
 let code = readFileSync('D:/Works/Lampa/plugin.js', 'utf8').replace(/^\uFEFF/, '');
 code = code.replace('if (window.plugin_cherry_ready) return;', 'window.plugin_cherry_ready = false;');
 code = code.replace('if (window.cherry_filter_btn_ready) return;', 'if (true) return;');
+// Same window.__C helper surface as tv-page-run (taken from it, so the two never drift).
+const expose = JSON.parse(readFileSync('D:/Works/Lampa/test/tv-page-run.mjs', 'utf8').match(/const expose = ("(?:[^"\\]|\\.)*");/)[1]);
+const ix = code.lastIndexOf('})();');
+code = code.slice(0, ix) + expose + code.slice(ix);
 await evalJS('window.appready = true; true');
 await send('Runtime.evaluate', { expression: code, returnByValue: false });
 await new Promise(r => setTimeout(r, 1200));

@@ -7,7 +7,7 @@ Lampa components (`cherry_main`, `cherry_grid`), routes all external HTTP throug
 Cloudflare Worker proxy, and exposes a uniform `SourceAdapter` interface over 25 heterogeneous
 backends.
 
-Entry file: `plugin.js` (single-file, ~7900 lines, v0.13.29)
+Entry file: `plugin.js` (single-file, ~8000 lines, v0.13.30)
 
 > **Line references (`plugin.js:NNN`) below are historical** — the file roughly doubled since they
 > were written. Search by symbol name (e.g. `function CherryGrid(`, `function buildProxyUrl(`,
@@ -399,6 +399,25 @@ is available in every mode — the mitigation for sites whose server sort is a n
 > - **spankbang `disabled: true`** — Cloudflare challenge on every proxy tier; saved cards still resolve.
 > Verified on the stand: `test/tv-v0129-check.page.js` (titles, related ids, cache, double Enter),
 > `tv-verify-play` on 10 channels, `tv-full-audit` on all channels; unit `cherry-stability-0.13.29.test.mjs`.
+
+> **Error vs empty, favorites availability, «Все видео» = latest (v0.13.30).**
+> - **`_netFails`** counts page requests that failed (`_countFail` on `cherryFetch` / `_fetchAny` /
+>   `cherryPost`; a 404/410 is an answer, not a failure). `_gridLoad` wraps `resolve` for every network
+>   mode: an EMPTY result while ≥ `_failNeed` requests failed → `reject` → «Не удалось загрузить» +
+>   Lampa's «Обновить». `_failNeed` = 1 for one channel, = number of channels for the all-channels
+>   fan-out (one dead site must not hide a real «ничего не найдено»). Adapters stay as they are.
+> - **`Avail`** (`cherry_avail`, device-local, favorites only): `{ 'id@source': { f, t } }`; a failed
+>   play/check `f++`, a success `f = 0`; «Недоступно» at `f ≥ 2`; a miss while `_netFails` moved is not
+>   counted. The favorites grid draws the badge and runs a background check 3 s after opening (2 at a
+>   time, ≤ 20 due cards: ok → after 3 days, failed → after 10 min), stopped by the screen's pause.
+> - **«Найти копию»** (`_findCopy`) = all-channels search on ≤ 8 cleaned title words — in the long-press
+>   menu of every favorite (first when dead) and in the «Видео недоступно» dialog a failed favorite
+>   play now shows (Найти копию / Убрать из избранного / Закрыть).
+> - **«Все видео»** browses each channel with `_latestSort(src)`: the sort labelled «Свежее», else '' (the
+>   site default listing, already latest on porntrex / xnxx / lenporno / jopaonline / ebun).
+> Verified on the stand: `tv-v0130-check.page.js` via `tv-ui-run` (offline → error + Обновить → cards;
+> empty search; badge; background check; menu; find copy; dialog), `tv-latest-feed.page.js`; unit
+> `cherry-favavail-0.13.30.test.mjs`. `tv-ui-run` now exposes the same `window.__C` as `tv-page-run`.
 > - The server bucket keeps every distinct query (tombstones are never purged) — tiny records, same
 >   growth model as favorites.
 > Tests: `test/cherry-favsync.test.mjs` → «Sync: recent search queries». Live check (2026-10-08):
