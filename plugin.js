@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.28';
+  var CHERRY_VERSION = '0.13.29';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -229,8 +229,50 @@
     });
   }
 
+  // Every proxy request is bounded: a hung proxy/CDN used to leave the spinner forever (only the
+  // native path had a timeout). Covers headers AND body; rejects Error('HTTP n') carrying `.body`
+  // (status-tolerant callers still get the page) or Error('timeout').
+  var FETCH_TIMEOUT_MS = 15000;
+  function _getText(u, opts) {
+    return new Promise(function (resolve, reject) {
+      var ctl = (typeof AbortController === 'function') ? new AbortController() : null;
+      var o = opts || {};
+      if (ctl) o.signal = ctl.signal;
+      var timer = setTimeout(function () {
+        try { if (ctl) ctl.abort(); } catch (e) {}
+        reject(new Error('timeout'));
+      }, FETCH_TIMEOUT_MS);
+      fetch(u, o).then(function (r) {
+        return r.text().then(function (t) {
+          clearTimeout(timer);
+          if (r.ok) return resolve(t);
+          var err = new Error('HTTP ' + r.status);
+          err.body = t;
+          reject(err);
+        });
+      }).catch(function (e) { clearTimeout(timer); reject(e); });
+    });
+  }
+
+  // Short page cache: one view used to download the same page three times (getStream, the
+  // related probe, then the «Похожие» grid) — slower, and enough to trip a site's rate limit
+  // (pornhub, 2026-10-08). Same url+referer within 3 min shares one request; failures are not kept.
+  var HTML_CACHE_MS = 180000, HTML_CACHE_MAX = 6, _htmlCache = {}, _htmlOrder = [];
+
   /** @param {string} url @param {string=} referer @returns {Promise<string>} */
   function cherryFetch(url, referer) {
+    var key = url + '|' + (referer || ''), hit = _htmlCache[key];
+    if (hit && Date.now() - hit.t < HTML_CACHE_MS) return hit.p;
+    var p = _cherryFetchNow(url, referer);
+    _htmlCache[key] = { t: Date.now(), p: p };
+    _htmlOrder = _htmlOrder.filter(function (k) { return k !== key; });
+    _htmlOrder.push(key);
+    while (_htmlOrder.length > HTML_CACHE_MAX) delete _htmlCache[_htmlOrder.shift()];
+    p.catch(function () { if (_htmlCache[key] && _htmlCache[key].p === p) delete _htmlCache[key]; });
+    return p;
+  }
+
+  function _cherryFetchNow(url, referer) {
     if (_isAndroid()) {
       // Sites that block the device home IP → fetch the page via the proxy (clean IP)
       // instead of native, so it co-locates with the (also proxied) stream.
@@ -240,19 +282,13 @@
     return _proxyText(url, referer);
   }
 
-  // Proxy GET → text, with one Deno→CF failover. If the URL routes to a secondary
-  // proxy (Deno) and that fails (e.g. 503 over-quota), retry via the CF worker so a
-  // dead secondary proxy doesn't take down its channels.
+  // Proxy GET → text, with one secondary→CF failover. If the URL routes to a secondary
+  // proxy (VPS) and that fails (down, timeout), retry via the CF worker so a dead
+  // secondary proxy doesn't take down its channels.
   function _proxyText(url, referer) {
-    return fetch(buildProxyUrl(url, referer)).then(function(r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.text();
-    }).catch(function(err) {
+    return _getText(buildProxyUrl(url, referer)).catch(function(err) {
       if (!_hasProxyFailover(url, referer)) throw err;
-      return fetch(buildProxyUrl(url, referer, true)).then(function(r) {
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        return r.text();
-      });
+      return _getText(buildProxyUrl(url, referer, true));
     });
   }
 
@@ -269,15 +305,13 @@
     return _proxyTextAny(url, referer);
   }
 
-  // Status-tolerant proxy GET with the same Deno→CF failover as _proxyText.
+  // Status-tolerant proxy GET with the same failover as _proxyText: a non-2xx page is still
+  // returned (its body), a network error / timeout is not.
   function _proxyTextAny(url, referer) {
-    return fetch(buildProxyUrl(url, referer)).then(function (r) {
-      if (r.ok) return r.text();
-      if (_hasProxyFailover(url, referer)) return fetch(buildProxyUrl(url, referer, true)).then(function (r2) { return r2.text(); });
-      return r.text();
-    }).catch(function (err) {
-      if (!_hasProxyFailover(url, referer)) throw err;
-      return fetch(buildProxyUrl(url, referer, true)).then(function (r) { return r.text(); });
+    function bodyOf(err) { if (err && err.body != null) return err.body; throw err; }
+    return _getText(buildProxyUrl(url, referer)).catch(function (err) {
+      if (_hasProxyFailover(url, referer)) return _getText(buildProxyUrl(url, referer, true)).catch(bodyOf);
+      return bodyOf(err);
     });
   }
 
@@ -288,13 +322,10 @@
    * @returns {Promise<string>}
    */
   function cherryPost(url, body) {
-    return fetch(buildProxyUrl(url), {
+    return _getText(buildProxyUrl(url), {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body
-    }).then(function (r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.text();
     });
   }
 
@@ -499,7 +530,9 @@
           return {
             id:       r.id,
             source:   r.source,
-            title:    r.title    || '',
+            // Repaired on read, never rewritten: cards saved before the parser fixes keep
+            // «&#039;» / mojibake in the bucket, and rewriting them would race other devices' LWW.
+            title:    _cleanTitle(r.title),
             // Legacy records saved before v0.13.11 may hold the unsubstituted xvideos/xnxx
             // hover template (…/xv_THUMBNUM_t.jpg) — a 404 as a poster. Normalize on read.
             thumb:    (r.thumb   || '').replace(/THUMBNUM/g, '1'),
@@ -528,11 +561,13 @@
       list.forEach(function (r) {
         if (r.id === video.id && r.source === video.source) rec = r;
       });
+      // Stamps never go backwards: a record stamped by a device whose clock ran ahead stays
+      // toggleable here (LWW compares max(added, deleted); a plain `now` could lose to it).
       var now = Date.now();
       var active;
       if (rec && rec.added > rec.deleted) {
         // Currently active → tombstone (keep the record).
-        rec.deleted = now;
+        rec.deleted = Math.max(now, (rec.added || 0) + 1);
         active = false;
       } else {
         // Absent or tombstoned → (re)activate + refresh fields.
@@ -545,7 +580,7 @@
         rec.url      = video.url      || '';
         rec.duration = video.duration || 0;
         rec.views    = video.views    || 0;
-        rec.added    = now;
+        rec.added    = Math.max(now, (rec.deleted || 0) + 1);
         rec.deleted  = 0;
         active = true;
       }
@@ -669,7 +704,8 @@
     all: function () {
       return this._records()
         .sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); })
-        .slice(0, this._cap);
+        .slice(0, this._cap)
+        .map(function (r) { r.title = _cleanTitle(r.title); return r; });
     },
 
     /** @param {VideoCard} element @returns {Object|null} the matching record. */
@@ -829,10 +865,31 @@
    * @param {VideoCard}     video
    * @param {SourceAdapter} source
    */
+  // Only the LAST play request may open the player: a second Enter (or another card) while
+  // getStream is still pending used to start two players / snapshot progress into the wrong card.
+  var _playGen = 0;
+
+  // One retry after a short pause when the first attempt throws or yields nothing playable —
+  // transient proxy/CDN hiccups (and a site's brief rate limit) otherwise showed «Ошибка».
+  function _streamWithRetry(video, source) {
+    function playable(st) { return st && (st.url || bestQualityUrl(st.quality)); }
+    function once() {
+      return Promise.resolve(source.getStream(video)).then(function (st) {
+        if (!playable(st)) throw new Error('no stream');
+        return st;
+      });
+    }
+    return once().catch(function () {
+      return new Promise(function (r) { setTimeout(r, 1500); }).then(once);
+    });
+  }
+
   function playVideo(video, source) {
+    var gen = ++_playGen;
     Lampa.Noty.show(Lampa.Lang.translate('cherry_loading'));
 
-    source.getStream(video).then(function (stream) {
+    _streamWithRetry(video, source).then(function (stream) {
+      if (gen !== _playGen) return;
       var quality = stream.quality || {};
       // The QUALITY MAP is the contract: it holds only what may be played, and its best entry is
       // the default (Lampa itself switches to the entry matching «video_quality_default», 1080 by
@@ -942,6 +999,7 @@
         }).catch(function () {});
       }
     }).catch(function (err) {
+      if (gen !== _playGen) return;
       console.warn('[Cherry] getStream error:', err);
       Lampa.Noty.show(Lampa.Lang.translate('cherry_error'), { style: 'warn' });
     });
@@ -1232,7 +1290,7 @@
         var _favRender = function () {
           if (_favDone) return;
           _favDone = true;
-          resolve(Fav.all().map(toCard), 1);
+          resolve(_applyClientSort(Fav.all().map(toCard)), 1);
         };
         try { Promise.resolve(Sync.run()).then(_favRender, _favRender); } catch (e) { _favRender(); }
         setTimeout(_favRender, 2500);
@@ -1241,7 +1299,7 @@
 
       // History («Продолжить») — single page, newest-first, like favorites.
       if (object.is_history) {
-        var hist = Hist.all().map(toCard);
+        var hist = _applyClientSort(Hist.all().map(toCard));
         resolve(hist, 1);
         return;
       }
@@ -1276,7 +1334,7 @@
         var _relDone = function (items) {
           items = (items || []).filter(_relFresh);
           items.forEach(function (v) { if (v && !v.source) v.source = relSrc.id; });
-          resolve(items.map(toCard), items.length ? (page + 50) : page);
+          resolve(_applyClientSort(items.map(toCard)), items.length ? (page + 50) : page);
         };
         // Page-2+ continuation. The site's getRelated block is page 1 only (ignores
         // `page`), so pages 2+ used to fall back to the newest browse feed — which is
@@ -2775,15 +2833,17 @@ var _HTML_ENTITIES = {
 };
 // Repair text whose UTF-8 bytes were decoded as Windows-1252 / Latin-1 upstream (eporner's API:
 // «HeiÃŸe Erwachsene … WeiÃ\u009fen» for «Heiße … Weißen», stand 2026-10-07). Only text with the
-// telltale lead byte (Â Ã Ð Ñ + a continuation char) is touched; every char is mapped back to its
-// byte and the bytes are re-decoded as UTF-8 — anything that does not round-trip stays as is.
+// telltale lead byte (U+00C2…U+00F4 + a continuation char) is touched; every char is mapped back to
+// its byte and the bytes are re-decoded as UTF-8 — anything that does not round-trip stays as is.
+// The lead range covers 3-byte UTF-8 too, so CJK titles («ç\u0088±ç\u008e©…» → «爱玩…», eporner
+// 2026-10-08) are repaired; real Latin text (Ménage, Señorita) has no continuation char after it.
 var _CP1252 = { 0x20AC: 0x80, 0x201A: 0x82, 0x0192: 0x83, 0x201E: 0x84, 0x2026: 0x85, 0x2020: 0x86, 0x2021: 0x87,
     0x02C6: 0x88, 0x2030: 0x89, 0x0160: 0x8A, 0x2039: 0x8B, 0x0152: 0x8C, 0x017D: 0x8E, 0x2018: 0x91, 0x2019: 0x92,
     0x201C: 0x93, 0x201D: 0x94, 0x2022: 0x95, 0x2013: 0x96, 0x2014: 0x97, 0x02DC: 0x98, 0x2122: 0x99, 0x0161: 0x9A,
     0x203A: 0x9B, 0x0153: 0x9C, 0x017E: 0x9E, 0x0178: 0x9F };
 function _fixMojibake(str) {
     str = String(str == null ? '' : str);
-    if (!/[ÂÃÐÑ][\u0080-¿Œ-Ÿˆ˜–-›€™]/.test(str)) return str;
+    if (!/[Â-ô][\u0080-¿ŒœŠšŸŽžƒˆ˜–-›€™]/.test(str)) return str;
     var hex = '';
     for (var i = 0; i < str.length; i++) {
         var c = str.charCodeAt(i), b = c <= 0xFF ? c : _CP1252[c];
@@ -2791,6 +2851,12 @@ function _fixMojibake(str) {
         hex += '%' + (b < 16 ? '0' : '') + b.toString(16);
     }
     try { return decodeURIComponent(hex); } catch (e) { return str; }
+}
+
+// A stored card title as it should be shown: entities decoded, mojibake repaired, and the
+// «&#'s» leftover of a half-stripped «&#039;» (youjizz titles saved before v0.13.26) mended.
+function _cleanTitle(str) {
+    return _fixMojibake(_decodeHtml(String(str == null ? '' : str).replace(/&#'/g, "'")));
 }
 
 function _decodeHtml(str) {
@@ -3663,7 +3729,9 @@ SOURCES.push({
 });
 
 // xvideos/xnxx video pages embed related as a JSON array `video_related=[...]`.
-function _xvideosRelated(html, host, sourceId) {
+// `idPrefix` must match the channel's feed ids ('xv' / 'xnxx-' + the URL token = o.eid): a bare eid
+// gave the same video two ids, so Fav/Hist/progress/dedup treated a related copy as a new video.
+function _xvideosRelated(html, host, sourceId, idPrefix) {
   var m = html.match(/video_related\s*=\s*(\[[\s\S]*?\])\s*;/);
   if (!m) return [];
   var arr;
@@ -3677,7 +3745,7 @@ function _xvideosRelated(html, host, sourceId) {
     if (dmn) dur += parseInt(dmn[1], 10) * 60;
     if (dsc) dur += parseInt(dsc[1], 10);
     out.push({
-      id:     o.eid || o.id,
+      id:     (idPrefix || '') + (o.eid || o.id),
       // titles arrive HTML-escaped in the JSON («&amp;», «&#039;» showed on the card, stand 2026-10-07)
       title:  _decodeHtml(o.tf || o.t || ''),
       thumb:  o.i || o.il || '',
@@ -3903,7 +3971,7 @@ SOURCES.push({
   getRelated: function(video) {
     if (!video || !video.url) return Promise.resolve([]);
     return cherryFetch(video.url).then(function(html) {
-      return _xvideosRelated(html, 'https://www.xvideos.com', 'xvideos').filter(function(v) {
+      return _xvideosRelated(html, 'https://www.xvideos.com', 'xvideos', 'xv').filter(function(v) {
         return v.url !== video.url;
       }).slice(0, 20);
     }).catch(function() { return []; });
@@ -4053,7 +4121,7 @@ SOURCES.push({
   getRelated: function(video) {
     if (!video || !video.url) return Promise.resolve([]);
     return cherryFetch(video.url).then(function(html) {
-      return _xvideosRelated(html, 'https://www.xnxx.com', 'xnxx').filter(function(v) {
+      return _xvideosRelated(html, 'https://www.xnxx.com', 'xnxx', 'xnxx-').filter(function(v) {
         return v.url !== video.url;
       }).slice(0, 20);
     }).catch(function() { return []; });
@@ -4468,6 +4536,9 @@ SOURCES.push({
 SOURCES.push({
   id: 'spankbang',
   name: 'Spankbang',
+  // Behind a Cloudflare challenge from every proxy tier (2026-10-08: listing + getStream empty,
+  // all 5 favorites dead) — kept registered so its favorites/history cards still resolve.
+  disabled: true,
   cfg: { categories: _cats('amateur:Любительское,anal:Анал,anime:Аниме,arab:Арабское,asian:Азиатки,ass:Жопа,babe:Красотки,bbc:BBC,bbw:BBW,bdsm:БДСМ,blonde:Блондинки,blowjob:Минет,bondage:Бондаж,british:Британское,brunette:Брюнетки,busty:Грудастые,cam:Вебкам,casting:Кастинг,cheating:Измена,chinese:Китайское,compilation:Компиляция,cosplay:Косплей,creampie:Кремпай,cuckold:Куколд,cumshot:Камшот,ebony:Чёрные,feet:Ножки,femdom:Фемдом,fetish:Фетиш,gangbang:Групповуха,hentai:Хентай,indian:Индийское,japanese:Японское,latina:Латинки,massage:Массаж,milf:MILF,pov:POV,shemale:Трансы,solo:Соло,squirt:Сквирт,stepmom:Мачеха,teen:Молодые,big+tits:Большие сиськи,big+ass:Большая жопа'),
     // GLOBAL-feed sorts: per-category sort unsupported; sort is a separate listing root /{sort}/{page}/.
     sorts: _cats('new_videos:Свежее,most_popular:По популярности,trending_videos:В тренде,upcoming:Скоро') },
