@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.32';
+  var CHERRY_VERSION = '0.13.33';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -44,6 +44,11 @@
     // pornone/porntrex: Deno — KVS IP-bound tokens require page+CDN on same fixed IP
     'pornone.com': 1, 'www.pornone.com': 1,
     'porntrex.com': 1, 'www.porntrex.com': 1,
+    // pornve: KVS get_file token is IP-bound and its host sends no CORS — the inner player
+    // needs the proxy, so page + get_file must leave from the SAME fixed IP (2026-10-10)
+    'pornve.com': 1, 'www.pornve.com': 1,
+    // 3movs: same as pornve — IP-bound get_file, no CORS on its host
+    'www.3movs.com': 1, '3movs.com': 1,
     // eporner: SOCKS5 instability — revert to Deno
     'www.eporner.com': 1,
     // spankbang: now routed to Val.town (PROXY_URL_VT) — the VPS datacenter IP gets
@@ -144,6 +149,13 @@
     // proxy so the embed loads AND the bigcdn mp4 token co-locates on the same proxy IP.
     'mydaddy.cc': 1,
     'hellporno.com': 1, 'www.hellporno.com': 1,
+    // pornve: page + get_file through the VPS — one egress IP for the IP-bound token, and the
+    // proxy's CORS for Lampa's inner player (crossorigin video; raw host → «Format error»).
+    'pornve.com': 1, 'www.pornve.com': 1,
+    // 3movs + pornone: the same pair of reasons (IP-bound token, CDN without CORS); pornone's
+    // stream CDN (sNNNN.pornone.com) is already VPS-routed, so its page must leave there too.
+    'www.3movs.com': 1, '3movs.com': 1,
+    'pornone.com': 1, 'www.pornone.com': 1,
     // lenporno + eporner: the device-IP native fetch of the PAGE gets redirected/blocked
     // (lenporno → mirror redirect, 0 cards; eporner → 369-byte block, no stream hash), but
     // the page loads via the proxy. Only the page host is forced — their stream CDNs
@@ -971,6 +983,30 @@
     });
   }
 
+  // Lampa's INNER player loads the stream with crossorigin="anonymous", so a CDN that sends no
+  // Access-Control-Allow-Origin fails as «Format error» while a bare <video> plays the very same URL
+  // (youjizz cdne-mobile, analdin get_file — stand 2026-10-10). External players don't care. So when
+  // the inner player will play a raw URL, ask the CDN once (CORS fetch, aborted at the headers) and
+  // without CORS hand the stream through the proxy, which adds it.
+  function _isProxied(u) {
+    return !!u && ((PROXY_URL_3 && u.indexOf(PROXY_URL_3) === 0) || (PROXY_URL_2 && u.indexOf(PROXY_URL_2) === 0) || u.indexOf(PROXY_URL) === 0);
+  }
+  function _viaProxy(u) { return (!u || _isProxied(u) || u.indexOf('blob:') === 0) ? u : buildProxyUrl(u); }
+  function _corsBlocked(u, inner) {
+    if (!inner || !u || _isProxied(u) || u.indexOf('blob:') === 0) return Promise.resolve(false);
+    return new Promise(function (resolve) {
+      var ctl = (typeof AbortController === 'function') ? new AbortController() : null, done = false;
+      var timer = setTimeout(function () { fin(false); }, 4000);   // no answer in time: leave it as is
+      function fin(blocked) {
+        if (done) return;
+        done = true; clearTimeout(timer);
+        try { if (ctl) ctl.abort(); } catch (e) {}
+        resolve(blocked);
+      }
+      fetch(u, { mode: 'cors', signal: ctl ? ctl.signal : undefined }).then(function () { fin(false); }, function () { fin(true); });
+    });
+  }
+
   function playVideo(video, source) {
     var gen = ++_playGen;
     Lampa.Noty.show(Lampa.Lang.translate('cherry_loading'));
@@ -1042,50 +1078,58 @@
       // moment later — so pornhub (HLS-only) and xvideos/xnxx play inline at full quality
       // without the external chooser, while MP4 channels keep the user's native player.
       var _finalUrl = px(url);
-      var _restorePlayer;
-      if (_isAndroid() && /\.m3u8|mpegurl/i.test(_finalUrl)) {
-        _restorePlayer = Lampa.Storage.get('player');
-        if (_restorePlayer !== 'inner') Lampa.Storage.set('player', 'inner');
-      }
+      var _inner = _isAndroid() && (/\.m3u8|mpegurl/i.test(_finalUrl) || Lampa.Storage.get('player', 'inner') === 'inner');
+      return _corsBlocked(_finalUrl, _inner).then(function (blocked) {
+        if (gen !== _playGen) return;
+        if (blocked) {
+          _finalUrl = _viaProxy(_finalUrl);
+          Object.keys(proxiedQuality).forEach(function (k) { proxiedQuality[k] = _viaProxy(proxiedQuality[k]); });
+        }
+        var _restorePlayer;
+        if (_isAndroid() && /\.m3u8|mpegurl/i.test(_finalUrl)) {
+          _restorePlayer = Lampa.Storage.get('player');
+          if (_restorePlayer !== 'inner') Lampa.Storage.set('player', 'inner');
+        }
 
-      Lampa.Player.play({
-        title:    video.title,
-        url:      _finalUrl,
-        poster:   video.thumb,
-        quality:  proxiedQuality,
-        id:       hashId,
-        timeline: timeline
+        Lampa.Player.play({
+          title:    video.title,
+          url:      _finalUrl,
+          poster:   video.thumb,
+          quality:  proxiedQuality,
+          id:       hashId,
+          timeline: timeline
+        });
+
+        if (_restorePlayer !== undefined && _restorePlayer !== 'inner') {
+          setTimeout(function () { try { Lampa.Storage.set('player', _restorePlayer); } catch (e) {} }, 2500);
+        }
+
+        // Seed a history record immediately (position 0) so a video opened but
+        // closed before any progress event still surfaces under «Продолжить».
+        try { Hist.mark(video, (timeline && timeline.time) || 0, (timeline && timeline.duration) || video.duration || 0); } catch (e) {}
+
+        // REQ-4: reset state and kick off background related fetch.
+        _relatedGeneration++;
+        var myGen       = _relatedGeneration;
+        _pendingRelated = [];
+        _relatedSrc     = null;
+        _relatedVideo   = null;
+
+        // Probe whether this video HAS related (page 1). On player close we push a
+        // PAGINATED related grid (carrying the video + source), not a fixed snapshot,
+        // so the panel scrolls. We only remember the video/source when page 1 has
+        // cards — an empty related means no panel.
+        if (source.getRelated) {
+          source.getRelated(video, 1).then(function (items) {
+            if (myGen !== _relatedGeneration) return;
+            if (items && items.length) {
+              _pendingRelated = items;          // non-empty marker: related exists
+              _relatedSrc     = source;
+              _relatedVideo   = video;
+            }
+          }).catch(function () {});
+        }
       });
-
-      if (_restorePlayer !== undefined && _restorePlayer !== 'inner') {
-        setTimeout(function () { try { Lampa.Storage.set('player', _restorePlayer); } catch (e) {} }, 2500);
-      }
-
-      // Seed a history record immediately (position 0) so a video opened but
-      // closed before any progress event still surfaces under «Продолжить».
-      try { Hist.mark(video, (timeline && timeline.time) || 0, (timeline && timeline.duration) || video.duration || 0); } catch (e) {}
-
-      // REQ-4: reset state and kick off background related fetch.
-      _relatedGeneration++;
-      var myGen       = _relatedGeneration;
-      _pendingRelated = [];
-      _relatedSrc     = null;
-      _relatedVideo   = null;
-
-      // Probe whether this video HAS related (page 1). On player close we push a
-      // PAGINATED related grid (carrying the video + source), not a fixed snapshot,
-      // so the panel scrolls. We only remember the video/source when page 1 has
-      // cards — an empty related means no panel.
-      if (source.getRelated) {
-        source.getRelated(video, 1).then(function (items) {
-          if (myGen !== _relatedGeneration) return;
-          if (items && items.length) {
-            _pendingRelated = items;          // non-empty marker: related exists
-            _relatedSrc     = source;
-            _relatedVideo   = video;
-          }
-        }).catch(function () {});
-      }
     }).catch(function (err) {
       if (gen !== _playGen) return;
       console.warn('[Cherry] getStream error:', err);
