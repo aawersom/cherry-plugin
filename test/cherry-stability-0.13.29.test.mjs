@@ -276,3 +276,33 @@ describe('v0.13.32: every card title is cleaned on the screen', () => {
     expect(SRC).toContain('if (items && items.length) { _relDone(_rankByRelevance(items, relKw)); return; }');
   });
 });
+
+describe('v0.13.33: inner player + CDN without CORS → stream through the proxy', () => {
+  const code = slice('function _isProxied(') + '\n' + slice('function _viaProxy(') + '\n' + slice('function _corsBlocked(');
+  const make = (fetchImpl) => new Function('fetch', 'AbortController', 'PROXY_URL', 'PROXY_URL_2', 'PROXY_URL_3', 'buildProxyUrl',
+    code + '\nreturn { blocked: _corsBlocked, via: _viaProxy };')(fetchImpl, AbortController, 'https://cf.test', 'https://vps.test', '',
+    (u) => 'https://vps.test/proxy?url=' + encodeURIComponent(u));
+
+  it('a CORS failure (fetch rejects) → blocked; a CORS answer → not blocked', async () => {
+    await expect(make(() => Promise.reject(new TypeError('cors'))).blocked('https://cdn.x/v.mp4', true)).resolves.toBe(true);
+    await expect(make(() => Promise.resolve({ ok: true })).blocked('https://cdn.x/v.mp4', true)).resolves.toBe(false);
+  });
+  it('never probes for an external player, an already proxied or a blob URL', async () => {
+    let calls = 0; const M = make(() => { calls++; return Promise.reject(new Error('x')); });
+    await expect(M.blocked('https://cdn.x/v.mp4', false)).resolves.toBe(false);
+    await expect(M.blocked('https://vps.test/proxy?url=a', true)).resolves.toBe(false);
+    await expect(M.blocked('blob:abc', true)).resolves.toBe(false);
+    expect(calls).toBe(0);
+  });
+  it('_viaProxy wraps raw URLs once', () => {
+    const M = make(() => Promise.resolve({}));
+    expect(M.via('https://cdn.x/v.mp4')).toBe('https://vps.test/proxy?url=' + encodeURIComponent('https://cdn.x/v.mp4'));
+    expect(M.via('https://cf.test/proxy?url=a')).toBe('https://cf.test/proxy?url=a');
+  });
+  it('playVideo asks before the inner player opens and swaps the whole quality map', () => {
+    const pv = slice('function playVideo(');
+    expect(pv).toContain("var _inner = _isAndroid() && (/\\.m3u8|mpegurl/i.test(_finalUrl) || Lampa.Storage.get('player', 'inner') === 'inner');");
+    expect(pv).toContain('return _corsBlocked(_finalUrl, _inner).then(function (blocked) {');
+    expect(pv).toContain('Object.keys(proxiedQuality).forEach(function (k) { proxiedQuality[k] = _viaProxy(proxiedQuality[k]); });');
+  });
+});

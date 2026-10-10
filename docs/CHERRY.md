@@ -7,7 +7,7 @@ Lampa components (`cherry_main`, `cherry_grid`), routes all external HTTP throug
 Cloudflare Worker proxy, and exposes a uniform `SourceAdapter` interface over 25 heterogeneous
 backends.
 
-Entry file: `plugin.js` (single-file, ~8000 lines, v0.13.32)
+Entry file: `plugin.js` (single-file, ~8000 lines, v0.13.33)
 
 > **Line references (`plugin.js:NNN`) below are historical** — the file roughly doubled since they
 > were written. Search by symbol name (e.g. `function CherryGrid(`, `function buildProxyUrl(`,
@@ -439,6 +439,18 @@ is available in every mode — the mitigation for sites whose server sort is a n
 >   that carry the code — no tag «relatives».
 > - `toCard` runs `_cleanTitle` on every card (entities, cp1252/CJK mojibake, zero-width spaces).
 > - «Похожие» page 2+ (keyword search on the channel) is ranked against the seed keywords.
+
+> **Inner player + CDN without CORS (v0.13.33, owner: «YouJizz не открывается»).** Lampa's INNER player
+> loads with `crossorigin="anonymous"`; a CDN that sends no `Access-Control-Allow-Origin` fails as
+> «MEDIA_ELEMENT_ERROR: Format error» although a bare `<video>` plays the same URL (youjizz cdne-mobile,
+> analdin, pornve, pornone, 3movs). External players are unaffected. `playVideo` now, when the inner
+> player will play a raw URL on Android, asks the CDN once (`_corsBlocked`: CORS fetch aborted at the
+> headers, 4 s cap) and without CORS hands the whole quality map through the proxy (`_viaProxy`), which
+> adds CORS. IP-bound get_file hosts must then leave from the same IP as their page: pornve and 3movs
+> joined `PROXY_URL_2_HOSTS` + `_ANDROID_FORCE_PROXY`, pornone's page joined the force map (its CDN was
+> already VPS-routed). Inner-player sweep on all 27 channels (`tv-inner-play.page.js`): every channel
+> plays; pornhub start is slow/variable via the VPS (not changed here). The old `tv-verify-play` «OPENS»
+> verdict for MP4 only proved the file downloads — `tv-inner-play` checks the real `<video>`.
 > - The server bucket keeps every distinct query (tombstones are never purged) — tiny records, same
 >   growth model as favorites.
 > Tests: `test/cherry-favsync.test.mjs` → «Sync: recent search queries». Live check (2026-10-08):

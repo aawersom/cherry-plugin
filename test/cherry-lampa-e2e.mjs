@@ -35,6 +35,8 @@ const PROXY_URL_2_HOSTS = {
   // pornone/porntrex: Deno — KVS IP-bound tokens require page+CDN on same fixed IP
   'pornone.com': 1, 'www.pornone.com': 1,
   'porntrex.com': 1, 'www.porntrex.com': 1,
+  'pornve.com': 1, 'www.pornve.com': 1,
+  'www.3movs.com': 1, '3movs.com': 1,
   'www.eporner.com': 1,
   // spankbang: moved to Val.town (PROXY_URL_VT) — VPS datacenter IP gets CF "Just a moment" 403
   // mydaddy.cc: bigcdn tokens IP-bound to mydaddy.cc fetch IP — must match bigcdn proxy
