@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.38';
+  var CHERRY_VERSION = '0.13.39';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -4684,6 +4684,44 @@ function _xhInitials(html) {
     try { return JSON.parse(m[1]); } catch (e) { return null; }
 }
 
+// xhamster hides its player sources (initials.xplayerSettings.sources) as hex strings: byte 0 picks one of seven
+// 32-bit generators, bytes 1–4 are its int32 LE seed, every following byte is XORed with the generator's low byte
+// (the scheme yt-dlp's XHamsterIE deciphers; all 7 seen on live pages 2026-10-11). Returns the URL or ''.
+var _imul32 = Math.imul || function (a, b) {
+    var al = a & 0xffff, bl = b & 0xffff;
+    return (al * bl + ((((a >>> 16) * bl + al * (b >>> 16)) << 16) >>> 0)) | 0;
+};
+var _XH_GEN = {
+    1: function (g) { return (g.s = (_imul32(g.s, 1664525) + 1013904223) | 0); },
+    2: function (g) { var s = g.s; s = (s ^ (s << 13)) | 0; s = (s ^ (s >>> 17)) | 0; return (g.s = (s ^ (s << 5)) | 0); },
+    3: function (g) { var s = g.s = (g.s + 0x9e3779b9) | 0; s = (s ^ (s >>> 16)) | 0; s = _imul32(s, 0x85ebca77); s = (s ^ (s >>> 13)) | 0; s = _imul32(s, 0xc2b2ae3d); return (s ^ (s >>> 16)) | 0; },
+    4: function (g) { var s = g.s = (g.s + 0x6d2b79f5) | 0; s = ((s << 7) | (s >>> 25)) | 0; s = (s + 0x9e3779b9) | 0; s = (s ^ (s >>> 11)) | 0; return _imul32(s, 0x27d4eb2d); },
+    5: function (g) { var s = g.s; s = (s ^ (s << 7)) | 0; s = (s ^ (s >>> 9)) | 0; s = (s ^ (s << 8)) | 0; return (g.s = (s + 0xa5a5a5a5) | 0); },
+    6: function (g) { var s = g.s = (_imul32(g.s, 0x2c9277b5) + (0xac564b05 | 0)) | 0; var s2 = (s ^ (s >>> 18)) | 0; return (s2 >>> ((s >>> 27) & 31)) | 0; },
+    7: function (g) { var s = g.s = (g.s + 0x9e3779b9) | 0; var e = (s ^ (s << 5)) | 0; e = _imul32(e, 0x7feb352d); e = (e ^ (e >>> 15)) | 0; return _imul32(e, 0x846ca68b); }
+};
+function _xhDecipher(hex) {
+    if (/^https?:\/\//.test(hex || '')) return hex;
+    if (!/^[0-9a-f]{12,}$/i.test(hex || '') || hex.length % 2) return '';
+    var gen = _XH_GEN[parseInt(hex.substr(0, 2), 16)];
+    if (!gen) return '';
+    function at(i) { return parseInt(hex.substr(i * 2, 2), 16); }
+    var g = { s: at(1) | (at(2) << 8) | (at(3) << 16) | (at(4) << 24) }, out = '';
+    for (var i = 5; i < hex.length / 2; i++) out += String.fromCharCode(at(i) ^ (gen(g) & 0xff));
+    return /^https?:\/\//.test(out) ? out : '';
+}
+// The H.264 HLS master («auto»: every size up to 1080p/2160p, path-token host — not IP-bound) or ''.
+function _xhH264Hls(html) {
+    var root = _xhInitials(html), x = root && root.xplayerSettings, src = x && x.sources;
+    var list = (src && src.standard && src.standard.h264) || [];
+    for (var i = 0; i < list.length; i++) {
+        var u = list[i] && list[i].quality === 'auto' ? _xhDecipher(list[i].url) : '';
+        if (/\.m3u8/.test(u)) return u;
+    }
+    var h = src && src.hls && src.hls.h264 && _xhDecipher(src.hls.h264.url);
+    return /\.m3u8/.test(h || '') ? h : '';
+}
+
 // The page's main card list: the LONGEST videoThumbProps[] that is not the "moments" (shorts)
 // block — pornstar pages put momentsListComponent before the real videoListProps.
 function _xhThumbProps(root) {
@@ -4818,6 +4856,10 @@ SOURCES.push({
     //      twin first (path-token hosts serve it; key= hosts answer 403 → keep AV1).
     getStream: function (video) {
         return cherryFetch(video.url).then(function (html) {
+            // 0) the deciphered H.264 HLS master (2026-10-11: the open page carries only ≤720p H.264 MP4 and an AV1
+            //    master; the full H.264 ladder up to 1080p sits in the hex-encoded player sources).
+            var h264Hls = _xhH264Hls(html);
+            if (h264Hls) return { url: h264Hls, quality: {} };
             var block = (/"mp4":\{[^{}]*\}/.exec(html) || [''])[0].replace(/\\\//g, '/');
             var quality = {}, qm, qrx = /"(\d{3,4}p)":"(https:[^"]+?\.mp4[^"]*)"/g;
             while ((qm = qrx.exec(block))) if (parseInt(qm[1], 10) >= 360) quality[qm[1]] = qm[2];
