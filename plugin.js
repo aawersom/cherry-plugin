@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.42';
+  var CHERRY_VERSION = '0.13.43';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -1079,14 +1079,15 @@
     });
   }
 
-  // Quality ceiling (owner 2026-10-11: always the maximum, but never above 1080p). A label's height:
+  // Default-quality ceiling (owner 2026-10-11: without a pick the best rung but never above 1080p; the
+  // «Смотреть в качестве…» list keeps every rung, 1440p/2160p included). A label's height:
   // '1080p' → 1080, '4K'/'UHD' → 2160; words without a number (High/auto) count as within the ceiling.
   var MAX_HEIGHT = 1080;
   function _labelHeight(label) {
     if (/4k|uhd/i.test(label)) return 2160;
     return parseInt(label, 10) || 0;
   }
-  /** The quality map without entries above MAX_HEIGHT — unless that would leave nothing. */
+  /** The quality map without entries above MAX_HEIGHT — unless that would leave nothing (the default's pool). */
   function _capQuality(quality) {
     var out = {}, keys = Object.keys(quality || {});
     keys.forEach(function (k) { if (_labelHeight(k) <= MAX_HEIGHT) out[k] = quality[k]; });
@@ -1102,8 +1103,8 @@
     return out;
   }
 
-  // HLS master → its variants as a quality ladder (≤ MAX_HEIGHT, H.264 preferred per height): `best` is the
-  // highest one's own media playlist, `map` = { '1080p': url, '720p': url, … } for the player's «Качество» menu.
+  // HLS master → its variants as a quality ladder (H.264 preferred per height): `best` = the highest rung within
+  // MAX_HEIGHT (its own media playlist), `map` = every rung { '2160p': url, '1080p': url, … } for the pick list.
   // Players start on the FIRST-listed variant and climb slowly or never (TV 2026-10-11, MX decoder: xhamster
   // 144p, xvideos/xnxx 854x480, perfektdamen 640x360 — the best variant handed directly played 1920x1080 /
   // 1280x720 and started faster). Anything unclear (not a master, one variant, no answer in 4 s, no CORS) →
@@ -1129,15 +1130,14 @@
         // One variant (pornhub: 1080p only) — nothing to choose, and the master path is what plays in MX.
         if (count < 2) return finish(none);
         var hs = Object.keys(byH).map(Number).sort(function (a, b) { return b - a; });
-        var within = hs.filter(function (h) { return h <= MAX_HEIGHT; });
-        if (within.length) hs = within;
-        // H.264 first: an AV1/HEVC-only top rung loses to the highest H.264 one (xhamster AV1 never decodes on the TV)
+        // H.264 first: an AV1/HEVC-only rung loses to the H.264 ones (xhamster AV1 never decodes on the TV)
         var avcHs = hs.filter(function (h) { return byH[h].avc; });
         if (avcHs.length) hs = avcHs;
-        var map = {};
+        var within = hs.filter(function (h) { return h <= MAX_HEIGHT; });
+        var bestH = within.length ? within[0] : hs[0], map = {};
         try {
           hs.forEach(function (h) { map[(h || 'auto') + (h ? 'p' : '')] = new URL(byH[h].uri, u).href; });
-          finish({ best: new URL(byH[hs[0]].uri, u).href, map: map });
+          finish({ best: new URL(byH[bestH].uri, u).href, map: map });
         } catch (e) { finish(none); }
       }, function () { finish(none); });
     });
@@ -1151,14 +1151,14 @@
     _streamWithRetry(video, source).then(function (stream) {
       if (gen !== _playGen) return;
       if (Fav.has(video)) try { Avail.record(video, true); } catch (e) {}
-      var quality = _capQuality(stream.quality);   // never above 1080p (owner)
+      var quality = stream.quality || {};
       // The QUALITY MAP is the contract: it holds only what may be played, and its best entry is
       // the default (Lampa itself switches to the entry matching «video_quality_default», 1080 by
       // default, and otherwise keeps this url). Adapters that must avoid a file drop it from the
       // map (pornve AV1 1080p, youjizz >720p, pornhub unplayable playlists, ebun's 360p cut).
       // v0.13.25 preferred `stream.url` here, and adapters whose url was merely the FIRST file
       // parsed then played 240p/360p (youjizz, jopaonline, perfektdamen — stand 2026-10-07).
-      var url = bestQualityUrl(quality) || stream.url;
+      var url = bestQualityUrl(_capQuality(quality)) || stream.url;   // the default: best rung ≤1080p (owner)
       // This video's page came through the proxy instead of natively → its stream leaves from the same proxy.
       var fbBase = _isAndroid() && url ? _fallbackBase(seq0, [video.url, url]) : null;
 
@@ -1246,7 +1246,9 @@
             onBack:   function () { Lampa.Controller.toggle('content'); }
           });
         } else {
-          launch(_finalUrl, proxiedQuality);
+          // Lampa plays the map's TOP entry, so the map is cut at the default rung (≤1080p)
+          var defLabel = labels.filter(function (l) { return proxiedQuality[l] === _finalUrl; })[0];
+          launch(_finalUrl, defLabel ? _qualityUpTo(proxiedQuality, defLabel) : _capQuality(proxiedQuality));
         }
       });
 
