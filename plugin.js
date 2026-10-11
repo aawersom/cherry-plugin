@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.40';
+  var CHERRY_VERSION = '0.13.41';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -1079,18 +1079,34 @@
     });
   }
 
-  // HLS master → the best variant's own media playlist. Players start on the FIRST-listed variant and climb
-  // slowly or never (TV 2026-10-11, MX decoder: xhamster 144p, xvideos/xnxx 854x480, perfektdamen 640x360 —
-  // the best variant handed directly played 1920x1080 / 1280x720 and started faster). Highest RESOLUTION wins;
-  // variants that declare AV1/HEVC lose to an H.264 one. Anything unclear (not a master, no answer in 4 s,
-  // no CORS) → the URL as it was.
-  function _hlsBest(u) {
-    if (!u || !/\.m3u8/i.test(decodeURIComponent(u))) return Promise.resolve(u);
+  // Quality ceiling (owner 2026-10-11: always the maximum, but never above 1080p). A label's height:
+  // '1080p' → 1080, '4K'/'UHD' → 2160; words without a number (High/auto) count as within the ceiling.
+  var MAX_HEIGHT = 1080;
+  function _labelHeight(label) {
+    if (/4k|uhd/i.test(label)) return 2160;
+    return parseInt(label, 10) || 0;
+  }
+  /** The quality map without entries above MAX_HEIGHT — unless that would leave nothing. */
+  function _capQuality(quality) {
+    var out = {}, keys = Object.keys(quality || {});
+    keys.forEach(function (k) { if (_labelHeight(k) <= MAX_HEIGHT) out[k] = quality[k]; });
+    return Object.keys(out).length ? out : (quality || {});
+  }
+
+  // HLS master → its variants as a quality ladder (≤ MAX_HEIGHT, H.264 preferred per height): `best` is the
+  // highest one's own media playlist, `map` = { '1080p': url, '720p': url, … } for the player's «Качество» menu.
+  // Players start on the FIRST-listed variant and climb slowly or never (TV 2026-10-11, MX decoder: xhamster
+  // 144p, xvideos/xnxx 854x480, perfektdamen 640x360 — the best variant handed directly played 1920x1080 /
+  // 1280x720 and started faster). Anything unclear (not a master, one variant, no answer in 4 s, no CORS) →
+  // { best: the URL as it was, map: null }.
+  function _hlsLadder(u) {
+    var none = { best: u, map: null };
+    if (!u || !/\.m3u8/i.test(decodeURIComponent(u))) return Promise.resolve(none);
     return new Promise(function (resolve) {
-      var done = false, timer = setTimeout(function () { finish(u); }, 4000);
+      var done = false, timer = setTimeout(function () { finish(none); }, 4000);
       function finish(v) { if (done) return; done = true; clearTimeout(timer); resolve(v); }
       _getText(u).then(function (txt) {
-        var lines = String(txt || '').split('\n'), best = null, count = 0;
+        var lines = String(txt || '').split('\n'), byH = {}, count = 0;
         for (var i = 0; i < lines.length; i++) {
           if (!/^#EXT-X-STREAM-INF/.test(lines[i])) continue;
           var h = parseInt((lines[i].match(/RESOLUTION=\d+x(\d+)/) || [])[1], 10) || 0;
@@ -1098,16 +1114,23 @@
           var avc = !codecs || /avc1|mp4a/.test(codecs) && !/av01|hev1|hvc1/.test(codecs);
           var uri = (lines[i + 1] || '').trim();
           if (!uri || uri.charAt(0) === '#') continue;
-          var score = (avc ? 100000 : 0) + h;
           count++;
-          if (!best || score > best.score) best = { score: score, uri: uri };
+          if (!byH[h] || (avc && !byH[h].avc)) byH[h] = { avc: avc, uri: uri };
         }
-        // One variant (pornhub: 1080p only) — nothing to choose, and a proxied media playlist handed as the
-        // top-level URL stalls MX (its FFmpeg re-asks past the end of a playlist that advertises
-        // Accept-Ranges → 416 loop, TV 2026-10-11); the master path plays. Keep the master then.
-        if (!best || count < 2) return finish(u);
-        try { finish(new URL(best.uri, u).href); } catch (e) { finish(u); }
-      }, function () { finish(u); });
+        // One variant (pornhub: 1080p only) — nothing to choose, and the master path is what plays in MX.
+        if (count < 2) return finish(none);
+        var hs = Object.keys(byH).map(Number).sort(function (a, b) { return b - a; });
+        var within = hs.filter(function (h) { return h <= MAX_HEIGHT; });
+        if (within.length) hs = within;
+        // H.264 first: an AV1/HEVC-only top rung loses to the highest H.264 one (xhamster AV1 never decodes on the TV)
+        var avcHs = hs.filter(function (h) { return byH[h].avc; });
+        if (avcHs.length) hs = avcHs;
+        var map = {};
+        try {
+          hs.forEach(function (h) { map[(h || 'auto') + (h ? 'p' : '')] = new URL(byH[h].uri, u).href; });
+          finish({ best: new URL(byH[hs[0]].uri, u).href, map: map });
+        } catch (e) { finish(none); }
+      }, function () { finish(none); });
     });
   }
 
@@ -1118,7 +1141,7 @@
     _streamWithRetry(video, source).then(function (stream) {
       if (gen !== _playGen) return;
       if (Fav.has(video)) try { Avail.record(video, true); } catch (e) {}
-      var quality = stream.quality || {};
+      var quality = _capQuality(stream.quality);   // never above 1080p (owner)
       // The QUALITY MAP is the contract: it holds only what may be played, and its best entry is
       // the default (Lampa itself switches to the entry matching «video_quality_default», 1080 by
       // default, and otherwise keeps this url). Adapters that must avoid a file drop it from the
@@ -1184,10 +1207,12 @@
       // MX plays all of them (TV 2026-10-11).
       var _inner = _isAndroid() && Lampa.Storage.get('player', 'inner') === 'inner';
       var _master = _finalUrl;
-      return _hlsBest(_finalUrl).then(function (best) {
-        if (best && best !== _master) {
-          _finalUrl = best;
-          Object.keys(proxiedQuality).forEach(function (k) { if (proxiedQuality[k] === _master) proxiedQuality[k] = best; });
+      return _hlsLadder(_finalUrl).then(function (lad) {
+        if (lad.map) {
+          // the HLS master becomes its variants: the best one plays, all of them (≤1080p) ARE the «Качество» menu
+          // (side MP4 files of the same video, xvideos «High», would only add an unlabelled duplicate)
+          proxiedQuality = lad.map;
+          _finalUrl = lad.best;
         }
         return _corsBlocked(_finalUrl, _inner);
       }).then(function (blocked) {
