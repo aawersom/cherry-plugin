@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.39';
+  var CHERRY_VERSION = '0.13.40';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -5385,12 +5385,10 @@ SOURCES.push({
         // Each entry: { filename: 'url', quality: '720', ... }
         var u = enc.filename || enc.url || enc.file || '';
         if (!u || isHls(u)) return;            // skip HLS — keep direct MP4 only
-        // youjizz's cdne-mobile CDN PACES each progressive MP4 to ~1.5× its own bitrate,
-        // so 1080p (≈3.6 Mbps, served at only ~5.5 Mbps) starts/buffers slowly on a TV.
-        // On Android the player defaults to the highest quality → cap at ≤720p (≈1.35 Mbps,
-        // ~1.6× headroom = smooth). Browser keeps all qualities. If a video somehow has
-        // only >720p, the fallback block below still surfaces it.
-        if (_isAndroid() && parseInt(enc.quality, 10) > 720) return;
+        // youjizz's cdne-mobile CDN paces each progressive MP4 to ~1.5× its own bitrate — still above it, so 1080p
+        // plays without stalls, it only fills the start buffer slower. The Android ≤720p cap is gone (owner: always
+        // the maximum quality; TV 2026-10-11: 1080p started in 4.4 s with no stalls, 720p in 13–14 s; their HLS
+        // started in 10.5 s or never — kept off).
         var label = enc.quality ? enc.quality + 'p' : (enc.label || enc.format || 'mp4');
         if (!firstUrl) firstUrl = u;
         quality[label] = u;
