@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.43';
+  var CHERRY_VERSION = '0.13.44';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -77,7 +77,7 @@
     // xhamster: the device's native fetch of listings trips on HTTP 103 (Early Hints) and the
     // CF worker got a 503 from it once; the VPS is steady. Only the PAGE host — the HLS stream
     // (video-nss.xhcdn.com) is not IP-bound and stays raw.
-    'ru.xhamster.com': 1
+    'ru.xhamster.com': 1, 'xhamster.com': 1
     // NB: hellporno stays on CF (Deno returns 0 cards for it even when up; CF gives 60).
     // hqporner is blocked on CF datacenter IPs and Deno doesn't help — it needs a
     // residential route (PROXY_URL_3). Neither is routed to Deno.
@@ -178,7 +178,7 @@
     'play.huyamba.mobi': 1,
     // xhamster: native listing fetch fails intermittently (HTTP 103 Early Hints surfaces as an
     // error) → page via the proxy (VPS). HLS stream host stays raw (token not IP-bound).
-    'ru.xhamster.com': 1,
+    'ru.xhamster.com': 1, 'xhamster.com': 1,
     // ebalovo: the brand domain 301s mobile UAs to a mobile mirror whose stream tokens 404, and
     // even desktop-mirror tokens are UA-bound (404 with the WebView/ExoPlayer UA). All page
     // fetches are on the brand domain (cards are normalised to it) → proxied here with a
@@ -252,7 +252,7 @@
       }, function(err) {
         req.clear();
         reject(err);
-      }, false, { dataType: 'text', timeout: 4000 });
+      }, false, { dataType: 'text', timeout: 4000, headers: { 'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8' } });   // original titles: sites translate into the asked language (xnxx)
     });
   }
 
@@ -1542,7 +1542,7 @@
     function toCard(v) {
       // One place for every adapter's titles: entities, mojibake («Saba â€“ Homemade»), zero-width
       // spaces («Fiona ​sprouts») — parsers fixed one site at a time; the screen fixes all.
-      v.title  = _cleanTitle(v.title);
+      v.title  = _completeTitle(_cleanTitle(v.title), v.url);   // entities first, then a cut title finished
       v.img    = v.thumb;
       v.poster = v.thumb;
       // HD/4K no longer rides Lampa's native quality slot — it is merged into the
@@ -2226,6 +2226,14 @@
         } catch (e) {}
       }
 
+      // The card caption is clamped to two lines; the FOCUSED card shows its whole title in an overlay laid
+      // over the caption (absolute, placed before it → takes its spot), so the grid never shifts (owner: titles
+      // looked cut / incomplete).
+      try {
+        var $t = ui.html.find('.card__title').first();
+        if ($t.length && element.title) $('<div class="cherry-tfull"></div>').text(element.title).insertBefore($t);
+      } catch (e) {}
+
       // Self-heal an expired/broken poster. Some CDNs sign thumbnails with a short TTL
       // (pornhub: ~24h IP-bound token) → a FAVORITED card's stored thumb 404s later and
       // the card goes blank. If the source can re-resolve a fresh thumb, swap it in on the
@@ -2638,6 +2646,10 @@
 
       /* ---- P2.2 Title legibility (2-line clamp, full white) ----- */
       '.cherry-cat .card__title{color:#fff;font-size:.9em;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;white-space:normal;overflow:hidden;max-height:2.6em;}',
+      // focused card: the whole title over the clamped caption (see the card hook) — no layout shift
+      '.cherry-cat .card{position:relative;}',
+      '.cherry-cat .cherry-tfull{display:none;}',
+      '.cherry-cat .card.focus .cherry-tfull{display:block;position:absolute;left:0;right:0;z-index:6;color:#fff;font-size:.9em;line-height:1.3;white-space:normal;word-wrap:break-word;padding:0 .15em .35em;background:rgba(12,12,12,.94);border-radius:0 0 .3em .3em;}',
 
       /* ---- P2.3 Home letter tiles ------------------------------ */
       '.cherry-cat .cherry-tile{position:absolute;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;border-radius:.6em;}',
@@ -3083,6 +3095,33 @@ function stripTags(str) {
 // Final title fallback: derive a readable title from a video URL's last slug
 // segment. Strips extension + leading numeric id, decodes, hyphens→spaces.
 // Returns '' for purely-numeric slugs so callers keep their own fallback.
+// A listing that cut the title («Rough Pregnant Sex Sophia Leone Gets It The Way She ...») is finished from the
+// video URL's slug — most sites build it from the full title. The prefix words must open the slug (the last one
+// may itself be cut: «fuck...» → «fucked»); added words follow the prefix's casing. Anything else stays as is.
+// Search ranks and dedups by title words, so a cut title also hid videos from search.
+function _completeTitle(title, url) {
+  var t = String(title || ''), m = /^([\s\S]*?)\s*(?:\.\.\.|…)\s*$/.exec(t);
+  if (!m || !m[1] || !url) return t;
+  var seg;
+  try { seg = decodeURIComponent(String(url).split('?')[0].split('#')[0].replace(/\/+$/, '').split('/').pop() || ''); }
+  catch (e) { return t; }
+  var sw = _normText(seg.replace(/\.(html?|php)$/i, '').replace(/[-_]+/g, ' ')).split(' ').filter(Boolean);
+  var raw = m[1].split(/\s+/).filter(Boolean), pw = _normText(m[1]).split(' ').filter(Boolean);
+  if (sw.length && /^\d+$/.test(sw[0]) && pw.length && !/^\d+$/.test(pw[0])) sw.shift();   // «12345-title»
+  if (!pw.length || sw.length <= pw.length) return t;
+  for (var i = 0; i < pw.length; i++) {
+    if (sw[i] !== pw[i] && !(i === pw.length - 1 && sw[i].indexOf(pw[i]) === 0)) return t;
+  }
+  var start = pw.length;
+  if (sw[pw.length - 1] !== pw[pw.length - 1]) {          // the last word was cut: replace it by the slug's
+    start = pw.length - _normText(raw.pop()).split(' ').length;
+  }
+  var caps = raw.filter(function (w) { return /^[A-ZА-ЯЁ]/.test(w); }).length, letters = raw.filter(function (w) { return /^[A-Za-zА-Яа-яЁё]/.test(w); }).length;
+  var titleCase = letters && caps / letters >= 0.6;
+  var rest = sw.slice(start).map(function (w) { return titleCase ? w.charAt(0).toUpperCase() + w.slice(1) : w; });
+  return (raw.join(' ') + ' ' + rest.join(' ')).trim();
+}
+
 function _titleFromUrl(url) {
   if (!url) return '';
   try {
@@ -3172,7 +3211,7 @@ var _HTML_ENTITIES = {
     amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", excl: '!', nbsp: ' ',
     // HTML5 punctuation names some sites emit (pornone «E&period;r», «&lpar;6&rpar;», xvideos &times;)
     period: '.', comma: ',', colon: ':', semi: ';', quest: '?', num: '#', percnt: '%', lpar: '(', rpar: ')',
-    lsqb: '[', rsqb: ']', ast: '*', plus: '+', equals: '=', sol: '/',
+    lsqb: '[', rsqb: ']', lbrack: '[', rbrack: ']', lcub: '{', rcub: '}', lbrace: '{', rbrace: '}', bsol: '\\', grave: '`', ast: '*', plus: '+', equals: '=', sol: '/',
     vert: '|', lowbar: '_', hyphen: '-', dash: '-', commat: '@', dollar: '$', times: '×', divide: '÷', star: '☆', hearts: '♥',
     iexcl: '¡', iquest: '¿', laquo: '«', raquo: '»', hellip: '…',
     ndash: '–', mdash: '—', lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”',
@@ -3292,7 +3331,7 @@ var _RU_EN = {
 };
 // Known RUSSIAN-title sources — they should receive the ORIGINAL Cyrillic query, not the
 // translated one (their catalog is in Russian). Everything else defaults to English-title.
-var _RU_SOURCES = { tizam: 1, lenporno: 1, '24rolika': 1, ebun: 1, jopaonline: 1, pornobolt: 1, huyamba: 1, xhamster: 1, ebalovo: 1, porno666: 1, lenkino: 1, pornobriz: 1 };  // xhamster: RU-localised titles, site search takes RU or EN as typed
+var _RU_SOURCES = { tizam: 1, lenporno: 1, '24rolika': 1, ebun: 1, jopaonline: 1, pornobolt: 1, huyamba: 1, ebalovo: 1, porno666: 1, lenkino: 1, pornobriz: 1 };  // xhamster left (v0.13.44): xhamster.com titles are the originals (mostly English)
 // More everyday query words (2026-10-07: voice queries like «блондинка в машине», «студентка»
 // lost every word the map did not know). Added only where the key is not already mapped.
 (function () {
@@ -3349,7 +3388,7 @@ function _ruLookup(key) {
 // results with the word in the title: hqporner 0%, perfektdamen 5%, porndig 17%, eporner/pornhub
 // 23%, analdin 26%, xozilla 39% — yet each honours the query). Their results are site-relevant even
 // when no title word matches; the global ranker credits them instead of sinking them.
-var _TAG_SEARCH = { hqporner: 1, perfektdamen: 1, porndig: 1, eporner: 1, pornhub: 1, analdin: 1, xozilla: 1, xhamster: 1 };  // xhamster: real full-text search, but titles are RU-localised → an EN query never appears in them  // crocotube: English titles (stand-verified) — a Cyrillic query there returns 0
+var _TAG_SEARCH = { hqporner: 1, perfektdamen: 1, porndig: 1, eporner: 1, pornhub: 1, analdin: 1, xozilla: 1 };  // xhamster left (v0.13.44): original titles → its full-text results carry the query words  // crocotube: English titles (stand-verified) — a Cyrillic query there returns 0
 
 // Translate a Cyrillic query to English for English-title sites. Greedy multi-word phrase match
 // first, then single words; untranslatable words are dropped. Returns '' if nothing translated
@@ -4728,7 +4767,7 @@ SOURCES.push({
 
 // ---- xHamster (added v0.13.21) ----
 // Every listing page embeds its cards as JSON (`window.initials` → …videoThumbProps[]): title
-// (RU-localised on ru.xhamster.com), pageURL, duration (s), views, thumbURL (webp),
+// (xhamster.com: the uploader's original titles; ru.xhamster.com machine-translates them), pageURL, duration (s), views, thumbURL (webp),
 // trailerFallbackUrl (h264 hover clip; trailerURL is AV1 — TV WebViews can't decode it).
 // URLs: feed /{p} (trending), /newest/{p}, /best[/weekly|/monthly]/{p}; categories
 // /categories/{slug}[/newest|/best…]/{p}; search /search/{q}?page={p} (the site's own full-text
@@ -4866,19 +4905,19 @@ function _xhUrl(category, page, sort) {
     var seg = _XH_SORT[sort || 'trend'];
     if (seg === undefined) seg = '';
     var path = (category ? '/categories/' + category : '') + seg;
-    return 'https://ru.xhamster.com' + path + (p > 1 ? '/' + p : (path ? '' : '/'));
+    return 'https://xhamster.com' + path + (p > 1 ? '/' + p : (path ? '' : '/'));
 }
 
 SOURCES.push({
     id: 'xhamster',
     name: 'xHamster',
-    host: 'ru.xhamster.com',
+    host: 'xhamster.com',   // original titles (ru.xhamster.com translated them into Russian — owner: original language)
     cfg: { categories: _cats('russian:Русские,amateur:Любительницы,anal:Анал,asian:Азиатки,bbw:Толстушки,big-ass:Большие жопы,big-tits:Большие титьки,blonde:Блондинки,blowjob:Минет,brunette:Брюнетки,casting:Кастинг,cheating:Измена,creampie:Кримпай,cuckold:Куколд,cumshot:Камшот,double-penetration:Двойное проникновение,gangbang:Генгбенг,hairy:Волосатые,handjob:Хенджоб,hardcore:Хардкор,homemade:Домашнее,indian:Индийки,interracial:Межрасовое,latina:Латинки,lesbian:Лесбиянки,lingerie:Кружевное белье,massage:Массаж,mature:Зрелые,milf:Милфа,mom:Мамки,orgasm:Оргазм,pov:POV,redhead:Рыжая,squirting:Сквирт,stockings:В чулках,18-year-old:18 летние,threesome:Тройничок,vintage:Винтаж,webcam:Веб-камера,wife:Жена,turkish:Турки,skinny:Худые,granny:Бабушки,bdsm:БДСМ,hentai:Хентай,czech:Чешки,french:Француженки,ukrainian:Украинки,office:В офисе,nurse:Медсестра,beach:На пляже,arab:Арабки,chinese:Китаянки,thai:Тайки,british:Британки'),
            sorts: _cats('trend:По популярности,newest:Свежее,best-weekly:Лучшие за неделю,best-monthly:Лучшие за месяц,best:Лучшие за всё время') },
 
     search: function (query, page) {
         var p = page || 1;
-        var url = 'https://ru.xhamster.com/search/' + encodeURIComponent(query) + (p > 1 ? '?page=' + p : '');
+        var url = 'https://xhamster.com/search/' + encodeURIComponent(query) + (p > 1 ? '?page=' + p : '');
         return cherryFetch(url).then(function (html) {
             var items = _xhCards(html);
             return { items: items, total_pages: _xhPages(html, p, items.length) };
@@ -4946,7 +4985,7 @@ SOURCES.push({
     // Pornstar index /pornstars/{p} (547 pages, 60/page) — JSON like the cards (…pornstarListProps.pornstars[]).
     getModels: function (page) {
         var p = page || 1;
-        return cherryFetch('https://ru.xhamster.com/pornstars' + (p > 1 ? '/' + p : '')).then(_xhModels)
+        return cherryFetch('https://xhamster.com/pornstars' + (p > 1 ? '/' + p : '')).then(_xhModels)
             .catch(function () { return []; });
     },
 
@@ -5871,6 +5910,12 @@ function _porntrexPages(html, page, itemsLen) {
         if (titleRaw) break;
       }
       var title = _decodeHtml(titleRaw);
+      // The visible caption may be cut («…stranded coed...»); the img alt / link title often carries it whole.
+      if (/(\.\.\.|…)\s*$/.test(title)) {
+        var whole = _decodeHtml(_attr(chunk, /\balt="([^"]+)"/) || _attr(chunk, /<a[^>]+\btitle="([^"]+)"/) || '');
+        var cut = _normText(title.replace(/(\.\.\.|…)\s*$/, ''));
+        if (whole.length > title.length && cut && _normText(whole).indexOf(cut) === 0) title = whole;
+      }
       if (!title) title = _titleFromUrl(videoUrl);
 
       // Prefer the schema.org itemprop="duration" content="PT…S" attr (precise, locale-
