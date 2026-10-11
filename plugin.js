@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.37';
+  var CHERRY_VERSION = '0.13.38';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -477,11 +477,23 @@
   var _relatedSrc        = null;
   var _relatedVideo      = null; // the video whose related grid we push on close
 
-  // Watch-history state: the video currently in the player + its timeline hash.
-  // On player progress/destroy we snapshot the native timeline into Hist so the
-  // home «Продолжить» surface and on-card progress bars reflect the real position.
-  var _histVideo = null;
-  var _histHash  = null;
+  // Watch-history state: Cherry videos played in this session by their Lampa timeline hash. Every position Lampa
+  // saves for such a hash is mirrored into Hist (the Timeline listener in init).
+  var _histByHash = {};
+
+  // RESUME surface: every position Lampa saves passes through Lampa.Timeline.update, which announces it here —
+  // the inner player while playing (saveTimeView), an external player on return (the Lampa app calls
+  // Timeline.update with MX's position; no player events fire for MX, so «Продолжить» used to stay at 0),
+  // another device. Positions of Cherry videos are mirrored into Hist («Продолжить», on-card progress bars).
+  function _followTimeline() {
+    if (Lampa.Timeline && Lampa.Timeline.listener && Lampa.Timeline.listener.follow) {
+      Lampa.Timeline.listener.follow('update', function (e) {
+        var d = e && e.data, video = d && _histByHash[d.hash];
+        if (!video || !d.road) return;
+        if (d.road.time > 0 || d.road.duration > 0) Hist.mark(video, d.road.time || 0, d.road.duration || video.duration || 0);
+      });
+    }
+  }
 
   // Fetches an HLS m3u8 through the proxy and rewrites all non-comment lines:
   //   - Sub-playlist lines (.m3u8) → recursively proxied → inner blob URL
@@ -1043,6 +1055,11 @@
   // (youjizz cdne-mobile, analdin get_file — stand 2026-10-10). External players don't care. So when
   // the inner player will play a raw URL, ask the CDN once (CORS fetch, aborted at the headers) and
   // without CORS hand the stream through the proxy, which adds it.
+  // MX hands the played URL back to the Lampa app with ',' percent-encoded, and the app finds the playlist item by
+  // an exact string match before saving the position — a raw comma (xvideos/xnxx HLS «…==,1791755351/…») never
+  // matched, so MX's position was dropped. Hand MX the form it returns (TV 2026-10-11).
+  function _extPlayerUrl(u) { return u ? String(u).replace(/,/g, '%2C') : u; }
+
   function _isProxied(u) {
     return !!u && ((PROXY_URL_3 && u.indexOf(PROXY_URL_3) === 0) || (PROXY_URL_2 && u.indexOf(PROXY_URL_2) === 0) || u.indexOf(PROXY_URL) === 0);
   }
@@ -1159,10 +1176,7 @@
         ? Lampa.Timeline.view(hashId)
         : undefined;
 
-      // Remember the active video so the player progress/destroy hook can snapshot
-      // the timeline position into Hist (the «Продолжить» + progress-bar surface).
-      _histVideo = video;
-      _histHash  = hashId;
+      _histByHash[hashId] = video;   // Lampa's saved positions for this hash reach Hist (Timeline listener)
 
       var _finalUrl = px(url);
       // The user's own player choice is final — HLS included. Cherry used to switch HLS to the inner player
@@ -1181,6 +1195,10 @@
         if (blocked) {
           _finalUrl = _viaProxy(_finalUrl);
           Object.keys(proxiedQuality).forEach(function (k) { proxiedQuality[k] = _viaProxy(proxiedQuality[k]); });
+        }
+        if (_isAndroid() && !_inner) {
+          _finalUrl = _extPlayerUrl(_finalUrl);
+          Object.keys(proxiedQuality).forEach(function (k) { proxiedQuality[k] = _extPlayerUrl(proxiedQuality[k]); });
         }
         Lampa.Player.play({
           title:    video.title,
@@ -2814,27 +2832,11 @@
       }
     );
 
+    _followTimeline();
+
     // Revoke HLS blob URLs on player close; push related panel if available (REQ-4).
     Lampa.Listener.follow('player', function (e) {
-      // RESUME surface: snapshot the native timeline position into Hist as the
-      // user watches (timeupdate) and once more on close (destroy). Lampa OWNS
-      // the canonical position via the timeline VIEW it persists; we just mirror
-      // it so «Продолжить» + on-card progress bars stay accurate. Coexists with
-      // the related-panel destroy logic below (both run on the same destroy).
-      if ((e.type === 'timeupdate' || e.type === 'destroy') && _histVideo && _histHash) {
-        try {
-          var view = (Lampa.Timeline && Lampa.Timeline.view)
-            ? Lampa.Timeline.view(_histHash) : null;
-          if (view) {
-            var pos = view.time     || e.time     || 0;
-            var dur = view.duration || e.duration || _histVideo.duration || 0;
-            if (pos > 0 || dur > 0) Hist.mark(_histVideo, pos, dur);
-          }
-        } catch (_h) {}
-      }
       if (e.type === 'destroy') {
-        _histVideo = null;
-        _histHash  = null;
         if (_blobUrls.length) {
           _blobUrls.forEach(function (u) { try { URL.revokeObjectURL(u); } catch (_) {} });
           _blobUrls = [];
