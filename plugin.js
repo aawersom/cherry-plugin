@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.41';
+  var CHERRY_VERSION = '0.13.42';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -1093,6 +1093,15 @@
     return Object.keys(out).length ? out : (quality || {});
   }
 
+  /** The picked rung and every lower one: Lampa plays the map's top entry, the inner player can still step down. */
+  function _qualityUpTo(quality, label) {
+    var h = _labelHeight(label), out = {};
+    Object.keys(quality).forEach(function (k) {
+      if (k === label || (h && _labelHeight(k) && _labelHeight(k) < h)) out[k] = quality[k];
+    });
+    return out;
+  }
+
   // HLS master → its variants as a quality ladder (≤ MAX_HEIGHT, H.264 preferred per height): `best` is the
   // highest one's own media playlist, `map` = { '1080p': url, '720p': url, … } for the player's «Качество» menu.
   // Players start on the FIRST-listed variant and climb slowly or never (TV 2026-10-11, MX decoder: xhamster
@@ -1134,7 +1143,8 @@
     });
   }
 
-  function playVideo(video, source) {
+  /** @param {Object=} opts { pickQuality: true } → the quality list (≤1080p) is offered before the player starts */
+  function playVideo(video, source, opts) {
     var gen = ++_playGen, seq0 = _fallbackSeq;
     Lampa.Noty.show(Lampa.Lang.translate('cherry_loading'));
 
@@ -1225,11 +1235,27 @@
           _finalUrl = _extPlayerUrl(_finalUrl);
           Object.keys(proxiedQuality).forEach(function (k) { proxiedQuality[k] = _extPlayerUrl(proxiedQuality[k]); });
         }
+        // «Смотреть в качестве…»: the owner picks a rung first (MX gets one URL — the Lampa app passes no quality list
+        // to it); without a pick the best rung ≤1080p plays.
+        var labels = Object.keys(proxiedQuality).sort(function (a, b) { return _labelHeight(b) - _labelHeight(a); });
+        if (opts && opts.pickQuality && labels.length > 1) {
+          Lampa.Select.show({
+            title:    Lampa.Lang.translate('cherry_quality'),
+            items:    labels.map(function (l) { return { title: l, label: l }; }),
+            onSelect: function (it) { Lampa.Controller.toggle('content'); launch(proxiedQuality[it.label], _qualityUpTo(proxiedQuality, it.label)); },
+            onBack:   function () { Lampa.Controller.toggle('content'); }
+          });
+        } else {
+          launch(_finalUrl, proxiedQuality);
+        }
+      });
+
+      function launch(playUrl, playQuality) {
         Lampa.Player.play({
           title:    video.title,
-          url:      _finalUrl,
+          url:      playUrl,
           poster:   video.thumb,
-          quality:  proxiedQuality,
+          quality:  playQuality,
           id:       hashId,
           timeline: timeline
         });
@@ -1259,7 +1285,7 @@
             }
           }).catch(function () {});
         }
-      });
+      }
     }).catch(function (err) {
       if (gen !== _playGen) return;
       console.warn('[Cherry] getStream error:', err);
@@ -2258,6 +2284,8 @@
         // Order: «Похожие» (site's own related, only when adapter.getRelated exists)
         //        → «Похожие названия» (keyword search, always) → «Избранное».
         var items = [];
+        // 'quality' = pick the quality before the player starts (a plain Enter plays the best rung ≤1080p).
+        if (cardSrc && !element._model) items.push({ title: Lampa.Lang.translate('cherry_watch_quality'), action: 'quality' });
         // 'related' = adapter.getRelated() curated list from the video page.
         if (cardSrc && cardSrc.getRelated) {
           items.push({
@@ -2293,7 +2321,10 @@
           title: element.title,
           items: items,
           onSelect: function (item) {
-            if (item.action === 'fav') {
+            if (item.action === 'quality') {
+              Lampa.Controller.toggle('content');
+              playVideo(element, cardSrc, { pickQuality: true });
+            } else if (item.action === 'fav') {
               Fav.toggle(element);
               Lampa.Noty.show(
                 Fav.has(element)
@@ -2684,6 +2715,8 @@
       cherry_load_error:  { ru: 'Не удалось загрузить. Проверьте соединение.', en: 'Failed to load. Check your connection.' },
       cherry_unavailable:       { ru: 'Недоступно',            en: 'Unavailable'          },
       cherry_find_copy:         { ru: 'Найти копию',           en: 'Find a copy'          },
+      cherry_watch_quality:     { ru: 'Смотреть в качестве…',  en: 'Watch in quality…'    },
+      cherry_quality:           { ru: 'Качество',              en: 'Quality'              },
       cherry_add_fav:        { ru: 'Добавлено в избранное',  en: 'Added to favorites'    },
       cherry_rem_fav:        { ru: 'Убрано из избранного',   en: 'Removed from favorites' },
       cherry_add_fav_action: { ru: 'Добавить в избранное',   en: 'Add to favorites'       },
