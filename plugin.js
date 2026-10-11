@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.44';
+  var CHERRY_VERSION = '0.13.45';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -1624,7 +1624,9 @@
         var relVideo = object.related_video;
         var relSort  = (relSrc.cfg && relSrc.cfg.sorts && relSrc.cfg.sorts[0] && relSrc.cfg.sorts[0].id) || '';
         // Title keywords for the page-2+ continuation (below). Built once from the seed.
-        var relKw    = _searchKeywords(relVideo.title || '', 4);
+        // distinctive seed words (names first): page 1 is RANKED by them (cards sharing the performer / words lead,
+        // none dropped), the continuation searches the site for the strongest one or two of them
+        var relQ     = _similarQuery(relVideo.title || '');
         // Not the seed again: same URL, or the same title (re-uploads — xnxx «Похожие» led with two
         // copies of the video just watched) — and one card per title across all related pages.
         var _relSeen = {};
@@ -1648,13 +1650,13 @@
         // source: topically similar AND paginates (keeps «Похожие» both relevant and
         // infinite). Falls back to the newest feed only if search is missing/empty.
         var _relFeed = function (cp) {
-          var searchP = (relSrc.search && relKw)
-            ? relSrc.search(relKw, cp).then(function (r) { return (r && r.items) || []; }).catch(function () { return []; })
+          var searchP = (relSrc.search && relQ)
+            ? relSrc.search(relQ, cp).then(function (r) { return (r && r.items) || []; }).catch(function () { return []; })
             : Promise.resolve([]);
           searchP.then(function (items) {
             // the site's search order is by date/popularity: put the cards that share the seed's
             // title words first (same ranker as search; a no-op for a short or empty list)
-            if (items && items.length) { _relDone(_rankByRelevance(items, relKw)); return; }
+            if (items && items.length) { _relDone(_similarFirst(relVideo.title || '', relVideo.url, items)); return; }
             if (!relSrc.browse) { resolve([], page); return; }
             relSrc.browse('', cp, relSort).then(function (r) { _relDone((r && r.items) || []); })
               .catch(function () { resolve([], page); });
@@ -1666,7 +1668,7 @@
             rel = (rel || []).filter(_relFresh);
             if (!rel.length) { object._relNoP1 = true; _relFeed(1); return; }  // no site-related → feed from page 1
             rel.forEach(function (v) { if (v && !v.source) v.source = relSrc.id; });
-            resolve(rel.map(toCard), page + 50);   // always offer the feed continuation
+            resolve(_similarFirst(relVideo.title || '', relVideo.url, rel).map(toCard), page + 50);   // always offer the feed continuation
           }).catch(function () { object._relNoP1 = true; _relFeed(1); });
           return;
         }
@@ -1699,8 +1701,9 @@
         // Synonym-expanded word GROUPS (AND match): "blonde milf" must hit both groups; a group hits
         // if the title contains any member. BILINGUAL: a Russian word expands to [ru, stem, …EN] so
         // the same groups filter+rank Russian-title and English-title results alike.
-        var groups = object.query ? _searchGroups(object.query) : [];
-        var _isCodeQuery = !!object.query && /[a-z]{2,}[\s-]?\d{2,}/i.test(object.query);
+        var _similar = !!object.similar_seed, _seed = object.similar_seed || {};
+        var groups = (object.query && !_similar) ? _searchGroups(object.query) : [];
+        var _isCodeQuery = !_similar && !!object.query && /[a-z]{2,}[\s-]?\d{2,}/i.test(object.query);
         function _groupHits(title) {
           var t = _normText(title), n = 0;
           for (var g = 0; g < groups.length; g++) {
@@ -1719,7 +1722,10 @@
           r.items.forEach(function (v) { if (v && !v.source) v.source = r._srcId; });
           if (r.items.length >= 10) anyFull = true;      // a full raw batch ⇒ a further page exists
           var picked = r.items;
-          if (groups.length) {
+          if (_similar) {
+            // «Похожие названия»: ≥2 words or a word pair shared with the seed title, most similar first; never the seed
+            picked = _similarRank(_seed.title, _seed.url, r.items);
+          } else if (groups.length) {
             var matched = r.items.filter(function (v) { return _groupHits(v.title) === groups.length; });
             // A code / catalogue number (SSIS-839, MOGI 159) is matched literally or not at all: a
             // tag search can't «relate» to it, so only titles that carry it are kept.
@@ -1738,7 +1744,8 @@
         function _merge(batches) {
           var flat = [];
           batches.forEach(function (r) { flat = flat.concat(_pick(r)); });
-          if (groups.length) flat = _rankByRelevance(flat, object.query);
+          if (_similar) flat = _similarRank(_seed.title, _seed.url, flat);
+          else if (groups.length) flat = _rankByRelevance(flat, object.query);
           flat = flat.filter(function (v) {
             if (!v.title) return true;
             var key = _normText(v.title).slice(0, 40) + '|' + (Math.round((v.duration || 0) / 15) * 15);
@@ -2346,14 +2353,17 @@
               Lampa.Controller.toggle('content');
               _findCopy(element);
             } else if (item.action === 'similar') {
-              var query = _searchKeywords(element.title, 4);
+              // the sites are asked for the title's leading content words (or a spelled-out performer name); results
+              // are kept and ranked by the words and word pairs they share with the WHOLE title (_similarRank) —
+              // the seed itself never comes back
               Lampa.Activity.push({
-                component:   'cherry_grid',
-                title:       Lampa.Lang.translate('cherry_similar_titles') + ': ' + element.title,
-                source_id:   element.source,
-                query:       query,
-                all_sources: true,
-                page:        1
+                component:     'cherry_grid',
+                title:         Lampa.Lang.translate('cherry_similar_titles') + ': ' + element.title,
+                source_id:     element.source,
+                query:         _similarQuery(element.title) || _searchKeywords(element.title, 4),
+                similar_seed:  { url: element.url, title: element.title },
+                all_sources:   true,
+                page:          1
               });
               Lampa.Controller.toggle('content');
             } else if (item.action === 'related') {
@@ -2649,7 +2659,8 @@
       // focused card: the whole title over the clamped caption (see the card hook) — no layout shift
       '.cherry-cat .card{position:relative;}',
       '.cherry-cat .cherry-tfull{display:none;}',
-      '.cherry-cat .card.focus .cherry-tfull{display:block;position:absolute;left:0;right:0;z-index:6;color:#fff;font-size:.9em;line-height:1.3;white-space:normal;word-wrap:break-word;padding:0 .15em .35em;background:rgba(12,12,12,.94);border-radius:0 0 .3em .3em;}',
+      '.cherry-cat .card.focus .cherry-tfull{display:block;position:absolute;left:0;right:0;z-index:6;color:#fff;font-size:.9em;line-height:1.3;white-space:normal;word-wrap:break-word;padding:0 .15em .35em;background:#111;border-radius:0 0 .3em .3em;}',
+      '.cherry-cat .card.focus .card__title{visibility:hidden;}',
 
       /* ---- P2.3 Home letter tiles ------------------------------ */
       '.cherry-cat .cherry-tile{position:absolute;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;border-radius:.6em;}',
@@ -3160,6 +3171,68 @@ function _searchKeywords(title, limit) {
   var words = (kept.length ? kept : all).slice(0, n);
   return words.join(' ');
 }
+
+// The words that make a title THIS video, for «Похожие» / «Похожие названия». Measured on the TV (2026-10-11): the old
+// query (first 4 words, ALL required) found 1–21 videos, half of them the seed again; ranking by 4 words put other
+// «Daniels» above «dani daniels». Now: every content word of the title (fillers and porn-generic words dropped)
+// in title order; a candidate is scored by the words AND word pairs it shares with the seed (a shared pair —
+// «dani daniels», «oil foot» — is the strongest signal); the site is asked for the title's leading content words
+// or a performer name («… With Moka Mora», «ft Sophia Leone»).
+var _SIMILAR_FILLER = (function () {
+  var set = {}, list = ('fuck fucks fucked fucking gets get got getting hard big huge cock dick pussy ass tits boobs sexy horny ' +
+    'gives give takes take loves love wants want first time very real really best great little bit one two three ever ' +
+    'hottest hot video videos sex porn full scene part new free hd into onto over after while when were have just then ' +
+    'трахает трахнул ебет выебал большой большая большие красивая сочная горячая').split(/\s+/);
+  for (var i = 0; i < list.length; i++) set[list[i]] = true;
+  return set;
+})();
+function _similarWords(title) {
+  return _normText(String(title || '').replace(/'s\b/gi, '')).split(' ').filter(function (w) {
+    return w.length > 2 && !STOP_WORDS[w] && !_SIMILAR_FILLER[w] && !/^\d+$/.test(w);
+  });
+}
+/** Content words in title order, de-duplicated, at most `limit` (8). */
+function _similarKeywords(title, limit) {
+  var out = [];
+  _similarWords(title).forEach(function (w) { if (out.indexOf(w) === -1 && out.length < (limit || 8)) out.push(w); });
+  return out;
+}
+/** A performer name the title spells out: «… With Moka Mora», «ft. Sophia Leone», «Dani Daniels - …». */
+function _similarName(title) {
+  var t = String(title || '');
+  var m = /\b(?:[Ww]ith|[Ff]t\.?|[Ff]eat\.?|[Ff]eaturing|[Ss]tarring)\s+([A-ZА-ЯЁ][a-zа-яё]+\s+[A-ZА-ЯЁ][a-zа-яё]+)/.exec(t) ||
+          /^([A-ZА-ЯЁ][a-zа-яё]+\s+[A-ZА-ЯЁ][a-zа-яё]+)\s+[-–|:]/.exec(t) ||
+          /[-–|:]\s+([A-ZА-ЯЁ][a-zа-яё]+\s+[A-ZА-ЯЁ][a-zа-яё]+)\s*$/.exec(t);
+  return m ? m[1] : '';
+}
+// What to ask a site's own search for: a spelled-out name, else the title's two leading content words.
+function _similarQuery(title) {
+  return _similarName(title) || _similarKeywords(title).slice(0, 2).join(' ');
+}
+/** How similar a candidate title is to the seed: shared content words + 3 per shared word pair. */
+function _similarScore(seedWords, title) {
+  var w = _similarWords(title), score = 0;
+  seedWords.forEach(function (x) { if (w.indexOf(x) !== -1) score++; });
+  for (var i = 0; i < seedWords.length - 1; i++) {
+    var pair = seedWords[i] + ' ' + seedWords[i + 1];
+    for (var j = 0; j < w.length - 1; j++) if (w[j] + ' ' + w[j + 1] === pair) { score += 3; break; }
+  }
+  return score;
+}
+/** Candidates ranked by similarity; kept with ≥2 shared words or a shared pair (score ≥ 2); never the seed. */
+function _similarRank(seedTitle, seedUrl, items) {
+  var sw = _similarKeywords(seedTitle, 12), seedN = _normText(seedTitle);
+  return (items || []).map(function (v, i) { return { v: v, s: _similarScore(sw, v.title), i: i }; })
+    .filter(function (x) { return x.s >= 2 && x.v.url !== seedUrl && _normText(x.v.title) !== seedN; })
+    .sort(function (a, b) { return b.s - a.s || ((a.v._srcRank || 0) - (b.v._srcRank || 0)) || a.i - b.i; })
+    .map(function (x) { return x.v; });
+}
+/** The site's own «Похожие»: the most similar first, the rest in the site's order (nothing dropped but the seed). */
+function _similarFirst(seedTitle, seedUrl, items) {
+  var top = _similarRank(seedTitle, seedUrl, items), seedN = _normText(seedTitle);
+  return top.concat((items || []).filter(function (v) { return top.indexOf(v) === -1 && v.url !== seedUrl && _normText(v.title) !== seedN; }));
+}
+
 
 // Infinite-scroll pagination without fragile markup parsing: a full page implies
 // there's a next one; a short page is the last. `full` = the per-source page size
@@ -4242,19 +4315,18 @@ SOURCES.push({
   },
 
   cfg: {
-    // Base sorts (map 1:1 to /c/ category path segments AND to search &sort=).
-    // The faceted entries below are SEARCH-ONLY (duration/quality/date facets exist
-    // only on /?k=); browse() strips the ~facet suffix so they degrade to the base
-    // sort if ever chosen on a category. All combos curl-verified (HTTP 200+cards).
+    // Base sorts map 1:1 to /c/ category path segments AND to search &sort=. The faceted entries work in search
+    // (&durf= &quality= &datef=) AND in categories (path segments m:/d:/q:, the site's own filter menu — v0.13.45;
+    // they used to be stripped there). The global feed can only be newest or best-of-month (site limit).
     sorts: _cats('views:По популярности,uploaddate:Свежее,rating:По рейтингу,length:Длинные').concat([
-      { id: 'rating~quality=hd',                 label: 'Поиск: HD по рейтингу' },
-      { id: 'rating~quality=1080P',              label: 'Поиск: 1080p по рейтингу' },
-      { id: 'relevance~durf=10min_more',         label: 'Поиск: длинные (10+ мин)' },
-      { id: 'relevance~durf=20min_more',         label: 'Поиск: длинные (20+ мин)' },
-      { id: 'relevance~durf=1-3min',             label: 'Поиск: короткие (1-3 мин)' },
-      { id: 'uploaddate~datef=today',            label: 'Поиск: за сегодня' },
-      { id: 'uploaddate~datef=week',             label: 'Поиск: за неделю' },
-      { id: 'uploaddate~datef=month',            label: 'Поиск: за месяц' }
+      { id: 'rating~quality=hd',                 label: 'HD по рейтингу' },
+      { id: 'rating~quality=1080P',              label: '1080p по рейтингу' },
+      { id: 'relevance~durf=10min_more',         label: 'Длинные (10+ мин)' },
+      { id: 'relevance~durf=20min_more',         label: 'Длинные (20+ мин)' },
+      { id: 'relevance~durf=1-3min',             label: 'Короткие (1-3 мин)' },
+      { id: 'uploaddate~datef=today',            label: 'Свежее за 3 дня' },
+      { id: 'uploaddate~datef=week',             label: 'Свежее за неделю' },
+      { id: 'uploaddate~datef=month',            label: 'Свежее за месяц' }
     ]),
     categories: _cats('AI-239:AI,Amateur-65:Amateur,Anal-12:Anal,Arab-159:Arab,Asian_Woman-32:Asian,ASMR-229:ASMR,Ass-14:Ass,bbw-51:BBW,Bi_Sexual-62:Bi,Big_Ass-24:Big Ass,Big_Cock-34:Big Cock,Big_Tits-23:Big Tits,Black_Woman-30:Black,Blonde-20:Blonde,Blowjob-15:Blowjob,Brunette-25:Brunette,Cam_Porn-58:Cam Porn,Creampie-40:Creampie,Cuckold-237:Cuckold/Hotwife,Cumshot-18:Cumshot,Femdom-235:Femdom,Fisting-165:Fisting,Fucked_Up_Family-81:Fucked Up Family,Gangbang-69:Gangbang,Gapes-167:Gapes,Indian-89:Indian,Interracial-27:Interracial,Latina-16:Latina,Lesbian-26:Lesbian,Lingerie-83:Lingerie,Mature-38:Mature,Milf-19:Milf,Oiled-22:Oiled,Redhead-31:Redhead,Solo_and_Masturbation-33:Solo,Squirting-56:Squirting,Stockings-28:Stockings,Teen-13:Teen')
   },
@@ -4297,20 +4369,26 @@ SOURCES.push({
     var self = this;
     var p = page || 1;
     var url;
-    // Category/homepage listings accept ONLY the base sort (duration/quality/date
-    // facets are search-only on xvideos), so strip any ~facet suffix here.
-    var baseSort = self._searchFacets(sort).sort;
+    var fc = self._searchFacets(sort);
     if (category) {
-      // /c/s:{value}/{Label-id}/{page} — sort is a path segment BEFORE the slug;
-      // page is 0-based, omitted on page 1. Default sort = views (По популярности).
-      var s = baseSort || 'views';
-      url = _buildCatUrl('https://www.xvideos.com/c/s:' + s + '/{slug}/{page}', category, p, 0, true);
+      // /c/[s:{sort}/][m:{date}/][d:{dur}/][q:{qual}/]{Label-id}[/{p-1}] — the site's own filter menu; page is
+      // 0-based, omitted on page 1. relevance = no s: segment. Default sort = views (По популярности).
+      var cs = fc.sort || 'views';
+      var seg = (cs !== 'relevance' ? 's:' + cs + '/' : '') + (fc.datef ? 'm:' + fc.datef + '/' : '') +
+                (fc.durf ? 'd:' + fc.durf + '/' : '') + (fc.quality ? 'q:' + fc.quality + '/' : '');
+      url = _buildCatUrl('https://www.xvideos.com/c/' + seg + '{slug}/{page}', category, p, 0, true);
+    } else if (fc.sort === 'views' || fc.sort === 'rating') {
+      // the only sorted global list: best of the last full month (/best = /best/YYYY-MM, page N = /best/YYYY-MM/{N-1})
+      var bm = new Date(); bm.setDate(1); bm.setMonth(bm.getMonth() - 1);
+      var ym = bm.getFullYear() + '-' + (bm.getMonth() < 9 ? '0' : '') + (bm.getMonth() + 1);
+      url = 'https://www.xvideos2.com/best/' + ym + (p > 1 ? '/' + (p - 1) : '');
     } else {
       // Non-category global feed → /new/{p} (1-based; /new/0 → 404). It's the site's
       // paginating NEWEST listing. The homepage / and bare /best/ DON'T paginate
       // (page2 == page1), so route the global feed here to guarantee infinite scroll.
       // Per-sort global listings aren't paginable on xvideos — sorts apply in categories.
-      url = 'https://www.xvideos2.com/new/' + p;
+      // the home page IS page 1 of the newest list; /new/{N} is page N+1 — /new/{p} skipped the first page
+      url = p > 1 ? 'https://www.xvideos2.com/new/' + (p - 1) : 'https://www.xvideos2.com/';
     }
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html, p);
@@ -4498,9 +4576,10 @@ SOURCES.push({
   search: function(query, page) {
     var self = this;
     var p = page || 1;
-    // Space → + in URL, page appended as /{p}
+    // Space → + in URL. Pages are 0-BASED: /search/{q} = /search/{q}/0, /search/{q}/1 is the SECOND page — Cherry
+    // asked for /{p} and never showed the first, most relevant page (TV 2026-10-11).
     var q = encodeURIComponent(query).replace(/%20/g, '+');
-    var url = 'https://www.xnxx.com/search/' + q + '/' + p;
+    var url = 'https://www.xnxx.com/search/' + q + '/' + (p - 1);
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html);
       // xnxx grid serves ~27 cards/page; full batch ⇒ next page exists.
@@ -4527,9 +4606,14 @@ SOURCES.push({
     // title), NOT a recency feed. /todays-selection paginates /todays-selection/{p}
     // (p1 = bare, real p1≠p2), 48 cards/page, and is month-INDEPENDENT (never goes stale,
     // unlike /best/{YYYY-MM}). Curl-verified 200 + distinct paginated cross-topic cards.
+    // Every route pages 0-BASED (bare = first page, /1 = second) — /{p} skipped a page (the first of every category).
+    // Feed sorts (ignored until v0.13.45): hits → /hits, month → /hits/month; the site has no yearly feed
+    // (/hits/year 404, /best/{year} = this month), so «Топ за год» = the yearly order of the broadest search.
+    var tail = p > 1 ? '/' + (p - 1) : '';
+    var feed = { hits: '/hits', month: '/hits/month', year: '/search/year/porn' }[sort] || '/todays-selection';
     var url = category
-      ? 'https://www.xnxx.com/search/' + prefix + encodeURIComponent(category) + '/' + p
-      : (p > 1 ? 'https://www.xnxx.com/todays-selection/' + p : 'https://www.xnxx.com/todays-selection');
+      ? 'https://www.xnxx.com/search/' + prefix + encodeURIComponent(category) + tail
+      : 'https://www.xnxx.com' + feed + tail;
     return cherryFetch(url).then(function(html) {
       var items = self._parseCards(html);
       return { items: items, total_pages: _derivePages(items.length, p, 20) };
@@ -5548,7 +5632,8 @@ SOURCES.push({
         // NO category → /newest/{p}/ : the paginating "New Porn Videos" feed (same order as
         // the site homepage, but it actually scrolls). The homepage / and /page/{p}/ DON'T
         // paginate (/page/2/ → 404), which previously capped the global feed at one page.
-        var url = 'https://pornone.com/newest/' + p + '/';
+        // the feed honours the sort as its root path (/views/, /views/week/, /rating/ …) — it was always /newest/
+        var url = 'https://pornone.com/' + (sort || 'newest') + '/' + p + '/';
         return cherryFetch(url).then(function (html) {
             var items = _pornoneCards(html);
             return { items: items, total_pages: _pornonePages(html, p, items.length) };
@@ -5668,7 +5753,8 @@ SOURCES.push({
         var s = sort || 'most-popular';
         var url = category
             ? _buildCatUrl('https://www.porntrex.com/categories/{slug}/' + s + '/{page}/', category, p, 1, true)
-            : 'https://www.porntrex.com/latest-updates/' + (p > 1 ? p + '/' : '');
+            // a chosen sort is the feed's root path (/most-popular/weekly/, /top-rated/, /longest/ …); was always latest
+            : 'https://www.porntrex.com/' + (sort ? sort : 'latest-updates') + '/' + (p > 1 ? p + '/' : '');
         return cherryFetch(url).then(function (html) {
             var items = _porntrexCards(html);
             return { items: items, total_pages: _porntrexPages(html, p, items.length) };
@@ -5993,6 +6079,13 @@ function _porntrexPages(html, page, itemsLen) {
     });
   }
 
+  // KVS global feeds: /latest-updates/ IGNORES ?sort_by= (xozilla, analdin, pornve, familyporn, ebun — every sort gave the
+  // same newest list, TV audit 2026-10-11). The sorted global lists are /top-rated/ (rating*) and /most-popular/ (views,
+  // duration, comments) WITH an explicit ?sort_by= — bare /most-popular/ is a weekly/monthly list (ebun's: id order).
+  function _kvsSortedFeedUrl(origin, s, p, sp) {
+    return origin + (/^rating/.test(s) ? '/top-rated/' : '/most-popular/') + (p > 1 ? p + '/' : '') + '?' + (sp || 'sort_by') + '=' + s;
+  }
+
   function _kvsEngine(cfg) {
     if (cfg.id && !/^[a-z0-9_-]+$/i.test(cfg.id)) {
       throw new Error('Cherry _kvsEngine: cfg.id must be alphanumeric/hyphen/underscore, got: ' + cfg.id);
@@ -6046,6 +6139,11 @@ function _porntrexPages(html, page, itemsLen) {
           if (s && url.indexOf(sp + '=') === -1) {
             url += (url.indexOf('?') >= 0 ? '&' : '?') + sp + '=' + s;
           }
+        } else if (cfg.sortedFeed && s && s !== 'post_date') {
+          // NO category, sorted (xozilla/analdin): the /latest-updates/ feed IGNORES ?sort_by= — every sort
+          // returned the same newest list (TV audit 2026-10-11). The sorted global lists live at /top-rated/
+          // (rating*) and /most-popular/ (views, duration, comments) with the same ?sort_by=.
+          url = _kvsSortedFeedUrl(cfg.browseUrl(1).replace(/^(https?:\/\/[^/]+).*/, '$1'), s, p, sp);
         } else if (cfg.sortMode === 'path') {
           // PATH sort, NO category (crocotube/ebun GLOBAL feed): the sort is a root
           // path segment /{sort}/{page}/, NOT a query param. The «Свежее» default
@@ -6123,6 +6221,7 @@ SOURCES.push(_kvsEngine({
     categoryFmt: 'https://www.xozilla.com/categories/{slug}/{page}/',
     catPageBase: 1, catPage1Omit: true,
     categories: _cats('amateur:Amateur,anal:Anal,asian:Asian,bbw:BBW,big-tits:Big Tits,blonde:Blonde,blowjob:Blowjob,creampie:Creampie,hairy:Hairy,hardcore:Hardcore,indian:Indian,interracial:Interracial,japanese:Japanese,lesbian:Lesbian,milf:MILF,pov:POV,stockings:Stockings,teen:Teen,threesome:Threesome,mature:Mature,granny-anal:Granny Anal,russian-anal:Russian Anal,russian-teens:Russian Teens 18+,teen-girls-18:Teen Girls 18+,muslim:Muslim,hijab:Hijab,top-rated:Top Rated,classic:Classic,milf-creampie:MILF Creampie'),
+    sortedFeed: true,   // the bare feed ignores ?sort_by= → sorted feeds via /most-popular/ /top-rated/
     sorts: _cats('post_date:Свежее,video_viewed:По популярности,video_viewed_today:Популярное за день,video_viewed_week:Популярное за неделю,video_viewed_month:Популярное за месяц,rating_week:Рейтинг за неделю,rating:По рейтингу,duration:Длинные,most_commented:По комментариям'),
     searchUrl: function(query, page) {
         // KVS search is the /search/{q}/ PATH — the ?s= query param is ignored (returns the
@@ -6207,9 +6306,12 @@ SOURCES.push({
                 return { items: items, total_pages: _3movsPages(html, p, items.length) };
             }).catch(function () { return { items: [], total_pages: 0 }; });
         }
-        var url = p > 1
-            ? 'https://www.3movs.com/latest-updates/' + p + '/'
-            : 'https://www.3movs.com/latest-updates/';
+        // the feed honours the sort as its root path (/most-viewed/week/, /top-rated/all-time/ …) — it was always latest;
+        // /longest/{p}/ answers 404 (the site's own pager link), /longest/?from={p} pages
+        var fs3 = sort || 'latest-updates';
+        var url = fs3 === 'longest'
+            ? 'https://www.3movs.com/longest/' + (p > 1 ? '?from=' + p : '')
+            : 'https://www.3movs.com/' + fs3 + '/' + (p > 1 ? p + '/' : '');
         return cherryFetch(url).then(function (html) {
             var items = _3movsCards(html);
             return { items: items, total_pages: _3movsPages(html, p, items.length) };
@@ -6318,6 +6420,7 @@ SOURCES.push(_kvsEngine({
     categoryFmt: 'https://www.analdin.com/categories/{slug}/{page}/',
     catPageBase: 1, catPage1Omit: true,
     categories: _cats('sex:Sex,blowjobs:Blowjobs,hot:Hot,pussy:Pussy,ass:Ass,sexy:Sexy,hardcore:Hardcore,babes:Babes,big-tits:Big Tits,tits:Tits,brunettes:Brunettes,teens:Teens 18+,big-ass:Big Ass,amateurs:Amateurs,blondes:Blondes,doggy-style:Doggy Style,anal:Anal,big-cock:Big Cock,cumshots:Cumshots,sluts:Sluts,pussy-licking:Pussy Licking,crazy:Crazy,pornstars:Pornstars,masturbation:Masturbation,young:Young,cowgirl:Cowgirl,oral:Oral,milfs:MILFs,pov:POV,hd:HD,small-tits:Small Tits,tattoos:Tattoos,lesbians:Lesbians,homemade:Homemade,interracial:Interracial,busty:Busty,natural-tits:Natural Tits,reverse-cowgirl:Reverse Cowgirl,facial:Facial,mature:Mature'),
+    sortedFeed: true,   // the bare feed ignores ?sort_by= → sorted feeds via /most-popular/ /top-rated/
     sorts: _cats('post_date:Свежее,video_viewed:По популярности,video_viewed_today:Популярное за день,video_viewed_week:Популярное за неделю,video_viewed_month:Популярное за месяц,rating_week:Рейтинг за неделю,rating:По рейтингу,duration:Длинные'),
     searchUrl: function(query, page) {
         // KVS search = /search/{q}/ PATH (the ?s= param is ignored → homepage feed). Page N =
@@ -6386,10 +6489,11 @@ SOURCES.push({
         var p = page || 1;
         var s = sort || (this.cfg.sorts[0] && this.cfg.sorts[0].id) || '';
         var url = category
-            ? _buildCatUrl('https://pornve.com/categories/{slug}/{page}/', category, p, 1, true)
+            ? 'https://pornve.com/categories/' + category + '/' + (p > 1 ? '?from=' + p : '')   // /{N}/ stepped 16 of 20 → repeats
             // Default feed paginates by PATH (/latest-updates/{N}/), NOT ?page=N
             // (the query param is ignored → same 20 cards → no scroll). Path style
             // serves fresh cards per page (curl-verified p1/p2/p3 all unique).
+            : (s && s !== 'post_date') ? _kvsSortedFeedUrl('https://pornve.com', s, p)   // /latest-updates/ ignores sort_by
             : (p > 1 ? 'https://pornve.com/latest-updates/' + p + '/'
                      : 'https://pornve.com/latest-updates/');
         if (s && url.indexOf('sort_by=') === -1) {
@@ -6524,6 +6628,7 @@ SOURCES.push({
         var s = sort || (this.cfg.sorts[0] && this.cfg.sorts[0].id) || '';
         var url = category
             ? _buildCatUrl('https://familyporn.tv/categories/{slug}/{page}/', category, p, 1, true)
+            : (s && s !== 'post_date') ? _kvsSortedFeedUrl('https://familyporn.tv', s, p)   // /latest-updates/ ignores sort_by
             : 'https://familyporn.tv/latest-updates/' + p + '/';
         if (s && url.indexOf('sort_by=') === -1) {
             url += (url.indexOf('?') >= 0 ? '&' : '?') + 'sort_by=' + s;
@@ -6793,7 +6898,10 @@ SOURCES.push({
   host: 'tv4.tizam.org',
   // Category pages take the same zero-indexed ?p= pagination as the default feed
   // (curl-verified ?p=0..2 return distinct cards) — see browse() for the wiring.
-  cfg: { categories: _cats('all_sex:Фильмы xxx,s_russkim_perevodom:С Русским переводом,russkoe_porno:Русские порнофильмы,novinki:Новинки по выбору года,polnometrazhnye:Полнометражные с сюжетом,zrelye:Зрелые женщины,podrostki_18:Молодые девушки +18,anal_seks_bol_shie_popki:Анал и Большие попки,bol_shaya_grud:Большие сиськи,minet:Оральный секс,groupvideo:Групповой секс,incest:Семейное порно,svingery:Свингеры и Измена,dominirovanie:Доминирование,zhenskaya_masturbaciya:Соло девушки,pyshechki:Пышечки,aziatki:Азиатские порнофильмы,temnokozhie:Темнокожие,italyan_porn:Итальянские порнофильмы,nemeckie_pornofil_my:Немецкие порнофильмы,klassika:Классика и Ретро'), sorts: [] /* sort not URL-addressable (DLE/AJAX POST) */ },
+  cfg: { categories: _cats('all_sex:Фильмы xxx,s_russkim_perevodom:С Русским переводом,russkoe_porno:Русские порнофильмы,novinki:Новинки по выбору года,polnometrazhnye:Полнометражные с сюжетом,zrelye:Зрелые женщины,podrostki_18:Молодые девушки +18,anal_seks_bol_shie_popki:Анал и Большие попки,bol_shaya_grud:Большие сиськи,minet:Оральный секс,groupvideo:Групповой секс,incest:Семейное порно,svingery:Свингеры и Измена,dominirovanie:Доминирование,zhenskaya_masturbaciya:Соло девушки,pyshechki:Пышечки,aziatki:Азиатские порнофильмы,temnokozhie:Темнокожие,italyan_porn:Итальянские порнофильмы,nemeckie_pornofil_my:Немецкие порнофильмы,klassika:Классика и Ретро'),
+    // ?sort_field={f}&sort_by=desc is a plain GET (custom.js writes it into the address bar — the old «not URL-addressable»
+    // note was wrong); «ord» is the site's default order (2026-10-11 probe)
+    sorts: _cats('ord:По умолчанию,good:По популярности,count_video_view:По просмотрам,count_add_favorites:По избранному,video_count_comments:По комментариям') },
 
   _parseCards: function(html) {
     var items = [];
@@ -6866,17 +6974,24 @@ SOURCES.push({
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
 
-  browse: function(category, page) {
+  browse: function(category, page, sort) {
     var self = this;
     var p = page || 1;
+    var sq = (sort && sort !== 'ord') ? '&sort_field=' + encodeURIComponent(sort) + '&sort_by=desc' : '';
+    // only the listing itself (id="container" … id="pagination"): the «Premium фильмы» carousel after the pager shows the
+    // same 8 cards on EVERY page — they repeated on page 2, 3, … (TV audit: 8 of 32 repeated)
+    var listing = function (html) {
+      var a = html.indexOf('id="container"'), b = a >= 0 ? html.indexOf('id="pagination"', a) : -1;
+      return a >= 0 ? html.slice(a, b > a ? b : undefined) : html;
+    };
     if (category) {
       // Category pages take the SAME zero-indexed ?p= pagination as the default feed
       // (page 1 → ?p=0). Curl-verified: ?p=0 == base, ?p=1/?p=2 return distinct cards
       // (32/page, ~8 overlap p1↔p2). The prior "JS-only, single page" note was wrong —
       // the static ?p= URL exists, so thread it + derive a generous window for scroll.
-      var curl = 'https://tv4.tizam.org/fil_my_dlya_vzroslyh/' + category + '/?p=' + (p - 1);
+      var curl = 'https://tv4.tizam.org/fil_my_dlya_vzroslyh/' + category + '/?p=' + (p - 1) + sq;
       return cherryFetch(curl).then(function(html) {
-        var items = self._parseCards(html);
+        var items = self._parseCards(listing(html));
         return { items: items, total_pages: _derivePages(items.length, p, 12) };
       }).catch(function() { return { items: [], total_pages: 0 }; });
     }
@@ -6884,9 +6999,9 @@ SOURCES.push({
     // LOOKS paginated: it re-shows the same homepage rail on every page (leading cards
     // identical ?p=0 vs ?p=1 → no fresh cards on scroll). all_sex paginates cleanly
     // (?p=0 ≠ ?p=1), so it's the global feed that guarantees infinite scroll.
-    var url = 'https://tv4.tizam.org/fil_my_dlya_vzroslyh/all_sex/?p=' + (p - 1);
+    var url = 'https://tv4.tizam.org/fil_my_dlya_vzroslyh/all_sex/?p=' + (p - 1) + sq;
     return cherryFetch(url).then(function(html) {
-      var items = self._parseCards(html);
+      var items = self._parseCards(listing(html));
       return { items: items, total_pages: _derivePages(items.length, p, 12) };
     }).catch(function() { return { items: [], total_pages: 0 }; });
   },
@@ -7419,7 +7534,7 @@ SOURCES.push(_kvsEngine({
     catPageBase: 1, catPage1Omit: false,
     sortParam: 'by',
     categories: _cats('russian-porn:Русское,porno-s-russkim-perevodom:С переводом,homemade-porn-videos:Домашнее,teen-porn-videos:Молодые,anal-porn-videos:Анал,blowjob-porn-videos:Минет,granny-porn-videos:Зрелые,group-porn-videos:Групповое,lesbians-porn-videos:Лесбиянки,asian-porn-videos:Азиатки,interracial-porn-videos:Межрассовое,big-dick-porn-videos:Большие члены,tolstushki-porn-videos:Толстушки,skinny-porn-videos:Худые,solo-porn:Соло,sperm-squirt-porn-videos:Сперма и сквирт,cuckold-porn:Куколд,bdsm-porn-videos:БДСМ,fisting-porn-videos:Фистинг,sex-toys-porn-videos:Игрушки,oral-porn-videos:Орал,public-porn-videos:На публике,hidden-cameras-porn-videos:Скрытая камера,full-length-porn-movies:Полнометражные,russian-porn-movies:Русские фильмы,classic-porn:Классика,celebrities-porn-videos:Знаменитости,xxx-porn-parody:Пародии,eroticheskie-filmy:Эротика,vr-porn-videos:VR,horror:Ужасы,sex-mashines-porn-videos:Секс-машины'),
-    sorts: _cats('video_viewed:По популярности,post_date:Свежее,video_viewed_week:Популярное за неделю,rating_week:Рейтинг за неделю,rating:По рейтингу,duration:Длинные'),
+    sorts: _cats('video_viewed:По популярности,post_date:Свежее,rating:По рейтингу,duration:Длинные,most_favourited:По избранному,most_commented:По комментариям'),
     searchUrl: function (query, page) {
         var q = encodeURIComponent(query);
         return page > 1 ? 'https://huyamba.tv/search/' + q + '/?from_videos=' + page
@@ -7509,7 +7624,10 @@ function _ebCards(html) { return _kvsParseCards(html, _EB_CARDS); }
 
 function _ebUrl(category, page, sort) {
     var p = page || 1, s = sort || 'xxx-top', pg = p > 1 ? p + '/' : '';
-    if (category) return _EB_BASE + '/porno/' + category + (s === 'latest' ? '' : '-rating') + '/' + pg;
+    if (category) {
+        if (s === 'xxx-top') return _EB_BASE + '/porno/' + category + '/' + pg + '?sort_by=video_viewed_month';   // = the feed's «xxx-top»
+        return _EB_BASE + '/porno/' + category + (s === 'latest' ? '' : '-rating') + '/' + pg;
+    }
     return _EB_BASE + (s === 'latest' ? '/' : '/' + s + '/') + pg;
 }
 
@@ -7653,7 +7771,7 @@ function _lkCards(html) { return _kvsParseCards(html, _LK_CARDS).filter(function
 
 function _lkUrl(category, page, sort) {
     var p = page || 1, pg = p > 1 ? '/page/' + p : '';
-    if (category) return _LK_BASE + '/' + category + pg;
+    if (category) return _LK_BASE + '/' + category + ((sort || 'top') === 'latest' ? '' : '-top') + pg;   // «Топовые» tab = /{slug}-top
     return _LK_BASE + ((sort || 'top') === 'top' ? '/top-porno' : '') + (pg || (sort === 'latest' ? '/' : ''));
 }
 
@@ -7740,7 +7858,8 @@ function _pbCards(html) {
 
 function _pbUrl(category, page, sort) {
     var p = page || 1, pg = p > 1 ? 'page' + p + '/' : '';
-    return _PB_BASE + '/' + (category || sort || 'top') + '/' + pg;
+    if (category) return _PB_BASE + '/' + category + '/' + ((sort || 'top') === 'new' ? '' : 'popular/') + pg;   // only «Новое / Популярное» there
+    return _PB_BASE + '/' + (sort || 'top') + '/' + pg;
 }
 
 SOURCES.push({
@@ -7753,7 +7872,7 @@ SOURCES.push({
     // same file plays (stand: inner player currentTime 17 s). px() proxies the stream.
     androidProxyStream: true,
     cfg: { categories: _cats('asian:Азиатки,anal:Анальный секс,bdsm:БДСМ,blonde:Блондинки,big_ass:Большая жопа,big_tits:Большие сиськи,big_dick:Большой член,shaved:Бритая киска,brunette:Брюнетки,clothes:В одежде,hairy:Волосатые киски,swallow:Глотают сперму,deepthroat:Глубокая глотка,group:Групповой секс,double_penetration:Двойное проникновение,long_hair:Длинноволосые девушки,wanking:Дрочат,hardcore:Жесткий секс,ffm:ЖМЖ порно,toys:Игрушки,kazakh:Казашки,cumshot:Камшот,cum_in_mouth:Кончают в рот,perfect_ass:Красивая задница,lingerie:Красивое белье,beautiful:Красивые девушки,beautiful_tits:Красивые сиськи,close_up:Крупным планом,pussy_licking:Кунилингус,lesbian:Лесбиянки,amateur:Любительское порно,petite:Маленькие девушки,small_tits:Маленькие сиськи,milf:Мамочки,masturbation:Мастурбация,interracial:Межрасовое,mfm:МЖМ порно,cute:Милашки,blowjob:Минет,seks-molodye:Молодые,outdoor:На природе,public:На публике,riding:Наездницы,ebony:Негритянки,orgasm:Оргазм,pov:От первого лица,peeing:Писают,kissing:Поцелуи,gagging:Рвотные позывы,reality:Реальный секс,rimming:Римминг,romantic:Романтическое,russian:Русское порно,redhead:Рыжие,japanese:С японками,threesome:Секс втроем,doggystyle:Секс раком,babe:Симпатичные,squirting:Сквиртинг,solo_girl:Соло девушек,creampie:Сперма в жопе,cum_on_tits:Сперма на груди,facial:Сперма на лице,strap-on:Страпон,striptease:Стриптиз,black-haired:Темноволосые,fetish:Фетиш,fingering:Фингеринг,fisting:Фистинг,skinny:Худые девушки'),
-           sorts: _cats('top:По популярности,new:Свежее,best:Лучшее') },
+           sorts: _cats('top:По рейтингу,new:Свежее,best:По популярности') },   // the site: /top/ «Рейтинговое», /best/ «Популярное»
 
     // The site's search is a single page (no pager) — 30 best matches.
     search: function (query) {
@@ -7833,6 +7952,8 @@ SOURCES.push({
         // NO-category branch uses path pagination — the site ignores ?page=N.
         var url = category
             ? _buildCatUrl('https://www1.ebun.tv/categories/{slug}/' + s + '/{page}/', category, p, 1, true)
+            : ({ 'most-popular': 1, 'top-rated': 1 }[sort])   // the feed ignored the sort; bare /most-popular/ is id order
+              ? _kvsSortedFeedUrl('https://www1.ebun.tv', sort === 'top-rated' ? 'rating' : 'video_viewed', p)
             : (p > 1 ? 'https://www1.ebun.tv/latest-updates/' + p + '/' : 'https://www1.ebun.tv/latest-updates/');
         return cherryFetch(url).then(function (html) {
             var items = _ebunCards(html);
@@ -7955,7 +8076,9 @@ SOURCES.push({
     id: 'lenporno',
     name: 'LenPorno',
     host: 'www.lenporno.net',
-    cfg: { sorts: _cats('2:По популярности,3:По рейтингу'), categories: _cats('russkoye:Русское,molodyye:Молодые,zrelyye:Зрелые,mamki:Мамки,analnoye:Анальное,minet:Минет,domashneye:Домашнее,krasotki:Красотки,bryunetki:Брюнетки,blondinki:Блондинки,bolshiye-dojki:Большие дойки,bolshiye-popki:Большие попки,bolshiye-chleny:Большие члены,khudyye:Худые,v-chulkakh:В чулках,ot-pervogo-litsa:От первого лица,gruppovoye:Групповое,kasting:Кастинг,studenty:Студенты,izmena:Измена,gheny:Жены,mzhm:МЖМ,blacked:Негры,aziatskoye:Азиатское,yaponskoye:Японское,mulatki:Мулатки,rakom:Раком,sperma:Сперма,bdsm:БДСМ,masturbatsiya:Мастурбация,lesbiyanki:Лесбиянки,massazh:Массаж,volosatyye:Волосатые,dvoynoye-proniknoveniye:Двойное проникновение,dominirovaniye:Доминирование,orgazmy:Оргазмы,zhestkoye:Жесткое,na-prirode:На природе,na-publike:На публике,pikap:Пикап') },
+    // Feed sorts are root paths (the site's own nav). Categories sort only through a session cookie (?sort=N answers 301
+    // + SID cookie → the proxy, without a jar, always got the newest list) — a category stays newest whatever the sort.
+    cfg: { sorts: _cats('hdvideo:Свежее,most-popular:Популярное за неделю,the-best:Лучшее за неделю'), categories: _cats('russkoye:Русское,molodyye:Молодые,zrelyye:Зрелые,mamki:Мамки,analnoye:Анальное,minet:Минет,domashneye:Домашнее,krasotki:Красотки,bryunetki:Брюнетки,blondinki:Блондинки,bolshiye-dojki:Большие дойки,bolshiye-popki:Большие попки,bolshiye-chleny:Большие члены,khudyye:Худые,v-chulkakh:В чулках,ot-pervogo-litsa:От первого лица,gruppovoye:Групповое,kasting:Кастинг,studenty:Студенты,izmena:Измена,gheny:Жены,mzhm:МЖМ,blacked:Негры,aziatskoye:Азиатское,yaponskoye:Японское,mulatki:Мулатки,rakom:Раком,sperma:Сперма,bdsm:БДСМ,masturbatsiya:Мастурбация,lesbiyanki:Лесбиянки,massazh:Массаж,volosatyye:Волосатые,dvoynoye-proniknoveniye:Двойное проникновение,dominirovaniye:Доминирование,orgazmy:Оргазмы,zhestkoye:Жесткое,na-prirode:На природе,na-publike:На публике,pikap:Пикап') },
 
     search: function (query, page) {
         // The site's search form is POST /search/ with field `text`; it also honours GET
@@ -7976,9 +8099,6 @@ SOURCES.push({
         var s = sort || (this.cfg.sorts[0] && this.cfg.sorts[0].id) || '';
         if (category) {
             var curl = _buildCatUrl('https://www.lenporno.net/{slug}/{page}/', category, p, 1, true);
-            if (s && curl.indexOf('sort=') === -1) {
-                curl += (curl.indexOf('?') >= 0 ? '&' : '?') + 'sort=' + s;
-            }
             return cherryFetch(curl).then(function (html) {
                 var items = _lenpornoCards(html);
                 return { items: items, total_pages: _lenpornoPages(html, p, items.length) };
@@ -7987,7 +8107,9 @@ SOURCES.push({
         // NO category → /hdvideo/ = the site homepage (newest/«свежое»; bare root 301s
         // here). Was /the-best/ (best/popular). lenporno is in _ANDROID_FORCE_PROXY so the
         // proxy follows the mirror redirect on-device; /hdvideo/ paginates via ?page=N.
-        var url = p > 1
+        var url = (s && s !== 'hdvideo')
+            ? 'https://www.lenporno.net/' + s + '/' + (p > 1 ? p + '/' : '')
+            : p > 1
             ? 'https://www.lenporno.net/hdvideo/?page=' + p
             : 'https://www.lenporno.net/hdvideo/';
         return cherryFetch(url).then(function (html) {
@@ -8230,6 +8352,7 @@ SOURCES.push({
         var s = sort || 'popular';
         var url = category
             ? _buildCatUrl('https://jopaonline.mobi/categories/{slug}/' + s + '/{page}', category, p, 1, true)
+            : sort ? 'https://jopaonline.mobi/' + sort + (p > 1 ? '/' + p : '')   // the feed ignored the sort
             : (p > 1 ? 'https://jopaonline.mobi/' + p : 'https://jopaonline.mobi/');
         return cherryFetch(url).then(function (html) {
             var items = _jopaCards(html);
