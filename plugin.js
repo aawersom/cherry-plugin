@@ -1,0 +1,8147 @@
+﻿(function () {
+  'use strict';
+
+  if (window.plugin_cherry_ready) return;
+  window.plugin_cherry_ready = true;
+
+  // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
+  // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
+  // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
+  var CHERRY_VERSION = '0.13.36';
+
+  // ============================================================
+  // CONFIG — user sets these after deploying their proxy
+  // ============================================================
+  var PROXY_URL = 'https://cherry-proxy.aawersom.workers.dev';
+  // Secondary proxy on a self-hosted VPS (stable IP, unmetered bandwidth) — replaces
+  // Deno Deploy (free egress quota kept dying on video streaming). Runs the Deno proxy
+  // script via systemd behind Caddy/TLS (sslip.io). Used for sites that block CF
+  // datacenter IPs + KVS sites whose CDN tokens are IP-bound (need one stable egress IP).
+  var PROXY_URL_2 = 'https://185-36-141-21.sslip.io';
+  // Tertiary proxy — VPS with rotating residential IPs (set to '' if not deployed)
+  // Deploy workers/cherry-proxy-vps/index.js on Beget VPS, then fill in your IP:PORT
+  var PROXY_URL_3 = '';
+  // Val.town free HTTP val (workers/cherry-proxy-valtown/main.ts) — its egress IP passes
+  // Cloudflare's bot-challenge (like Deno did) where the VPS/CF datacenter IPs get a
+  // "Just a moment" 403. Used ONLY for spankbang's light LISTING (KB) — keeps usage far
+  // under the free tier; spankbang video stays off it (and is broken anyway / needs a browser).
+  var PROXY_URL_VT = 'https://aawersom--0d56e6a4635611f1a1321607ee4eb77e.web.val.run';
+  var PROXY_URL_VT_HOSTS = {
+    'ru.spankbang.com': 1, 'spankbang.com': 1, 'www.spankbang.com': 1
+  };
+
+  var PROXY_URL_2_HOSTS = {
+    // xnxx: CF Worker IPs blocked at ASN level; Deno works
+    'xnxx.com': 1, 'www.xnxx.com': 1,
+    // youjizz: rate-limits CF datacenter IPs (page + all *.youjizz.com CDN via regex below)
+    'www.youjizz.com': 1, 'youjizz.com': 1,
+    // hqporner: CF datacenter IPs are intermittently blocked (catalog drops to 0).
+    // Streams are on mydaddy.cc / *.bigcdn.cc (both already → VPS), so page+stream
+    // co-locate on the VPS egress IP.
+    'hqporner.com': 1, 'www.hqporner.com': 1,
+    // tizam.org: rate-limits rapid sequential CF datacenter requests
+    'tv4.tizam.org': 1,
+    // pornone/porntrex: Deno — KVS IP-bound tokens require page+CDN on same fixed IP
+    'pornone.com': 1, 'www.pornone.com': 1,
+    'porntrex.com': 1, 'www.porntrex.com': 1,
+    // pornve: KVS get_file token is IP-bound and its host sends no CORS — the inner player
+    // needs the proxy, so page + get_file must leave from the SAME fixed IP (2026-10-10)
+    'pornve.com': 1, 'www.pornve.com': 1,
+    // 3movs: same as pornve — IP-bound get_file, no CORS on its host
+    'www.3movs.com': 1, '3movs.com': 1,
+    // eporner: SOCKS5 instability — revert to Deno
+    'www.eporner.com': 1,
+    // spankbang: now routed to Val.town (PROXY_URL_VT) — the VPS datacenter IP gets
+    // Cloudflare's "Just a moment" 403; Val.town's IP passes it. (Was here on Deno.)
+    // mydaddy.cc: bigcdn tokens IP-bound to mydaddy.cc fetch IP — must use same proxy as bigcdn
+    'mydaddy.cc': 1,
+    // bigcdn.cc all subdomains covered by /\.bigcdn\.cc$/ regex in buildProxyUrl
+    // perfektdamen KVS CDN — IP-bound tokens require consistent egress IP
+    'www.perfektdamen.co': 1,
+    // ebun's player embed + stream host: the get_file v-acctoken is bound to the IP that
+    // fetched the EMBED, and the CDN rejects any foreign Referer (403 for the WebView's
+    // lampa.mx). VPS = one stable IP for embed + stream, and the proxy sends no Referer.
+    '666-emded.com': 1,
+    // pornhub video PAGE (2026-09-05): the flashvars are HLS-only now and the SEGMENT tokens
+    // (ipa=1) are bound to the IP that fetched the page. The CF worker's egress differs
+    // between requests → 470 on every segment (playlist loads, video never starts). The VPS
+    // is one IP for page + playlist + segments and rewrites the m3u8 (*.phncdn.com is routed
+    // here too — regex below). The webmasters API stays on the device IP (thumbs IP-bound).
+    'www.pornhub.com': 1, 'rt.pornhub.com': 1,
+    // familyporn: its get_file (IP-bound KVS token) 302s to a CDN that rejects hosting-range
+    // IPs (stand: 403; via the VPS with page + stream on one IP: 206). Page + stream here.
+    'familyporn.tv': 1,
+    // huyamba: mobile UAs are 302'd into a dead mobile mirror (rt.huyamba.xyz) — the VPS
+    // fetches with a desktop UA. Its get_file token is NOT IP-bound (stream stays raw).
+    'play.huyamba.mobi': 1,
+    // xhamster: the device's native fetch of listings trips on HTTP 103 (Early Hints) and the
+    // CF worker got a 503 from it once; the VPS is steady. Only the PAGE host — the HLS stream
+    // (video-nss.xhcdn.com) is not IP-bound and stays raw.
+    'ru.xhamster.com': 1
+    // NB: hellporno stays on CF (Deno returns 0 cards for it even when up; CF gives 60).
+    // hqporner is blocked on CF datacenter IPs and Deno doesn't help — it needs a
+    // residential route (PROXY_URL_3). Neither is routed to Deno.
+  };
+
+  // Domains that need residential IP — routed via PROXY_URL_3 when available
+  var PROXY_URL_3_HOSTS = {
+    'www.pornhub.com': 1,
+    'rt.pornhub.com': 1
+  };
+
+  function getProxyKey() {
+    return Lampa.Storage.get('cherry_proxy_key', '1206');
+  }
+
+  // ============================================================
+  // PROXY HELPERS
+  // ============================================================
+
+  /** @param {string} url @param {string=} referer @returns {string} */
+  function buildProxyUrl(url, referer, forceCF) {
+    var key = getProxyKey();
+    var base = PROXY_URL;
+    // forceCF: failover path — ignore secondary routing, go straight to the CF worker.
+    if (!forceCF) {
+      if (PROXY_URL_VT) {
+        try { if (PROXY_URL_VT_HOSTS[new URL(url).hostname]) base = PROXY_URL_VT; } catch (e) {}
+      }
+      if (base === PROXY_URL && PROXY_URL_3) {
+        try { if (PROXY_URL_3_HOSTS[new URL(url).hostname]) base = PROXY_URL_3; } catch (e) {}
+      }
+      if (base === PROXY_URL && PROXY_URL_2) {
+        try {
+          var h = new URL(url).hostname;
+          // Registered-domain regexes co-locate a site's page + its stream-CDN
+          // subdomains on the same VPS egress IP. KVS/CDN tokens are IP-bound: if the
+          // page is fetched from the VPS but the stream CDN goes via CF (different IP),
+          // the token mismatches → 410/buffering. youjizz streams on *.youjizz.com
+          // (e.g. cdne-mobile.youjizz.com); porntrex streams on *.cdntrex.com.
+          if (PROXY_URL_2_HOSTS[h] || /\.bigcdn\.cc$/.test(h) || /(?:^|\.)pornone\.com$/.test(h) ||
+              /(?:^|\.)youjizz\.com$/.test(h) || /\.cdntrex\.com$/.test(h) ||
+              /(?:^|\.)phncdn\.com$/.test(h)) base = PROXY_URL_2;   // pornhub HLS: same IP as its page (see PROXY_URL_2_HOSTS)
+        } catch (e) {}
+      }
+    }
+    var p = base + '/proxy?url=' + encodeURIComponent(url);
+    if (key)     p += '&key=' + encodeURIComponent(key);
+    if (referer) p += '&referer=' + encodeURIComponent(referer);
+    return p;
+  }
+
+  // True when this URL is routed to a SECONDARY proxy (Deno/VPS), so a failover to
+  // the primary CF worker is meaningful (e.g. when Deno is over-quota / 503).
+  function _hasProxyFailover(url, referer) {
+    return buildProxyUrl(url, referer) !== buildProxyUrl(url, referer, true);
+  }
+
+  // Hosts that block the device's home IP (so on Android the native device-IP fetch
+  // returns empty/challenge) AND whose stream co-locates with the page proxy — so we
+  // can safely force BOTH page and stream through the proxy on Android without an
+  // IP-affinity mismatch. hqporner → VPS (its bigcdn stream is already VPS-routed);
+  // hellporno → CF (page + get_file stream share the same host). NOT general: sites
+  // whose CDN lives on a separate unrouted domain (xnxx-cdn, youjizz CDN) must stay
+  // native device-IP for page+stream, so they are deliberately excluded.
+  // Hosts proxied on Android ONLY when Lampa's inner player is selected (see _forceProxyAndroid).
+  var _ANDROID_INNER_PROXY = {
+    'pornve.com': 1, 'www.pornve.com': 1,
+    'www.3movs.com': 1, '3movs.com': 1,
+    'pornone.com': 1, 'www.pornone.com': 1
+  };
+
+  var _ANDROID_FORCE_PROXY = {
+    'hqporner.com': 1, 'www.hqporner.com': 1,
+    // hqporner's player embed (mydaddy.cc) + its CDN (*.bigcdn.cc) block the device home IP
+    // (mydaddy returns a 181-byte stub → no stream → "doesn't open"). Force both through the
+    // proxy so the embed loads AND the bigcdn mp4 token co-locates on the same proxy IP.
+    'mydaddy.cc': 1,
+    'hellporno.com': 1, 'www.hellporno.com': 1,
+    // lenporno + eporner: the device-IP native fetch of the PAGE gets redirected/blocked
+    // (lenporno → mirror redirect, 0 cards; eporner → 369-byte block, no stream hash), but
+    // the page loads via the proxy. Only the page host is forced — their stream CDNs
+    // (cdnv365 / eporner CDN) are on separate hosts → stay raw device-IP (signed-token,
+    // not IP-bound) so playback still works.
+    'www.lenporno.net': 1, 'lenporno.net': 1,
+    'www.eporner.com': 1, 'eporner.com': 1,
+    // ebun: the 666-emded.com embed issues an IP-bound stream token and its CDN rejects
+    // foreign Referers — the inner WebView player (Referer lampa.mx) got 403 while the
+    // external player played. Forcing embed + get_file through the proxy (→ VPS) gives one
+    // IP for both and a Referer-less fetch. Stand: inner player currentTime > 0.
+    '666-emded.com': 1,
+    // huyamba: the device (mobile UA) is redirected to the dead rt.huyamba.xyz → 0 cards
+    // natively; via the proxy (desktop UA) the listing loads. Stream token not IP-bound.
+    'play.huyamba.mobi': 1,
+    // xhamster: native listing fetch fails intermittently (HTTP 103 Early Hints surfaces as an
+    // error) → page via the proxy (VPS). HLS stream host stays raw (token not IP-bound).
+    'ru.xhamster.com': 1,
+    // ebalovo: the brand domain 301s mobile UAs to a mobile mirror whose stream tokens 404, and
+    // even desktop-mirror tokens are UA-bound (404 with the WebView/ExoPlayer UA). All page
+    // fetches are on the brand domain (cards are normalised to it) → proxied here with a
+    // desktop UA; the stream itself is proxied via the adapter's `androidProxyStream` flag
+    // (the mirror host rotates, so no host entry can name it).
+    'www.ebalovo.porn': 1,
+    // lenkino: same family as ebalovo (UA-bound tokens, mobile mirror) — page here, stream via
+    // the adapter's androidProxyStream flag.
+    'www.lenkino.adult': 1,
+    // porno666: get_file tokens are IP-bound and the CDN 403s foreign Referers (ebun's farm) —
+    // page and get_file share this host, so both go through the proxy with no Referer.
+    'porno666.link': 1,
+    // familyporn: the device's get_file → CDN redirect answered 403 on the stand's hosting IP;
+    // page + get_file share this host, so both go through the VPS (one IP for the token).
+    'familyporn.tv': 1,
+    // spankbang: Cloudflare challenges the device home IP too → force the page through
+    // the proxy (routes to Val.town via PROXY_URL_VT, which passes the challenge).
+    'ru.spankbang.com': 1, 'spankbang.com': 1, 'www.spankbang.com': 1,
+    // porntrex: the device native fetch returns a degraded page (empty card titles → Lampa
+    // shows the "add to favorites" fallback) and the KVS get_file stream token is bound to
+    // that device IP → no playback. Browser (proxy→VPS) works. porntrex's get_file stream is
+    // on the SAME host (www.porntrex.com), so forcing the page → VPS co-locates page+stream
+    // on one IP, matching the working browser path.
+    'www.porntrex.com': 1, 'porntrex.com': 1
+    // pornhub is deliberately NOT here: its webmasters API (www.pornhub.com) returns JSON and
+    // works on the device IP — routing it through the residential proxy returns an empty catalog.
+    // Only the *.phncdn.com stream CDN is auto-forced (suffix match below); the video PAGE is
+    // proxied EXPLICITLY in pornhub.getStream() with referer=www.pornhub.com so the page + m3u8 +
+    // segments all exit from the SAME proxy IP (ipa=1 token) while the catalog stays device-IP.
+  };
+  function _forceProxyAndroid(url) {
+    try {
+      var h = new URL(url).hostname;
+      if (_ANDROID_FORCE_PROXY[h]) return true;
+      // pornhub stream CDN subdomains vary (em-h, im-h, ev-h, hm-h…) on *.phncdn.com — suffix
+      // match so the m3u8 + segments route through the proxy. pornhub.com is intentionally NOT
+      // matched here: the catalog API (www.pornhub.com) must stay on the device IP, and the
+      // video PAGE is proxied explicitly in getStream (with referer) — see the map comment.
+      if (/(^|\.)phncdn\.com$/.test(h)) return true;
+      // hqporner CDN: *.bigcdn.cc (s1, s42…) — proxy the mp4 too so it co-locates on the VPS
+      // egress IP with the mydaddy.cc embed fetch (bigcdn token is bound to that IP).
+      if (/(^|\.)bigcdn\.cc$/.test(h)) return true;
+      // CORS-only hosts: their CDN sends no Access-Control-Allow-Origin, which only Lampa's INNER player
+      // needs (crossorigin <video>). With the inner player, page AND stream (pornone's CDN sNNNN.pornone.com
+      // included) go through the VPS together — one egress IP for the IP-bound token, plus the proxy's CORS.
+      // With an external player (MX) both stay on the device IP: the token still matches and MX reads the
+      // CDN at full speed instead of the VPS's ~5.7 Mbit/s (TV 2026-10-11: pornone 17 s start via the VPS).
+      if (_innerPlayerSelected() && (_ANDROID_INNER_PROXY[h] || /(^|\.)pornone\.com$/.test(h))) return true;
+    } catch (e) {}
+    return false;
+  }
+
+  function _innerPlayerSelected() {
+    try { return Lampa.Storage.get('player', 'inner') === 'inner'; } catch (e) { return true; }
+  }
+
+  function _isAndroid() {
+    try {
+      return !!(window.Lampa && window.Lampa.Platform &&
+                typeof window.Lampa.Platform.is === 'function' &&
+                window.Lampa.Platform.is('android'));
+    } catch (e) { return false; }
+  }
+
+  function _nativeFetch(url) {
+    return new Promise(function(resolve, reject) {
+      var req = new window.Lampa.Reguest();
+      req.native(url, function(data) {
+        resolve(typeof data === 'object' ? JSON.stringify(data) : String(data));
+        req.clear();
+      }, function(err) {
+        req.clear();
+        reject(err);
+      }, false, { dataType: 'text', timeout: 4000 });
+    });
+  }
+
+  // Every proxy request is bounded: a hung proxy/CDN used to leave the spinner forever (only the
+  // native path had a timeout). Covers headers AND body; rejects Error('HTTP n') carrying `.body`
+  // (status-tolerant callers still get the page) or Error('timeout').
+  var FETCH_TIMEOUT_MS = 15000;
+  function _getText(u, opts) {
+    return new Promise(function (resolve, reject) {
+      var ctl = (typeof AbortController === 'function') ? new AbortController() : null;
+      var o = opts || {};
+      if (ctl) o.signal = ctl.signal;
+      var timer = setTimeout(function () {
+        try { if (ctl) ctl.abort(); } catch (e) {}
+        reject(new Error('timeout'));
+      }, FETCH_TIMEOUT_MS);
+      fetch(u, o).then(function (r) {
+        return r.text().then(function (t) {
+          clearTimeout(timer);
+          if (r.ok) return resolve(t);
+          var err = new Error('HTTP ' + r.status);
+          err.body = t;
+          reject(err);
+        });
+      }).catch(function (e) { clearTimeout(timer); reject(e); });
+    });
+  }
+
+  // Can this URL deliver bytes? GET with a 2-byte Range (a CDN that refuses the token answers 4xx
+  // before any body), bounded like every request; the body is dropped, never read.
+  function _probeOk(u) {
+    return new Promise(function (resolve) {
+      var ctl = (typeof AbortController === 'function') ? new AbortController() : null;
+      var timer = setTimeout(function () { try { if (ctl) ctl.abort(); } catch (e) {} resolve(false); }, FETCH_TIMEOUT_MS);
+      fetch(u, { headers: { Range: 'bytes=0-1' }, signal: ctl ? ctl.signal : undefined }).then(function (r) {
+        clearTimeout(timer);
+        try { if (ctl) ctl.abort(); } catch (e) {}
+        resolve(r.ok);
+      }, function () { clearTimeout(timer); resolve(false); });
+    });
+  }
+
+  // Short page cache: one view used to download the same page three times (getStream, the
+  // related probe, then the «Похожие» grid) — slower, and enough to trip a site's rate limit
+  // (pornhub, 2026-10-08). Same url+referer within 3 min shares one request; failures are not kept.
+  // A RETRY that expects a different body (bot page, other signing) must call _cherryFetchNow —
+  // through the cache it would get the same page back.
+  var HTML_CACHE_MS = 180000, HTML_CACHE_MAX = 6, _htmlCache = {}, _htmlOrder = [];
+
+  // Monotonic count of page requests that FAILED (network, timeout, proxy/site 5xx / 403 …) —
+  // a 404/410 is an answer, not a failure. Adapters swallow errors into an empty list (72
+  // `.catch(→ {items:[]})`), so a dead connection looked like «ничего не найдено»; _gridLoad
+  // compares this counter before/after a load to tell «error, retry» from «really empty».
+  var _netFails = 0;
+  function _countFail(err) {
+    if (!/^HTTP 4(04|10)$/.test((err && err.message) || '')) _netFails++;
+    throw err;
+  }
+
+  /** @param {string} url @param {string=} referer @returns {Promise<string>} */
+  function cherryFetch(url, referer) {
+    var key = url + '|' + (referer || ''), hit = _htmlCache[key];
+    if (hit && Date.now() - hit.t < HTML_CACHE_MS) return hit.p;
+    var p = _cherryFetchNow(url, referer);
+    _htmlCache[key] = { t: Date.now(), p: p };
+    _htmlOrder = _htmlOrder.filter(function (k) { return k !== key; });
+    _htmlOrder.push(key);
+    while (_htmlOrder.length > HTML_CACHE_MAX) delete _htmlCache[_htmlOrder.shift()];
+    p.catch(function () { if (_htmlCache[key] && _htmlCache[key].p === p) delete _htmlCache[key]; });
+    return p.catch(_countFail);
+  }
+
+  function _cherryFetchNow(url, referer) {
+    if (_isAndroid()) {
+      // Sites that block the device home IP → fetch the page via the proxy (clean IP)
+      // instead of native, so it co-locates with the (also proxied) stream.
+      if (_forceProxyAndroid(url)) return _proxyText(url, referer);
+      return _nativeFetch(url).catch(function() { return _proxyText(url, referer); });
+    }
+    return _proxyText(url, referer);
+  }
+
+  // Proxy GET → text, with one secondary→CF failover. If the URL routes to a secondary
+  // proxy (VPS) and that fails (down, timeout), retry via the CF worker so a dead
+  // secondary proxy doesn't take down its channels.
+  function _proxyText(url, referer) {
+    return _getText(buildProxyUrl(url, referer)).catch(function(err) {
+      if (!_hasProxyFailover(url, referer)) throw err;
+      return _getText(buildProxyUrl(url, referer, true));
+    });
+  }
+
+  /**
+   * Status-tolerant fetch: returns body text regardless of HTTP status.
+   * Needed for sites (e.g. 3movs) that serve a valid full page body with a
+   * 404 status header on category pagination (page > 1).
+   * @param {string} url @param {string=} referer @returns {Promise<string>}
+   */
+  function _fetchAny(url, referer) {
+    if (_isAndroid()) {
+      return _nativeFetch(url).catch(function () { return _proxyTextAny(url, referer); }).catch(_countFail);
+    }
+    return _proxyTextAny(url, referer).catch(_countFail);
+  }
+
+  // Status-tolerant proxy GET with the same failover as _proxyText: a non-2xx page is still
+  // returned (its body), a network error / timeout is not.
+  function _proxyTextAny(url, referer) {
+    function bodyOf(err) { if (err && err.body != null) return err.body; throw err; }
+    return _getText(buildProxyUrl(url, referer)).catch(function (err) {
+      if (_hasProxyFailover(url, referer)) return _getText(buildProxyUrl(url, referer, true)).catch(bodyOf);
+      return bodyOf(err);
+    });
+  }
+
+  /**
+   * POST via proxy using native fetch (Lampa.Reguest does not expose POST).
+   * @param {string} url
+   * @param {string} body  application/x-www-form-urlencoded string
+   * @returns {Promise<string>}
+   */
+  function cherryPost(url, body) {
+    return _getText(buildProxyUrl(url), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body
+    }).catch(_countFail);
+  }
+
+  /**
+   * POST a JSON body DIRECTLY to a worker-origin URL (NOT wrapped in /proxy?url=).
+   * Used by Sync for `${PROXY_URL}/favs` — the worker is CORS-open (sends `*`),
+   * so a plain fetch works on web/TV. On Android plain fetch may be blocked, so
+   * fall back to Lampa.Reguest's native POST when available.
+   * @param {string} url   absolute worker URL (already carries pin/key params)
+   * @param {Object} obj   JSON-serialisable body
+   * @returns {Promise<Object>}  parsed JSON response
+   */
+  function cherryPostJson(url, obj) {
+    var payload = JSON.stringify(obj || {});
+    if (_isAndroid() && window.Lampa && typeof window.Lampa.Reguest === 'function') {
+      return new Promise(function (resolve, reject) {
+        try {
+          var req = new window.Lampa.Reguest();
+          req.timeout(8000);
+          req.native(url, function (data) {
+            req.clear();
+            try { resolve(typeof data === 'object' ? data : JSON.parse(data)); }
+            catch (e) { reject(e); }
+          }, function (err) {
+            req.clear();
+            reject(err);
+          }, payload, { dataType: 'json', headers: { 'Content-Type': 'application/json' } });
+        } catch (e) { reject(e); }
+      });
+    }
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload
+    }).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    });
+  }
+
+
+  // Picks the best available quality URL (highest numeric label wins).
+  function bestQualityUrl(quality) {
+    var keys = Object.keys(quality || {});
+    if (!keys.length) return '';
+    var best = 0, bestUrl = '';
+    keys.forEach(function (k) {
+      var n = parseInt(k, 10) || 0;
+      if (n > best) { best = n; bestUrl = quality[k]; }
+    });
+    return bestUrl || quality[keys[0]];
+  }
+
+  // Track blob URLs created by proxyM3u8 so they can be revoked on player close.
+  var _blobUrls = [];
+
+  // Related video panel state (REQ-4).
+  var _relatedGeneration = 0;
+  var _pendingRelated    = [];   // non-empty marker that page-1 related exists
+  var _relatedSrc        = null;
+  var _relatedVideo      = null; // the video whose related grid we push on close
+
+  // Watch-history state: the video currently in the player + its timeline hash.
+  // On player progress/destroy we snapshot the native timeline into Hist so the
+  // home «Продолжить» surface and on-card progress bars reflect the real position.
+  var _histVideo = null;
+  var _histHash  = null;
+
+  // Fetches an HLS m3u8 through the proxy and rewrites all non-comment lines:
+  //   - Sub-playlist lines (.m3u8) → recursively proxied → inner blob URL
+  //   - Segment lines (.ts, etc.) → direct proxy URL
+  // Handles multi-level HLS (master → index → segments) so hls.js resolves
+  // segment paths against a blob URL that already has correct proxied paths.
+  function proxyM3u8(m3u8Url, referer) {
+    if (_isAndroid()) return Promise.resolve(m3u8Url);
+    return cherryFetch(m3u8Url, referer).then(function (content) {
+      var basePath = m3u8Url.split('?')[0];
+      var baseUrl = basePath.substring(0, basePath.lastIndexOf('/') + 1);
+
+      var lines = content.split('\n');
+      var promises = lines.map(function (line) {
+        var l = line.trim();
+        if (!l || l[0] === '#') return Promise.resolve(line);
+        var abs = (l.indexOf('http') === 0) ? l : baseUrl + l;
+        // Sub-playlist: proxy recursively so its segments are also rewritten.
+        if (/\.m3u8/.test(abs.split('?')[0])) {
+          return proxyM3u8(abs, referer).catch(function () {
+            return buildProxyUrl(abs, referer);
+          });
+        }
+        return Promise.resolve(buildProxyUrl(abs, referer));
+      });
+
+      return Promise.all(promises).then(function (rewrittenLines) {
+        var blob = new Blob([rewrittenLines.join('\n')], { type: 'application/vnd.apple.mpegurl' });
+        var blobUrl = URL.createObjectURL(blob);
+        _blobUrls.push(blobUrl);
+        return blobUrl;
+      });
+    });
+  }
+
+  // ============================================================
+  // SOURCES — adapters register here
+  // ============================================================
+
+  /**
+   * @typedef {Object} VideoCard
+   * @property {string} id
+   * @property {string} source
+   * @property {string} title
+   * @property {string} thumb
+   * @property {string} url
+   * @property {number} [duration]
+   * @property {number} [views]
+   */
+
+  /**
+   * @typedef {Object} BrowseResult
+   * @property {VideoCard[]} items
+   * @property {number} total_pages
+   */
+
+  /**
+   * @typedef {Object} StreamResult
+   * @property {string} url
+   * @property {Object.<string,string>} quality  e.g. { '1080p': 'https://...' }
+   */
+
+  /**
+   * @typedef {Object} SourceAdapter
+   * @property {string} id
+   * @property {string} name
+   * @property {string} host
+   * @property {function(string, number): Promise<BrowseResult>} search
+   * @property {function(string, number): Promise<BrowseResult>} browse
+   * @property {function(VideoCard): Promise<StreamResult>}     getStream
+   */
+
+  /** @type {SourceAdapter[]} */
+  var SOURCES = [
+    // Adapters are defined at the bottom of this file and push themselves here.
+  ];
+
+  // ============================================================
+  // FAVORITES  (timestamped records + tombstones, for cross-device sync)
+  // ============================================================
+  // Storage key `cherry_favs` now holds an array of RECORDS:
+  //   { id, source, title, thumb, url, duration, views, added, deleted }
+  // A record is ACTIVE when added > deleted. Deleting keeps the record and
+  // stamps `deleted` (a tombstone) so a later remote pull can't resurrect it
+  // and so last-write-wins merges resolve deterministically across devices.
+  // The PUBLIC API (all/has/toggle) keeps its old contract — callers
+  // (_gridLoad is_favorites path, cardRender, onMenu) are unchanged.
+  var Fav = {
+    _key: 'cherry_favs',
+
+    /**
+     * Raw record array, migrating the legacy plain-item format on first read.
+     * Legacy items lack `added`/`deleted`; wrap each as {added:1, deleted:0}.
+     * added=1 ("old, low priority") loses to any real remote action's Date.now()
+     * stamp, so a deletion made on another device wins after a sync.
+     * @returns {Array}
+     */
+    _records: function () {
+      var list = Lampa.Storage.get(this._key, []);
+      if (!Array.isArray(list)) return [];
+      var migrated = false;
+      // Search-query records share the sync bucket; a v0.13.27-or-older device merges them in
+      // as favorites — drop them here so they never show as cards (and heal such a device).
+      var n = list.length;
+      list = list.filter(function (v) { return !(v && v.source === _RECENT_SRC); });
+      if (list.length !== n) migrated = true;
+      var recs = list.map(function (v) {
+        if (v && typeof v.added === 'number' && typeof v.deleted === 'number') return v;
+        migrated = true;
+        return {
+          id:       v.id,
+          source:   v.source,
+          title:    v.title    || '',
+          thumb:    v.thumb    || '',
+          url:      v.url      || '',
+          duration: v.duration || 0,
+          views:    v.views    || 0,
+          added:    1,
+          deleted:  0
+        };
+      });
+      if (migrated) Lampa.Storage.set(this._key, recs);
+      return recs;
+    },
+
+    /** @returns {VideoCard[]} ACTIVE records mapped to the card shape. */
+    all: function () {
+      // Newest first by `added`, regardless of how a record arrived: local toggles unshift,
+      // but _merge APPENDS records pulled from another device — without this sort a video
+      // favorited elsewhere landed at the very bottom of the grid ("не появился").
+      return this._records()
+        .filter(function (r) { return r.added > r.deleted; })
+        .sort(function (a, b) { return (b.added || 0) - (a.added || 0); })
+        .map(function (r) {
+          return {
+            id:       r.id,
+            source:   r.source,
+            // Repaired on read, never rewritten: cards saved before the parser fixes keep
+            // «&#039;» / mojibake in the bucket, and rewriting them would race other devices' LWW.
+            title:    _cleanTitle(r.title),
+            // Legacy records saved before v0.13.11 may hold the unsubstituted xvideos/xnxx
+            // hover template (…/xv_THUMBNUM_t.jpg) — a 404 as a poster. Normalize on read.
+            thumb:    (r.thumb   || '').replace(/THUMBNUM/g, '1'),
+            url:      r.url      || '',
+            duration: r.duration || 0,
+            views:    r.views    || 0
+          };
+        });
+    },
+
+    /** @param {VideoCard} video @returns {boolean} active (added>deleted) check. */
+    has: function (video) {
+      return this._records().some(function (r) {
+        return r.id === video.id && r.source === video.source && r.added > r.deleted;
+      });
+    },
+
+    /**
+     * Toggle favorite status.
+     * @param {VideoCard} video
+     * @returns {boolean} true if now active (added), false if removed (tombstoned)
+     */
+    toggle: function (video) {
+      var list = this._records();
+      var rec = null;
+      list.forEach(function (r) {
+        if (r.id === video.id && r.source === video.source) rec = r;
+      });
+      // Stamps never go backwards: a record stamped by a device whose clock ran ahead stays
+      // toggleable here (LWW compares max(added, deleted); a plain `now` could lose to it).
+      var now = Date.now();
+      var active;
+      if (rec && rec.added > rec.deleted) {
+        // Currently active → tombstone (keep the record).
+        rec.deleted = Math.max(now, (rec.added || 0) + 1);
+        active = false;
+      } else {
+        // Absent or tombstoned → (re)activate + refresh fields.
+        if (!rec) {
+          rec = { id: video.id, source: video.source };
+          list.unshift(rec);
+        }
+        rec.title    = video.title    || '';
+        rec.thumb    = video.thumb    || '';
+        rec.url      = video.url      || '';
+        rec.duration = video.duration || 0;
+        rec.views    = video.views    || 0;
+        rec.added    = Math.max(now, (rec.deleted || 0) + 1);
+        rec.deleted  = 0;
+        active = true;
+      }
+      Lampa.Storage.set(this._key, list);
+      try { Sync.schedule(); } catch (e) {}
+      return active;
+    },
+
+    /**
+     * Merge remote records into local by id@source, last-write-wins on the
+     * newer of max(added,deleted). Persists the merged set.
+     * @param {Array} remote
+     */
+    _merge: function (remote) {
+      if (!Array.isArray(remote) || !remote.length) return;
+      var local = this._records();
+      var index = {};
+      local.forEach(function (r) { index[r.id + '@' + r.source] = r; });
+      remote.forEach(function (rr) {
+        if (!rr || rr.id == null) return;
+        var key = rr.id + '@' + rr.source;
+        var cur = index[key];
+        if (!cur) {
+          local.push(rr);
+          index[key] = rr;
+          return;
+        }
+        var curT = Math.max(cur.added || 0, cur.deleted || 0);
+        var remT = Math.max(rr.added || 0, rr.deleted || 0);
+        if (remT >= curT) {
+          // Remote is newer (or equal) → take its state.
+          cur.title    = rr.title    || cur.title    || '';
+          cur.thumb    = rr.thumb    || cur.thumb    || '';
+          cur.url      = rr.url      || cur.url      || '';
+          cur.duration = rr.duration || cur.duration || 0;
+          cur.views    = rr.views    || cur.views    || 0;
+          cur.added    = rr.added    || 0;
+          cur.deleted  = rr.deleted  || 0;
+        }
+      });
+      Lampa.Storage.set(this._key, local);
+    }
+  };
+
+  // ============================================================
+  // WATCH HISTORY  (Resume / «Продолжить» / progress bars)
+  // ============================================================
+  // Storage key `cherry_history` holds an array of RECORDS:
+  //   { id, source, title, thumb, url, duration, position, ts }
+  // Resume position itself is owned by Lampa's NATIVE timeline (see playVideo:
+  // it passes timeline:Lampa.Timeline.view(hash) so Lampa auto-persists and
+  // restores the scrubber). `Hist` is the SURFACE layer — it powers the home
+  // «Продолжить» tile + grid and the on-card progress bar. We snapshot the
+  // timeline's position/duration on player progress/destroy. Mirrors Fav's
+  // record/migration robustness (legacy entries lacking ts are tolerated).
+  var Hist = {
+    _key: 'cherry_history',
+    _cap: 100,
+
+    /** Stable per-video key shared with the native timeline hash. */
+    _hashKey: function (element) {
+      return (element.source || '') + ':' + (element.id != null ? element.id : (element.url || ''));
+    },
+
+    /**
+     * Raw record array. Tolerates legacy/partial shapes by defaulting fields;
+     * drops entries without an id (unusable as a key).
+     * @returns {Array}
+     */
+    _records: function () {
+      var list = Lampa.Storage.get(this._key, []);
+      if (!Array.isArray(list)) return [];
+      return list.filter(function (r) {
+        return r && r.id != null;
+      }).map(function (r) {
+        return {
+          id:       r.id,
+          source:   r.source   || '',
+          title:    r.title    || '',
+          thumb:    r.thumb    || '',
+          url:      r.url      || '',
+          duration: r.duration || 0,
+          position: r.position || 0,
+          ts:       r.ts       || 0
+        };
+      });
+    },
+
+    /**
+     * Upsert a watch record (by source+id), stamping ts = now. Capped to _cap
+     * most-recent entries so storage can't grow unbounded.
+     * @param {VideoCard} element
+     * @param {number} position  seconds watched
+     * @param {number} duration  total seconds
+     */
+    mark: function (element, position, duration) {
+      if (!element || element.id == null) return;
+      var list = this._records();
+      var key  = this._hashKey(element);
+      var self = this;
+      var rec  = null;
+      list.forEach(function (r) { if (self._hashKey(r) === key) rec = r; });
+      if (!rec) {
+        rec = { id: element.id, source: element.source || '' };
+        list.unshift(rec);
+      }
+      rec.title    = element.title || rec.title || '';
+      rec.thumb    = element.thumb || rec.thumb || '';
+      rec.url      = element.url   || rec.url   || '';
+      rec.position = position || 0;
+      if (duration) rec.duration = duration;
+      else rec.duration = rec.duration || 0;
+      rec.ts       = Date.now();
+      // Keep newest first; cap.
+      list.sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
+      if (list.length > this._cap) list = list.slice(0, this._cap);
+      Lampa.Storage.set(this._key, list);
+    },
+
+    /** @returns {VideoCard[]} records sorted by ts desc (newest first). */
+    all: function () {
+      return this._records()
+        .sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); })
+        .slice(0, this._cap)
+        .map(function (r) { r.title = _cleanTitle(r.title); return r; });
+    },
+
+    /** @param {VideoCard} element @returns {Object|null} the matching record. */
+    get: function (element) {
+      if (!element || element.id == null) return null;
+      var key  = this._hashKey(element);
+      var self = this;
+      var hit  = null;
+      this._records().forEach(function (r) { if (self._hashKey(r) === key) hit = r; });
+      return hit;
+    },
+
+    /** @param {VideoCard} element @returns {number} 0..100 watched percent. */
+    percent: function (element) {
+      var r = this.get(element);
+      if (!r || !r.duration) return 0;
+      var p = Math.round((r.position / r.duration) * 100);
+      if (p < 0) p = 0;
+      if (p > 100) p = 100;
+      return p;
+    }
+  };
+
+  // ============================================================
+  // AVAIL — is a saved video still playable? (device-local, favorites only)
+  // ============================================================
+  // `cherry_avail` = { 'id@source': { f: consecutive failed checks, t: last check ms } }.
+  // A failed play or background check counts; a success resets it. «Недоступно» needs TWO
+  // consecutive failures (a site's brief rate limit must not label a live video), and a check
+  // that met a network failure is inconclusive (not counted). Not synced: it is an observation of
+  // this device's route, and the bucket schema stays untouched.
+  var Avail = {
+    _key: 'cherry_avail',
+    DEAD_AFTER: 2,
+    OK_RECHECK_MS: 3 * 86400000,      // a playable video is re-checked after 3 days
+    BAD_RECHECK_MS: 10 * 60000,       // a failed one on the next open ≥ 10 min later
+    _map: function () { var m = Lampa.Storage.get(this._key, {}); return (m && typeof m === 'object' && !Array.isArray(m)) ? m : {}; },
+    _k: function (v) { return v.id + '@' + v.source; },
+    dead: function (v) { var e = this._map()[this._k(v)]; return !!(e && e.f >= this.DEAD_AFTER); },
+    due: function (v, now) {
+      var e = this._map()[this._k(v)];
+      if (!e) return true;
+      return (now - e.t) > (e.f ? this.BAD_RECHECK_MS : this.OK_RECHECK_MS);
+    },
+    /** @param {VideoCard} v @param {boolean} ok @returns {boolean} dead after this record */
+    record: function (v, ok) {
+      var m = this._map(), k = this._k(v), e = m[k] || { f: 0, t: 0 };
+      e.f = ok ? 0 : (e.f || 0) + 1;
+      e.t = Date.now();
+      m[k] = e;
+      Lampa.Storage.set(this._key, m);
+      return e.f >= this.DEAD_AFTER;
+    },
+    /** Drop entries of videos no longer in favorites (keeps the map bounded). */
+    prune: function (keep) {
+      var m = this._map(), want = {}, self = this, changed = false;
+      keep.forEach(function (v) { want[self._k(v)] = 1; });
+      Object.keys(m).forEach(function (k) { if (!want[k]) { delete m[k]; changed = true; } });
+      if (changed) Lampa.Storage.set(this._key, m);
+    }
+  };
+
+  // «Найти копию»: the same video re-uploaded elsewhere — an all-channels search on the title's
+  // distinctive words (up to 8, relevance-ranked by the global search), not the 4-word «Похожие названия».
+  function _findCopy(element) {
+    Lampa.Activity.push({
+      component:   'cherry_grid',
+      title:       Lampa.Lang.translate('cherry_find_copy') + ': ' + element.title,
+      source_id:   element.source,
+      query:       _searchKeywords(_cleanTitle(element.title), 8),
+      all_sources: true,
+      page:        1
+    });
+  }
+
+  // ============================================================
+  // SYNC  — PIN-based cross-device favorites sync via the CF Worker.
+  // ============================================================
+  // One POST to `${PROXY_URL}/favs?pin=<pin>&key=<proxyKey>` does pull+merge+push:
+  // the worker merges the body's records with its stored bucket (last-write-wins)
+  // and returns the merged set, which we merge locally too (idempotent / safe).
+  // Local-first: any network failure leaves local favorites fully working.
+  var Sync = {
+    _running: false,
+    _timer:   null,
+
+    /**
+     * @returns {string} the sync PIN. EMPTY by default → sync is OFF until the user
+     * enters a PIN via the «Синхронизация» tile. No auto-sync, so favorites stay
+     * purely local (untouched) unless the user opts in.
+     */
+    getPin: function () {
+      // Lampa.Storage.get returns a digit-only string as a NUMBER ('0042' → 42, leading zero lost
+      // → sync silently off) — the PIN is a string, so read the raw stored value.
+      var raw = null;
+      try { raw = window.localStorage.getItem('cherry_sync_pin'); } catch (e) {}
+      return raw != null ? String(raw) : String(Lampa.Storage.get('cherry_sync_pin', ''));
+    },
+
+    /** @param {string} p 4–12 digits. Persists + triggers a REPORTED run. */
+    setPin: function (p) {
+      p = ('' + (p || '')).trim();
+      if (!/^[0-9]{4,12}$/.test(p)) return false;
+      Lampa.Storage.set('cherry_sync_pin', p);
+      this.run(true);   // report result to the user via Noty
+      return true;
+    },
+
+    /** Debounced run — batches rapid toggles (~1500ms). */
+    schedule: function () {
+      var self = this;
+      if (self._timer) clearTimeout(self._timer);
+      self._timer = setTimeout(function () {
+        self._timer = null;
+        self.run();
+      }, 1500);
+    },
+
+    /**
+     * Pull+merge+push in one POST. Swallows network errors (stays local).
+     * Guards against concurrent runs.
+     */
+    run: function (report) {
+      var self = this;
+      if (self._running) return Promise.resolve();
+      var pin = self.getPin();
+      if (!/^[0-9]{4,12}$/.test('' + pin)) {
+        if (report) Lampa.Noty.show(Lampa.Lang.translate('cherry_sync') + ': PIN 4–12 цифр');
+        return Promise.resolve();
+      }
+      self._running = true;
+      var url = PROXY_URL + '/favs?pin=' + encodeURIComponent(pin) +
+                '&key=' + encodeURIComponent(getProxyKey());
+      // One bucket carries favorites AND recent search queries (records with source _RECENT_SRC).
+      var local = Fav._records().concat(_recentRecords());
+      console.log('[Cherry] Sync.run: POST', url, '| local records =', local.length);
+      return cherryPostJson(url, { records: local })
+        .then(function (res) {
+          var got = (res && Array.isArray(res.records)) ? res.records.length : -1;
+          console.log('[Cherry] Sync.run: server responded, records =', got);
+          // Merge only — no grid rebuild here. The favorites grid pulls on open and renders
+          // ONCE from the merged list (_gridLoad); rebuilding an already-built grid from
+          // inside the sync (the old _refreshGrid → comp.create()) mounted a second
+          // card set / left the empty-state box behind and dropped the D-pad focus.
+          if (res && Array.isArray(res.records)) {
+            var isRq = function (r) { return r && r.source === _RECENT_SRC; };
+            Fav._merge(res.records.filter(function (r) { return !isRq(r); }));
+            _recentMerge(res.records.filter(isRq));
+          }
+          if (report) {
+            var n = Fav.all().length;
+            Lampa.Noty.show(Lampa.Lang.translate('cherry_sync_ok') + ' (' + n + ')');
+          }
+        })
+        .catch(function (err) {
+          console.warn('[Cherry] Sync.run FAILED:', err && err.message ? err.message : err);
+          if (report) Lampa.Noty.show(Lampa.Lang.translate('cherry_sync_err'));
+        })
+        .then(function () { self._running = false; });
+    }
+  };
+
+  // ============================================================
+  // UTILS
+  // ============================================================
+
+  /**
+   * Convert seconds to M:SS string.
+   * @param {number|string} s
+   * @returns {string}
+   */
+  function secToTime(s) {
+    s = parseInt(s, 10) || 0;
+    var m   = Math.floor(s / 60);
+    var sec = s % 60;
+    return m + ':' + (sec < 10 ? '0' : '') + sec;
+  }
+
+  /**
+   * Format view count for display (e.g. 1200 → "1K").
+   * @param {number} n
+   * @returns {string}
+   */
+  function formatViews(n) {
+    if (!n || isNaN(n)) return '';
+    if (n >= 1000000) return Math.floor(n / 1000000) + 'M';
+    if (n >= 1000)    return Math.floor(n / 1000) + 'K';
+    return String(n);
+  }
+
+  /**
+   * Lookup adapter by id.
+   * @param {string} id
+   * @returns {SourceAdapter|null}
+   */
+  function sourceById(id) {
+    for (var i = 0; i < SOURCES.length; i++) {
+      if (SOURCES[i].id === id) return SOURCES[i];
+    }
+    return null;
+  }
+
+  // «Все видео» promises the newest videos: the channel's «Свежее» sort, wherever it sits in the
+  // list (sorts[0] is «По популярности» on youjizz, xhamster, huyamba, ebalovo, porno666, lenkino,
+  // pornobriz, ebun). No such sort → '' = the site's own default listing (home / latest-updates).
+  function _latestSort(src) {
+    var sorts = (src && src.cfg && src.cfg.sorts) || [];
+    for (var i = 0; i < sorts.length; i++) if (sorts[i].label === 'Свежее') return sorts[i].id;
+    return '';
+  }
+
+  // Sources offered to the user — tiles, «Все видео» / global search fan-out, health dots.
+  // A `disabled: true` adapter (site down) stays registered so favorites/history/related
+  // for its cards still resolve through sourceById, but it is not shown as a channel.
+  function _activeSources() {
+    return SOURCES.filter(function (s) { return !s.disabled; });
+  }
+
+  /**
+   * Resolve stream for a video and hand off to Lampa.Player,
+   * showing a quality picker when multiple streams exist.
+   * @param {VideoCard}     video
+   * @param {SourceAdapter} source
+   */
+  // Only the LAST play request may open the player: a second Enter (or another card) while
+  // getStream is still pending used to start two players / snapshot progress into the wrong card.
+  var _playGen = 0;
+
+  // One retry after a short pause when the first attempt throws or yields nothing playable —
+  // transient proxy/CDN hiccups (and a site's brief rate limit) otherwise showed «Ошибка».
+  function _streamWithRetry(video, source) {
+    function playable(st) { return st && (st.url || bestQualityUrl(st.quality)); }
+    function once() {
+      return Promise.resolve(source.getStream(video)).then(function (st) {
+        if (!playable(st)) throw new Error('no stream');
+        return st;
+      });
+    }
+    return once().catch(function () {
+      return new Promise(function (r) { setTimeout(r, 1500); }).then(once);
+    });
+  }
+
+  // Lampa's INNER player loads the stream with crossorigin="anonymous", so a CDN that sends no
+  // Access-Control-Allow-Origin fails as «Format error» while a bare <video> plays the very same URL
+  // (youjizz cdne-mobile, analdin get_file — stand 2026-10-10). External players don't care. So when
+  // the inner player will play a raw URL, ask the CDN once (CORS fetch, aborted at the headers) and
+  // without CORS hand the stream through the proxy, which adds it.
+  function _isProxied(u) {
+    return !!u && ((PROXY_URL_3 && u.indexOf(PROXY_URL_3) === 0) || (PROXY_URL_2 && u.indexOf(PROXY_URL_2) === 0) || u.indexOf(PROXY_URL) === 0);
+  }
+  function _viaProxy(u) { return (!u || _isProxied(u) || u.indexOf('blob:') === 0) ? u : buildProxyUrl(u); }
+  function _corsBlocked(u, inner) {
+    if (!inner || !u || _isProxied(u) || u.indexOf('blob:') === 0) return Promise.resolve(false);
+    return new Promise(function (resolve) {
+      var ctl = (typeof AbortController === 'function') ? new AbortController() : null, done = false;
+      var timer = setTimeout(function () { fin(false); }, 4000);   // no answer in time: leave it as is
+      function fin(blocked) {
+        if (done) return;
+        done = true; clearTimeout(timer);
+        try { if (ctl) ctl.abort(); } catch (e) {}
+        resolve(blocked);
+      }
+      fetch(u, { mode: 'cors', signal: ctl ? ctl.signal : undefined }).then(function () { fin(false); }, function () { fin(true); });
+    });
+  }
+
+  // HLS master → the best variant's own media playlist. Players start on the FIRST-listed variant and climb
+  // slowly or never (TV 2026-10-11, MX decoder: xhamster 144p, xvideos/xnxx 854x480, perfektdamen 640x360 —
+  // the best variant handed directly played 1920x1080 / 1280x720 and started faster). Highest RESOLUTION wins;
+  // variants that declare AV1/HEVC lose to an H.264 one. Anything unclear (not a master, no answer in 4 s,
+  // no CORS) → the URL as it was.
+  function _hlsBest(u) {
+    if (!u || !/\.m3u8/i.test(decodeURIComponent(u))) return Promise.resolve(u);
+    return new Promise(function (resolve) {
+      var done = false, timer = setTimeout(function () { finish(u); }, 4000);
+      function finish(v) { if (done) return; done = true; clearTimeout(timer); resolve(v); }
+      _getText(u).then(function (txt) {
+        var lines = String(txt || '').split('\n'), best = null, count = 0;
+        for (var i = 0; i < lines.length; i++) {
+          if (!/^#EXT-X-STREAM-INF/.test(lines[i])) continue;
+          var h = parseInt((lines[i].match(/RESOLUTION=\d+x(\d+)/) || [])[1], 10) || 0;
+          var codecs = (lines[i].match(/CODECS="([^"]*)"/) || [])[1] || '';
+          var avc = !codecs || /avc1|mp4a/.test(codecs) && !/av01|hev1|hvc1/.test(codecs);
+          var uri = (lines[i + 1] || '').trim();
+          if (!uri || uri.charAt(0) === '#') continue;
+          var score = (avc ? 100000 : 0) + h;
+          count++;
+          if (!best || score > best.score) best = { score: score, uri: uri };
+        }
+        // One variant (pornhub: 1080p only) — nothing to choose, and a proxied media playlist handed as the
+        // top-level URL stalls MX (its FFmpeg re-asks past the end of a playlist that advertises
+        // Accept-Ranges → 416 loop, TV 2026-10-11); the master path plays. Keep the master then.
+        if (!best || count < 2) return finish(u);
+        try { finish(new URL(best.uri, u).href); } catch (e) { finish(u); }
+      }, function () { finish(u); });
+    });
+  }
+
+  function playVideo(video, source) {
+    var gen = ++_playGen;
+    Lampa.Noty.show(Lampa.Lang.translate('cherry_loading'));
+
+    _streamWithRetry(video, source).then(function (stream) {
+      if (gen !== _playGen) return;
+      if (Fav.has(video)) try { Avail.record(video, true); } catch (e) {}
+      var quality = stream.quality || {};
+      // The QUALITY MAP is the contract: it holds only what may be played, and its best entry is
+      // the default (Lampa itself switches to the entry matching «video_quality_default», 1080 by
+      // default, and otherwise keeps this url). Adapters that must avoid a file drop it from the
+      // map (pornve AV1 1080p, youjizz >720p, pornhub unplayable playlists, ebun's 360p cut).
+      // v0.13.25 preferred `stream.url` here, and adapters whose url was merely the FIRST file
+      // parsed then played 240p/360p (youjizz, jopaonline, perfektdamen — stand 2026-10-07).
+      var url = bestQualityUrl(quality) || stream.url;
+
+      if (!url) {
+        Lampa.Noty.show(Lampa.Lang.translate('cherry_error'), { style: 'warn' });
+        return;
+      }
+
+      // Proxy non-blob stream URLs so that tokens bound to the proxy IP stay valid.
+      function px(u) {
+        if (!u) return u;
+        // Normalize protocol-relative URLs (e.g. YouJizz returns //cdne-mobile.youjizz.com/...)
+        // BEFORE any early return — the native Android player can't resolve a bare
+        // `//host/...` URL (shows the "choose player" dialog), so it must get a
+        // proper `https://` URL too.
+        if (u.indexOf('//') === 0) u = 'https:' + u;
+        if (u.indexOf('blob:') === 0) return u;
+        if (PROXY_URL_3 && u.indexOf(PROXY_URL_3) === 0) return u; // skip VPS-proxied URLs
+        if (PROXY_URL_2 && u.indexOf(PROXY_URL_2) === 0) return u; // skip Deno-proxied URLs
+        if (u.indexOf(PROXY_URL) === 0) return u; // skip CF Worker-proxied URLs
+        // Android: native player loads the stream directly from the device's home
+        // (residential) IP. Since the page was also fetched natively from the same IP,
+        // IP-bound CDN tokens (KVS get_file) stay valid with NO proxy → hand raw URL.
+        // EXCEPT force-proxy hosts (device IP blocked): proxy the stream so it
+        // co-locates with the proxied page on the same egress IP.
+        // An adapter may also declare `androidProxyStream: true` when its stream tokens are
+        // UA-bound (desktop UA only) on a rotating mirror host that no host map can name
+        // (ebalovo): the proxy fetches with a desktop UA, so the token stays valid.
+        if (_isAndroid()) return (_forceProxyAndroid(u) || source.androidProxyStream) ? buildProxyUrl(u) : u;
+        return buildProxyUrl(u);
+      }
+      var proxiedQuality = {};
+      Object.keys(quality).forEach(function(k) { proxiedQuality[k] = px(quality[k]); });
+
+      // RESUME (native): a stable hash per video lets Lampa's timeline persist
+      // and restore the scrubber position automatically. We hash on source+id
+      // (falling back to url), mirror it as Hist's key, and hand the timeline
+      // VIEW object to the player so it resumes at the saved spot and auto-saves
+      // progress as the user watches — no hand-rolled timeupdate persistence.
+      var histHash = Hist._hashKey(video);
+      var hashId   = (Lampa.Utils && Lampa.Utils.hash)
+        ? Lampa.Utils.hash(histHash)
+        : histHash;
+      var timeline = (Lampa.Timeline && Lampa.Timeline.view)
+        ? Lampa.Timeline.view(hashId)
+        : undefined;
+
+      // Remember the active video so the player progress/destroy hook can snapshot
+      // the timeline position into Hist (the «Продолжить» + progress-bar surface).
+      _histVideo = video;
+      _histHash  = hashId;
+
+      var _finalUrl = px(url);
+      // The user's own player choice is final — HLS included. Cherry used to switch HLS to the inner player
+      // (an external app without HLS support → chooser), so MX never opened on pornhub/xvideos/xnxx/xhamster;
+      // MX plays all of them (TV 2026-10-11).
+      var _inner = _isAndroid() && Lampa.Storage.get('player', 'inner') === 'inner';
+      var _master = _finalUrl;
+      return _hlsBest(_finalUrl).then(function (best) {
+        if (best && best !== _master) {
+          _finalUrl = best;
+          Object.keys(proxiedQuality).forEach(function (k) { if (proxiedQuality[k] === _master) proxiedQuality[k] = best; });
+        }
+        return _corsBlocked(_finalUrl, _inner);
+      }).then(function (blocked) {
+        if (gen !== _playGen) return;
+        if (blocked) {
+          _finalUrl = _viaProxy(_finalUrl);
+          Object.keys(proxiedQuality).forEach(function (k) { proxiedQuality[k] = _viaProxy(proxiedQuality[k]); });
+        }
+        Lampa.Player.play({
+          title:    video.title,
+          url:      _finalUrl,
+          poster:   video.thumb,
+          quality:  proxiedQuality,
+          id:       hashId,
+          timeline: timeline
+        });
+
+        // Seed a history record immediately (position 0) so a video opened but
+        // closed before any progress event still surfaces under «Продолжить».
+        try { Hist.mark(video, (timeline && timeline.time) || 0, (timeline && timeline.duration) || video.duration || 0); } catch (e) {}
+
+        // REQ-4: reset state and kick off background related fetch.
+        _relatedGeneration++;
+        var myGen       = _relatedGeneration;
+        _pendingRelated = [];
+        _relatedSrc     = null;
+        _relatedVideo   = null;
+
+        // Probe whether this video HAS related (page 1). On player close we push a
+        // PAGINATED related grid (carrying the video + source), not a fixed snapshot,
+        // so the panel scrolls. We only remember the video/source when page 1 has
+        // cards — an empty related means no panel.
+        if (source.getRelated) {
+          source.getRelated(video, 1).then(function (items) {
+            if (myGen !== _relatedGeneration) return;
+            if (items && items.length) {
+              _pendingRelated = items;          // non-empty marker: related exists
+              _relatedSrc     = source;
+              _relatedVideo   = video;
+            }
+          }).catch(function () {});
+        }
+      });
+    }).catch(function (err) {
+      if (gen !== _playGen) return;
+      console.warn('[Cherry] getStream error:', err);
+      // A saved video that does not play also counts toward its «Недоступно» badge; the way out
+      // («Найти копию») lives in the card's long-press menu — no extra dialog here (owner: popups are noise).
+      if (Fav.has(video)) try { Avail.record(video, false); } catch (e) {}
+      Lampa.Noty.show(Lampa.Lang.translate('cherry_error'), { style: 'warn' });
+    });
+  }
+
+  // ============================================================
+  // SCREEN ADAPTER — Cherry's two screens on Lampa's component framework.
+  // Lampa (lampa.mx 2026-10) marks InteractionCategory / InteractionMain / Card as deprecated
+  // («Component InteractionCategory is deprecated») and builds its own screens with
+  // Lampa.Maker.make('Category', object): a module system (Items / Create / Next / Empty) with
+  // onCreate / onNext / onInstance hooks; cards are configured through card.use({…}). A screen
+  // describes itself as hooks and this adapter maps them onto Maker, or onto the legacy
+  // InteractionCategory when Maker is absent (older Lampa builds) — the screen code exists once.
+  //   hooks.cols              grid columns (5 video cards / 8 home tiles)
+  //   hooks.rootClass         classes on the screen root (the Cherry CSS scope)
+  //   hooks.skeleton          shimmer placeholders while page 1 loads
+  //   hooks.load(page, ok, fail, append)   ok(items, total_pages); page 1 = the first screen; a
+  //                           page returning no items (or total_pages <= page) ends the list.
+  //                           append(items) (page 1, Maker only) adds late cards to the shown page
+  //   hooks.empty(reason)     → { descr } for the empty state ('empty' | 'error')
+  //   hooks.card(ui, element) ui = { html: $(card), onEnter(fn), onLong(fn), onFocus(fn(el)) }
+  //   hooks.right()           RIGHT pressed at the grid's right edge
+  //   hooks.pause()           screen paused / stopped / destroyed (stop hover previews)
+  // ============================================================
+  function _cherryScreen(object, hooks) {
+    if (Lampa.Maker && typeof Lampa.Maker.make === 'function') return _makerScreen(object, hooks);
+    return _legacyScreen(object, hooks);
+  }
+
+  function _skeletonOn(root) {
+    var h = '<div class="cherry-skeleton">';
+    for (var i = 0; i < 15; i++) h += '<div class="cherry-skeleton__card"></div>';
+    try { $(root).append(h + '</div>'); } catch (e) {}
+  }
+  function _skeletonOff(root) { try { $(root).find('.cherry-skeleton').remove(); } catch (e) {} }
+
+  function _makerScreen(object, hooks) {
+    object.params = object.params || {};
+    object.params.items = { mapping: 'grid', cols: hooks.cols, limit_view: hooks.cols * 2, limit_collection: hooks.cols * 8 };
+    // Card modules: poster + title (Card), focus/enter/long events (Callback) and Release (drops
+    // the template's {release_year} line when there is no year) — no TMDB badges, Lampa
+    // favourites/watched marks or Lampa's own long-press menu (Cherry has its own).
+    var cardModule = Lampa.Maker.module('Card').only('Card', 'Callback', 'Release');
+    function prep(items) {
+      (items || []).forEach(function (v) { v.params = v.params || {}; v.params.module = cardModule; });
+      return items || [];
+    }
+    var comp = Lampa.Maker.make('Category', object);
+    var built = false, gone = false;
+    comp.use({
+      onCreate: function () {
+        var self = this;
+        $(this.html).addClass(hooks.rootClass);
+        if (hooks.skeleton) _skeletonOn(this.html);
+        hooks.load(1, function (items, total) {
+          _skeletonOff(self.html);
+          if (!items || !items.length) { self.params.empty = hooks.empty('empty'); self.empty(); return; }
+          self.build({ results: prep(items), total_pages: total || 1 });
+          built = true;
+        }, function () {
+          _skeletonOff(self.html);
+          self.params.empty = hooks.empty('error');
+          self.empty();
+        }, function (items) {
+          // late cards for the page on screen: the same queue Next uses for a new page
+          if (!built || gone || !items || !items.length) return;
+          self.loaded.push(prep(items));
+          self.emit('pushLoaded');
+          self.emit('scroll');
+        });
+      },
+      onNext: function (resolve, reject) {
+        var self = this, page = this.object.page;
+        hooks.load(page, function (items, total) {
+          // Next does not refresh total_pages from later pages: stop it here at the end.
+          if (!items || !items.length || !(total > page)) self.total_pages = page;
+          resolve({ results: prep(items) });
+        }, reject);
+      },
+      onInstance: function (card, element) {
+        card.use({
+          onCreate: function () {
+            hooks.card({
+              html: $(this.html),
+              onEnter: function (fn) { card.use({ onEnter: function () { fn(); } }); },
+              onLong:  function (fn) { card.use({ onLong: function () { fn(); } }); },
+              onFocus: function (fn) { card.use({ onFocus: function (html) { fn(html); } }); }
+            }, element);
+          }
+        });
+      },
+      onRight: function () { if (hooks.right) hooks.right(); },
+      onPause: function () { if (hooks.pause) hooks.pause(); },
+      onDestroy: function () { gone = true; if (hooks.pause) hooks.pause(); }
+    });
+    comp.stop = function () { if (hooks.pause) hooks.pause(); };
+    return comp;
+  }
+
+  // Older Lampa (no Maker): the same hooks on InteractionCategory.
+  function _legacyScreen(object, hooks) {
+    var comp = new Lampa.InteractionCategory(object);
+    var page = 1;
+    comp.create = function () {
+      var self = this;
+      page = 1;
+      this.activity.loader(true);
+      if (hooks.skeleton) _skeletonOn(this.render());
+      hooks.load(1, function (items, total) {
+        _skeletonOff(self.render());
+        self.activity.loader(false);
+        if (!items || !items.length) { self.empty(hooks.empty('empty').descr); return; }
+        self.build({ title: object.title, results: items, total_pages: total || 1 });
+        try {
+          var root = self.render();
+          root.addClass(hooks.rootClass);
+          root.find('.category-full').addClass('mapping--grid cols--' + hooks.cols);
+        } catch (e) {}
+      }, function () {
+        _skeletonOff(self.render());
+        self.activity.loader(false);
+        self.empty(hooks.empty('error').descr);
+      });
+    };
+    comp.nextPageReuest = function (o, resolve, reject) {
+      var next = page + 1;
+      hooks.load(next, function (items, total) {
+        page = next;
+        resolve({ title: object.title, results: items || [], total_pages: (items && items.length) ? total : next });
+      }, reject);
+    };
+    // The base empty() may ignore a message on old builds — own it (Lampa.Empty descr).
+    comp.empty = function (descr) {
+      var self = this;
+      try {
+        var box = new Lampa.Empty({ descr: descr });
+        Lampa.Activity.all().forEach(function (a) {
+          if (self.activity === a.activity) {
+            var body = a.activity.render().find('.activity__body > div')[0];
+            if (body) body.appendChild(box.render(true));
+          }
+        });
+        this.start = box.start.bind(box);
+        this.activity.loader(false);
+        this.activity.toggle();
+      } catch (e) { Lampa.Noty.show(descr, { time: 8000 }); }
+    };
+    comp.cardRender = function (o, element, card) {
+      hooks.card({
+        html: card.render(),
+        onEnter: function (fn) { card.onEnter = function () { fn(); }; },
+        onLong:  function (fn) { card.onMenu = function () { fn(); return false; }; },
+        onFocus: function (fn) { var f = card.onFocus; card.onFocus = function (t, d) { if (f) f(t, d); fn(t); }; }
+      }, element);
+    };
+    comp.onRight = function () { if (hooks.right) hooks.right(); };
+    var _bStop = comp.stop ? comp.stop.bind(comp) : null, _bPause = comp.pause ? comp.pause.bind(comp) : null;
+    comp.stop  = function () { if (hooks.pause) hooks.pause(); if (_bStop) _bStop(); };
+    comp.pause = function () { if (hooks.pause) hooks.pause(); if (_bPause) _bPause(); };
+    return comp;
+  }
+
+  // ============================================================
+  // CHERRY GRID COMPONENT
+  // Shows a paginated, infinite-scroll grid of video cards.
+  //
+  // object properties:
+  //   source_id   {string}  — adapter id
+  //   query       {string}  — search query (omit for browse)
+  //   all_sources {boolean} — search ALL sources in parallel
+  //   is_favorites{boolean} — show favorites list
+  //   title       {string}  — screen title
+  //   page        {number}  — initial page (currently unused; scroll drives paging)
+  // ============================================================
+
+  /**
+   * @constructor
+   * @param {Object} object  Activity params
+   */
+  function CherryGrid(object) {
+
+    // Paging + filter state (the base class owns scroll/focus/nav; we own data).
+    // Filters live in the activity params so a change reloads via Activity.push
+    // (InteractionCategory does NOT re-render on a second create() call).
+    var currentSort     = object.sort || '';
+    var currentCategory = object.category || '';
+
+    var _currentPreviewEl = null;
+    var _previewTimer     = null;   // dwell-timer handle (gates preview start on D-pad scroll)
+
+    // Cross-page dedup guard. Some sites don't return empty past the last page —
+    // they CLAMP (always serve a full page, e.g. pornhub API), WRAP to page 1, or
+    // ignore the page param (e.g. xnxx /tags/, xvideos /best/). With a generous
+    // total_pages that would scroll forever feeding DUPLICATES. So we track seen
+    // id@source and drop already-seen cards; when a page yields ZERO new cards we
+    // treat it as end-of-list and stop. Universal — fixes every clamp/wrap channel.
+    var _seenIds = {};
+    function _dedupNew(items) {
+      var out = [];
+      (items || []).forEach(function (v) {
+        if (!v) return;
+        var k = v.id + '@' + (v.source || '');
+        if (_seenIds[k]) return;
+        _seenIds[k] = 1;
+        out.push(v);
+      });
+      return out;
+    }
+
+    var source      = (object.is_favorites || object.is_history) ? null : sourceById(object.source_id);
+    var screenTitle = object.title || (source ? source.name : 'Cherry');
+
+    // Right-edge action-menu applicability (Поиск → Сортировка → Категории).
+    // model_url excluded: model browse is already filtered to a performer.
+    // is_history (like is_favorites) is a flat local list → no menu axes.
+    var _source    = source;
+    var _canSearch = !object.is_favorites && !object.is_history && !object.all_sources && !object.all_videos && !object.related_video && !object.model_url && !object.models_index && !object.studio_url && !object.studios_index;
+    // Server sort applies only to a single-source grid. In all-sources search the
+    // resolved `source` is SOURCES[0] (which HAS cfg.sorts), so without this guard the
+    // menu showed BOTH «Сортировка» (server) AND «Сортировка» (client) — a duplicate.
+    // Keep ALL sorting in one entry: server-sort for single source, client-sort for all-sources.
+    var _hasSorts  = !!(source && source.cfg && source.cfg.sorts && source.cfg.sorts.length
+                        && !object.all_sources && !object.all_videos && !object.models_index && !object.studios_index);
+    var _hasCats   = !!(source && source.cfg && source.cfg.categories && source.cfg.categories.length
+                        && !object.all_sources && !object.all_videos && !object.models_index && !object.studios_index);
+    // «Модели»: offered only when the adapter can list a model index, and only on a
+    // normal browse grid (not inside model browse / search / favorites / all-sources).
+    var _hasModels = !!(source && source.getModels &&
+                        !object.is_favorites && !object.is_history && !object.all_sources && !object.all_videos &&
+                        !object.related_video && !object.model_url && !object.models_index &&
+                        !object.studio_url && !object.studios_index);
+    // «Студии»: offered when the adapter can list a studio/channel index, on a
+    // normal browse grid only (mirrors _hasModels exclusions).
+    var _hasStudios = !!(source && source.getStudios &&
+                        !object.is_favorites && !object.is_history && !object.all_sources && !object.all_videos &&
+                        !object.related_video && !object.model_url && !object.models_index &&
+                        !object.studio_url && !object.studios_index);
+    // A2: all_sources search has no single source to honor a server sort, so offer
+    // a lightweight CLIENT-side sort (relevance/duration) applied in _gridLoad.
+    // Guaranteed client sort is offered on EVERY video grid (browse, search, all_sources,
+    // favorites, history, related) — NOT the model/studio index grids (those aren't videos).
+    var _hasClientSort = !object.models_index && !object.studios_index;
+
+    // ---- card mapping (adapter VideoCard → base-renderer card_data) -------
+    // Mutate in place so id/url/source/preview/model/views/duration ride along
+    // and surface as `element` in cardRender. source MUST be set (Fav 7-field).
+    function toCard(v) {
+      // One place for every adapter's titles: entities, mojibake («Saba â€“ Homemade»), zero-width
+      // spaces («Fiona ​sprouts») — parsers fixed one site at a time; the screen fixes all.
+      v.title  = _cleanTitle(v.title);
+      v.img    = v.thumb;
+      v.poster = v.thumb;
+      // HD/4K no longer rides Lampa's native quality slot — it is merged into the
+      // bottom-right duration pill in cardRender (e.g. "HD · 12:34"). Keeping a card
+      // to at most 3 badges (source TL, views BL, dur/HD BR). v.hd stays on the
+      // element so the .cherry-dur overlay can prefix it.
+      v.source = v.source || object.source_id;
+      return v;
+    }
+
+    function mapResult(result) {
+      var items = (result && result.items) ? result.items.map(toCard) : [];
+      return { items: items, total_pages: (result && result.total_pages) || 1 };
+    }
+
+    /**
+     * Reproduces the legacy loading logic for every grid mode and calls
+     * resolve(items, total_pages). reject() on hard failure / no source.
+     * @param {Object}   object
+     * @param {number}   page
+     * @param {Function} resolve  (items, total_pages)
+     * @param {Function} reject
+     */
+    // GUARANTEED client-side sort: works on whatever cards loaded, regardless of whether the
+    // site's server sort honors the request (e.g. pornhub period was ignored). Applied per page.
+    function _applyClientSort(items) {
+      var cs = object.client_sort;
+      if (cs === 'duration')          items.sort(function (a, b) { return (b.duration || 0) - (a.duration || 0); });
+      else if (cs === 'duration_asc') items.sort(function (a, b) { return (a.duration || 0) - (b.duration || 0); });
+      else if (cs === 'title')        items.sort(function (a, b) { return _normText(a.title).localeCompare(_normText(b.title)); });
+      return items;
+    }
+
+    function _gridLoad(object, page, resolve, reject, onProgress) {
+      // Favorites — single page, no paging. Pull the shared bucket FIRST (capped at 2.5 s) so
+      // a video favorited on another device shows up on THIS open, not the next one; no PIN
+      // or a network failure → the local list, immediately. Resolving on a later tick also
+      // lets the empty-state box mount (the activity is registered by then).
+      if (object.is_favorites) {
+        var _favDone = false;
+        var _favRender = function () {
+          if (_favDone) return;
+          _favDone = true;
+          resolve(_applyClientSort(Fav.all().map(toCard)), 1);
+        };
+        try { Promise.resolve(Sync.run()).then(_favRender, _favRender); } catch (e) { _favRender(); }
+        setTimeout(_favRender, 2500);
+        return;
+      }
+
+      // History («Продолжить») — single page, newest-first, like favorites.
+      if (object.is_history) {
+        var hist = _applyClientSort(Hist.all().map(toCard));
+        resolve(hist, 1);
+        return;
+      }
+
+      // From here on every mode hits the network. An EMPTY result while page requests failed is a
+      // load error («Не удалось загрузить» + Lampa's «Обновить»), not «ничего не найдено». A single
+      // channel needs one failure; the all-sources fan-out (below) only when about every channel
+      // failed (no connection) — one dead site among 27 must not hide a real «nothing found».
+      var _fails0 = _netFails, _failNeed = 1, _ok = resolve;
+      resolve = function (items, total) {
+        if ((!items || !items.length) && _netFails - _fails0 >= _failNeed) { reject(new Error('network')); return; }
+        _ok(items, total);
+      };
+
+      // «Похожие» — infinite scroll (REQ: scroll everywhere). The site's own related
+      // block (getRelated) is a FIXED list that ignores `page`, so on its own it can't
+      // scroll. So the grid continues into the channel's OWN feed, which paginates
+      // EVERYWHERE after v0.13.3 (the reliable "more like this site" continuation):
+      //   page 1   → getRelated(video)   — the site's recommended block (most relevant)
+      //   page 2+  → src.browse('', cp)   — the channel feed (newest), keeps scrolling
+      // Title-similarity is the SEPARATE «Похожие названия» item, so we don't duplicate
+      // search here. The grid dedups across pages by card id, so repeats are dropped.
+      if (object.related_video) {
+        var relSrc = sourceById(object.related_video_source || object.source_id);
+        if (!relSrc) { resolve([], 1); return; }
+        var relVideo = object.related_video;
+        var relSort  = (relSrc.cfg && relSrc.cfg.sorts && relSrc.cfg.sorts[0] && relSrc.cfg.sorts[0].id) || '';
+        // Title keywords for the page-2+ continuation (below). Built once from the seed.
+        var relKw    = _searchKeywords(relVideo.title || '', 4);
+        // Not the seed again: same URL, or the same title (re-uploads — xnxx «Похожие» led with two
+        // copies of the video just watched) — and one card per title across all related pages.
+        var _relSeen = {};
+        _relSeen[_normText(relVideo.title || '')] = 1;
+        var _relFresh = function (v) {
+          if (!v || v.url === relVideo.url) return false;
+          var t = _normText(v.title || '');
+          if (!t) return true;
+          if (_relSeen[t]) return false;
+          _relSeen[t] = 1;
+          return true;
+        };
+        var _relDone = function (items) {
+          items = (items || []).filter(_relFresh);
+          items.forEach(function (v) { if (v && !v.source) v.source = relSrc.id; });
+          resolve(_applyClientSort(items.map(toCard)), items.length ? (page + 50) : page);
+        };
+        // Page-2+ continuation. The site's getRelated block is page 1 only (ignores
+        // `page`), so pages 2+ used to fall back to the newest browse feed — which is
+        // NOT similar to the seed at all. Instead run a TITLE-KEYWORD search on the same
+        // source: topically similar AND paginates (keeps «Похожие» both relevant and
+        // infinite). Falls back to the newest feed only if search is missing/empty.
+        var _relFeed = function (cp) {
+          var searchP = (relSrc.search && relKw)
+            ? relSrc.search(relKw, cp).then(function (r) { return (r && r.items) || []; }).catch(function () { return []; })
+            : Promise.resolve([]);
+          searchP.then(function (items) {
+            // the site's search order is by date/popularity: put the cards that share the seed's
+            // title words first (same ranker as search; a no-op for a short or empty list)
+            if (items && items.length) { _relDone(_rankByRelevance(items, relKw)); return; }
+            if (!relSrc.browse) { resolve([], page); return; }
+            relSrc.browse('', cp, relSort).then(function (r) { _relDone((r && r.items) || []); })
+              .catch(function () { resolve([], page); });
+          });
+        };
+        if (page === 1) {
+          var gp = relSrc.getRelated ? relSrc.getRelated(relVideo, 1) : Promise.resolve([]);
+          Promise.resolve(gp).then(function (rel) {
+            rel = (rel || []).filter(_relFresh);
+            if (!rel.length) { object._relNoP1 = true; _relFeed(1); return; }  // no site-related → feed from page 1
+            rel.forEach(function (v) { if (v && !v.source) v.source = relSrc.id; });
+            resolve(rel.map(toCard), page + 50);   // always offer the feed continuation
+          }).catch(function () { object._relNoP1 = true; _relFeed(1); });
+          return;
+        }
+        _relFeed(object._relNoP1 ? page : (page - 1));  // align cp to whether page 1 was related
+        return;
+      }
+
+      // All-sources search + «Все видео» fan-out — parallel, FLAT concat. Two modes share one path:
+      //   • SEARCH (all_sources + query): each source.search(query, page) + relevance filter.
+      //   • «Все видео» (all_videos, no query): each source.browse('', page, defaultSort) — a
+      //     mixed LATEST feed across every channel (the unified «Все видео» tab). No word filter.
+      // Paginates: each source uses the SAME `page`; any full batch ⇒ more pages.
+      if ((object.all_sources && object.query) || object.all_videos) {
+        var _act = _activeSources();
+        if (!_act.length) { resolve([], 1); return; }
+        _failNeed = _act.length;
+        var _isSearch = !!object.query;
+        // A slow / hung source (or a stalled proxy) must not block the page: each source races a
+        // hard cap and settles to an empty batch on timeout.
+        var ALL_SRC_TIMEOUT_MS = 7000;
+        // PROGRESSIVE first screen (v0.13.27, owner: «поиск ждёт самый медленный канал»): page 1
+        // shows what arrived within FIRST_SCREEN_MS (or everything, if all sources answered
+        // sooner); every later source is appended as it settles via `progress(cards)` — ranked
+        // within its own batch and deduped against what is already on screen. Without a
+        // `progress` sink (page 2+, legacy Lampa) the page waits for every source as before.
+        var FIRST_SCREEN_MS = 1800;
+        // RU→EN routing: a Cyrillic query is translated for English-title sources (they can't match
+        // Cyrillic), while Russian-title sources keep the original. No-op for Latin queries.
+        var _enQuery = _isSearch ? _translateQuery(object.query) : '';
+        // Synonym-expanded word GROUPS (AND match): "blonde milf" must hit both groups; a group hits
+        // if the title contains any member. BILINGUAL: a Russian word expands to [ru, stem, …EN] so
+        // the same groups filter+rank Russian-title and English-title results alike.
+        var groups = object.query ? _searchGroups(object.query) : [];
+        var _isCodeQuery = !!object.query && /[a-z]{2,}[\s-]?\d{2,}/i.test(object.query);
+        function _groupHits(title) {
+          var t = _normText(title), n = 0;
+          for (var g = 0; g < groups.length; g++) {
+            for (var k = 0; k < groups[g].length; k++) {
+              if (t.indexOf(groups[g][k]) !== -1) { n++; break; }
+            }
+          }
+          return n;
+        }
+        var anyFull = false, pending = _act.length, _seenKey = {};
+        // One source's batch → its top cards: stamp the origin channel (so «Похожие» opens the
+        // exact channel), keep cards matching ALL query groups (tag-search sources: site order,
+        // marked site-relevant; an empty match falls back to the source's top-N), slice 10.
+        function _pick(r) {
+          if (!r || !r.items || !r.items.length) return [];
+          r.items.forEach(function (v) { if (v && !v.source) v.source = r._srcId; });
+          if (r.items.length >= 10) anyFull = true;      // a full raw batch ⇒ a further page exists
+          var picked = r.items;
+          if (groups.length) {
+            var matched = r.items.filter(function (v) { return _groupHits(v.title) === groups.length; });
+            // A code / catalogue number (SSIS-839, MOGI 159) is matched literally or not at all: a
+            // tag search can't «relate» to it, so only titles that carry it are kept.
+            if (_isCodeQuery) picked = matched;
+            else if (_TAG_SEARCH[r._srcId]) picked.forEach(function (v) { v._siteRelevant = true; });
+            else if (matched.length) picked = matched;
+          }
+          // _srcRank = position within its own source: score ties INTERLEAVE across sources.
+          picked = picked.slice(0, 10);
+          picked.forEach(function (v, k) { v._srcRank = k; });
+          return picked;
+        }
+        // Several batches → ranked, cross-source-deduped cards. Dedup key = normalized title
+        // (40 chars) + duration bucketed to 15 s — the same video posted on several sites; kept
+        // across the progressive batches so a late source never repeats an on-screen video.
+        function _merge(batches) {
+          var flat = [];
+          batches.forEach(function (r) { flat = flat.concat(_pick(r)); });
+          if (groups.length) flat = _rankByRelevance(flat, object.query);
+          flat = flat.filter(function (v) {
+            if (!v.title) return true;
+            var key = _normText(v.title).slice(0, 40) + '|' + (Math.round((v.duration || 0) / 15) * 15);
+            if (_seenKey[key]) return false;
+            _seenKey[key] = true;
+            return true;
+          });
+          _applyClientSort(flat);   // optional guaranteed client-side sort
+          return flat.map(toCard);
+        }
+        var arrived = [], firstDone = false, windowOver = false;
+        function _first() {
+          if (firstDone) return;
+          var cards = _merge(arrived);
+          // Nothing yet but sources still running → keep waiting for the first real results
+          // instead of flashing «nothing found».
+          if (!cards.length && pending > 0 && progress) return;
+          firstDone = true;
+          arrived = [];
+          resolve(cards, (anyFull || pending > 0) ? (page + 50) : page);
+        }
+        var progress = (page === 1 && typeof onProgress === 'function') ? onProgress : null;
+        if (progress) setTimeout(function () { windowOver = true; _first(); }, FIRST_SCREEN_MS);
+        _act.forEach(function (src) {
+          var _q = (_enQuery && !_RU_SOURCES[src.id]) ? _enQuery : object.query;
+          var fetch = (_isSearch
+            ? src.search(_q, page)
+            : src.browse('', page, _latestSort(src))
+          ).then(function (r) {
+            r = r || { items: [] };
+            r._srcId = src.id;
+            return r;
+          }).catch(function (err) {
+            console.warn('[Cherry] all-sources fan-out error from ' + src.id + ':', err);
+            return { items: [], total_pages: 1, _srcId: src.id };
+          });
+          var timeout = new Promise(function (r) {
+            setTimeout(function () { r({ items: [], total_pages: 1, _srcId: src.id }); }, ALL_SRC_TIMEOUT_MS);
+          });
+          Promise.race([fetch, timeout]).then(function (r) {
+            pending--;
+            if (!firstDone) {
+              arrived.push(r);
+              // all answered, or the first-screen window is over and this arrival may be the
+              // first non-empty one → show the first screen now
+              if (pending === 0 || windowOver) _first();
+              return;
+            }
+            var late = _merge([r]);
+            if (late.length && progress) progress(late);
+          }).catch(function (err) {
+            console.warn('[Cherry] loadAllSources error:', err);
+            pending--;
+            if (pending === 0 && !firstDone) _first();
+          });
+        });
+        return;
+      }
+
+      // Paged modes need a source adapter.
+      var src = sourceById(object.source_id);
+      if (!src) { resolve([], 1); return; }
+
+      // Models INDEX mode — a grid of model cards (not videos). Each becomes a
+      // _model card whose onEnter opens that model's videos via model_url.
+      if (object.models_index) {
+        if (!src.getModels) { resolve([], 1); return; }
+        src.getModels(page).then(function (models) {
+          models = models || [];
+          var cards = models.map(function (m) {
+            return {
+              id:        'model_' + (m.url || m.name),
+              source:    src.id,
+              title:     m.name || _titleFromUrl(m.url),
+              thumb:     m.thumb || '',
+              url:       m.url,
+              _model:    true,
+              model_url: m.url
+            };
+          });
+          resolve(cards.map(toCard), _derivePages(cards.length, page, 20));
+        }).catch(function (err) {
+          console.warn('[Cherry] models_index load error (page ' + page + '):', err);
+          reject();
+        });
+        return;
+      }
+
+      // Studios INDEX mode — a grid of studio/channel cards (not videos). Each
+      // becomes a _studio card whose onEnter opens that studio's videos via
+      // studio_url. Mirrors the models_index branch above.
+      if (object.studios_index) {
+        if (!src.getStudios) { resolve([], 1); return; }
+        src.getStudios(page).then(function (studios) {
+          studios = studios || [];
+          var cards = studios.map(function (s) {
+            return {
+              id:         'studio_' + (s.url || s.name),
+              source:     src.id,
+              title:      s.name || _titleFromUrl(s.url),
+              thumb:      s.thumb || '',
+              url:        s.url,
+              _studio:    true,
+              studio_url: s.url
+            };
+          });
+          resolve(cards.map(toCard), _derivePages(cards.length, page, 20));
+        }).catch(function (err) {
+          console.warn('[Cherry] studios_index load error (page ' + page + '):', err);
+          reject();
+        });
+        return;
+      }
+
+      var promise;
+      if (object.studio_url) {
+        if (!src.browseByStudio) { resolve([], 1); return; }
+        promise = src.browseByStudio(object.studio_url, page);
+      } else if (object.model_url) {
+        if (!src.browseByModel) { resolve([], 1); return; }
+        promise = src.browseByModel(object.model_url, page);
+      } else if (object.query) {
+        // Cyrillic query on an English-title channel → translated query (the same RU→EN routing
+        // the all-sources search uses). Voice input on a RU TV is always Cyrillic, so without
+        // this a spoken query returned 0 on eporner/youjizz/porntrex/familyporn… (stand 2026-10-07).
+        var _chQ = (!_RU_SOURCES[src.id] && _translateQuery(object.query)) || object.query;
+        promise = src.search(_chQ, page, currentSort);
+      } else {
+        promise = src.browse(currentCategory, page, currentSort);
+      }
+
+      promise.then(function (result) {
+        var m = mapResult(result);
+        // Search: relevance-rank per page (site search is often date-, not relevance-sorted).
+        // Applied BEFORE the explicit client sort so a chosen sort (longest/A-Z) still wins.
+        if (object.query) m.items = _rankByRelevance(m.items, object.query);
+        _applyClientSort(m.items);   // guaranteed client sort (longest/shortest/A-Z) per page
+        resolve(m.items, m.total_pages);
+      }).catch(function (err) {
+        console.warn('[Cherry] grid load error (page ' + page + '):', err);
+        reject();
+      });
+    }
+
+    // ---- preview (best-effort, adapted to the base card's DOM node) -------
+
+    function _stopCurrentPreview() {
+      // Cancel a pending dwell-timer so a card scrolled THROUGH never starts video.
+      if (_previewTimer) { clearTimeout(_previewTimer); _previewTimer = null; }
+      if (_currentPreviewEl) {
+        try {
+          _currentPreviewEl.pause();
+          _currentPreviewEl.removeAttribute('src');
+          _currentPreviewEl.load();
+          _currentPreviewEl.style.display = 'none';
+        } catch (e) {}
+        _currentPreviewEl = null;
+      }
+    }
+
+    // `node` is the base card's DOM element (cardRender's `target`). The base
+    // card has no <video>, so inject one on first use. Best-effort: any failure
+    // is swallowed — preview is non-critical.
+    function _startPreview(node, url) {
+      try {
+        var $node = $(node);
+        var videoEl = $node.find('video.cherry-card__preview')[0];
+        if (!videoEl) {
+          videoEl = document.createElement('video');
+          videoEl.className = 'cherry-card__preview';
+          videoEl.muted = true;
+          videoEl.loop = true;
+          videoEl.setAttribute('playsinline', '');
+          videoEl.style.position = 'absolute';
+          videoEl.style.top = '0';
+          videoEl.style.left = '0';
+          videoEl.style.width = '100%';
+          videoEl.style.height = '100%';
+          videoEl.style.objectFit = 'cover';
+          var holder = $node.find('.card__img, .card__view')[0] || node;
+          holder.appendChild(videoEl);
+        }
+        // Android: hosts that block the device IP get the preview via the proxy too (the same
+        // egress decision playVideo.px makes for the stream); everything else plays raw.
+        videoEl.src = (_isAndroid() && _forceProxyAndroid(url)) ? buildProxyUrl(url) : url;
+        videoEl.load();
+        videoEl.style.display = 'block';
+        videoEl.style.opacity = '0';   // fade-in: start transparent, ramp to 1 on play
+        _currentPreviewEl = videoEl;
+        var p = videoEl.play();
+        if (p && p.then) {
+          p.then(function () {
+            // .25s opacity transition is defined in addStyles(); flip after play starts.
+            videoEl.style.opacity = '1';
+          }).catch(function () {
+            if (videoEl.parentNode) videoEl.style.display = 'none';
+          });
+        } else {
+          videoEl.style.opacity = '1';
+        }
+      } catch (e) {}
+    }
+
+    // ---- right-edge action menu: Поиск → Сортировка → Категории -----------
+
+    function _findLabel(arr, id) {
+      for (var i = 0; i < arr.length; i++) {
+        if (arr[i].id === id) return arr[i].label;
+      }
+      return id;
+    }
+
+    // P3.1: surface the active sort/category in the grid header. Filters are
+    // otherwise invisible once the action menu closes. Resolves labels via the
+    // source cfg so the header reads e.g. "Pornhub  ·  MILF  ·  Most recent".
+    // Reload with a changed filter by pushing a fresh activity. Calling
+    // comp.create() again does NOT re-render an InteractionCategory grid, so
+    // sort/category changes were silently ignored — push the new params instead.
+    // The ACTIVITY title (top bar) carries the active filter so it stays visible
+    // after the menu closes (build()'s title alone isn't shown in the header).
+    function _filteredTitle(sort, category) {
+      var base = _source ? _source.name : screenTitle;
+      var parts = [base];
+      if (_source && _source.cfg) {
+        if (category && _source.cfg.categories) parts.push(_findLabel(_source.cfg.categories, category));
+        if (sort     && _source.cfg.sorts)      parts.push(_findLabel(_source.cfg.sorts, sort));
+      }
+      return parts.join('  ·  ');
+    }
+    function _pushFiltered(sort, category) {
+      Lampa.Activity.push({
+        component: 'cherry_grid',
+        source_id: object.source_id,
+        title:     _filteredTitle(sort, category),
+        query:     object.query || '',
+        sort:      sort,
+        category:  category,
+        page:      1
+      });
+      Lampa.Controller.toggle('content');
+    }
+
+    function _openSearch() {
+      if (!_source) return;
+      // Popular quick-picks + voice + manual type (same picker as global search).
+      _searchPicker(object.query || '', function (q) {
+        Lampa.Activity.push({
+          component: 'cherry_grid',
+          title:     _source.name + ': ' + q,
+          source_id: object.source_id,
+          query:     q,
+          page:      1
+        });
+      });
+    }
+
+    // Index of the item whose id matches `id` (for Select.show active-state).
+    function _selectedIndex(items, id) {
+      for (var i = 0; i < items.length; i++) if (items[i].id === id) return i;
+      return -1;
+    }
+
+    function _openSort() {
+      if (!_source || !_source.cfg || !_source.cfg.sorts) return;
+      var items = _source.cfg.sorts.map(function (s) { return { title: s.label, id: s.id }; });
+      Lampa.Select.show({
+        title: Lampa.Lang.translate('cherry_sort'),
+        items: items,
+        selected: _selectedIndex(items, currentSort),   // mark the active sort on reopen
+        onSelect: function (item) {
+          _pushFiltered(item.id, currentCategory);
+        },
+        onBack: function () { Lampa.Controller.toggle('content'); }
+      });
+    }
+
+    function _openCat() {
+      if (!_source || !_source.cfg || !_source.cfg.categories) return;
+      var items = _source.cfg.categories.map(function (c) { return { title: c.label, id: c.id }; });
+      items.unshift({ title: Lampa.Lang.translate('cherry_category_default'), id: '' });
+      Lampa.Select.show({
+        title: Lampa.Lang.translate('cherry_category'),
+        items: items,
+        selected: _selectedIndex(items, currentCategory),   // mark the active category on reopen
+        onSelect: function (item) {
+          _pushFiltered(currentSort, item.id);
+        },
+        onBack: function () { Lampa.Controller.toggle('content'); }
+      });
+    }
+
+    // «Модели» — open this source's model INDEX grid (models_index mode).
+    function _openModels() {
+      if (!_source || !_source.getModels) return;
+      Lampa.Activity.push({
+        component:    'cherry_grid',
+        title:        Lampa.Lang.translate('cherry_models') + ' · ' + _source.name,
+        source_id:    object.source_id,
+        models_index: true,
+        page:         1
+      });
+      Lampa.Controller.toggle('content');
+    }
+
+    // «Студии» — open this source's studio/channel INDEX grid (studios_index mode).
+    function _openStudios() {
+      if (!_source || !_source.getStudios) return;
+      Lampa.Activity.push({
+        component:     'cherry_grid',
+        title:         Lampa.Lang.translate('cherry_studios') + ' · ' + _source.name,
+        source_id:     object.source_id,
+        studios_index: true,
+        page:          1
+      });
+      Lampa.Controller.toggle('content');
+    }
+
+    // A2: client-side sort for all_sources search. Re-pushes the same all_sources
+    // activity with a client_sort param that _gridLoad applies after building flat.
+    // Only metadata that exists on every adapter card is offered (duration);
+    // 'relevance' is the natural per-source-interleaved order (client_sort unset).
+    // NOTE: per-adapter search(query,page) mostly IGNORES the sort param (only
+    // xvideos/pornhub/kvs honor it) — single-source search-sort is best-effort.
+    function _openClientSort() {
+      var items = [
+        { title: Lampa.Lang.translate('cherry_sort_relevance'),     id: '' },
+        { title: Lampa.Lang.translate('cherry_sort_duration'),      id: 'duration' },
+        { title: Lampa.Lang.translate('cherry_sort_duration_asc'),  id: 'duration_asc' },
+        { title: Lampa.Lang.translate('cherry_sort_title'),         id: 'title' }
+      ];
+      Lampa.Select.show({
+        title: Lampa.Lang.translate('cherry_sort_guaranteed'),
+        items: items,
+        selected: _selectedIndex(items, object.client_sort || ''),
+        onSelect: function (item) {
+          // Re-push the SAME grid (preserve source/category/query/all_sources/etc.) + client_sort,
+          // so the guaranteed client sort works on browse, search and all_sources alike.
+          var p = {};
+          for (var k in object) if (object.hasOwnProperty(k)) p[k] = object[k];
+          p.component   = 'cherry_grid';
+          p.client_sort = item.id;
+          p.page        = 1;
+          Lampa.Activity.push(p);
+        },
+        onBack: function () { Lampa.Controller.toggle('content'); }
+      });
+    }
+
+    /**
+     * Right-edge action menu. Opened by pressing RIGHT at the grid's right edge
+     * (Lampa's native filter idiom). Items appear in fixed order:
+     * Поиск → Сортировка → Категории, each only when applicable to this screen.
+     * @returns {boolean} true if a menu was shown
+     */
+    function openActionsMenu() {
+      var items = [];
+      if (_canSearch)     items.push({ title: Lampa.Lang.translate('cherry_search'),   action: 'search'     });
+      if (_hasSorts)      items.push({ title: Lampa.Lang.translate('cherry_sort'),     action: 'sort'       });
+      if (_hasClientSort) items.push({ title: Lampa.Lang.translate('cherry_sort_guaranteed'), action: 'clientsort' });
+      if (_hasCats)       items.push({ title: Lampa.Lang.translate('cherry_category'), action: 'cat'        });
+      if (_hasModels)     items.push({ title: Lampa.Lang.translate('cherry_models'),   action: 'models'     });
+      if (_hasStudios)    items.push({ title: Lampa.Lang.translate('cherry_studios'),  action: 'studios'    });
+      if (!items.length) return false;
+      Lampa.Select.show({
+        // Title reflects the active filter (source · category · sort) so the menu
+        // header shows the current state, matching the grid header.
+        title: _source ? _filteredTitle(currentSort, currentCategory) : 'Cherry',
+        items: items,
+        onSelect: function (item) {
+          if      (item.action === 'search')     _openSearch();
+          else if (item.action === 'sort')       _openSort();
+          else if (item.action === 'clientsort') _openClientSort();
+          else if (item.action === 'cat')        _openCat();
+          else if (item.action === 'models')     _openModels();
+          else if (item.action === 'studios')    _openStudios();
+        },
+        onBack: function () { Lampa.Controller.toggle('content'); }
+      });
+      return true;
+    }
+
+    // ---- screen hooks (mapped onto Lampa.Maker / legacy by _cherryScreen) ----
+
+    // Page loader: page 1 = the first screen (seeds the dedup set); a later page keeps only cards
+    // not seen yet, and a page with no new card ends the list (sites that clamp / wrap / ignore
+    // the page param). Favorites + history are single-page local lists.
+    function _load(page, ok, fail, append) {
+      if (page > 1 && (object.is_favorites || object.is_history)) { ok([], page); return; }
+      if (page === 1) _seenIds = {};
+      _gridLoad(object, page, function (items, total) {
+        var fresh = _dedupNew(items);
+        if (page > 1 && !fresh.length) { ok([], page); return; }
+        ok(fresh, total);
+      }, fail, append ? function (late) {
+        var fresh = _dedupNew(late);   // progressive all-sources page 1: late sources
+        if (fresh.length) append(fresh);
+      } : undefined);
+    }
+
+    // Empty state: a load failure is distinct from «nothing found»; favorites get a persistent
+    // hint. (Lampa's Empty adds its own «Обновить» button, which re-runs the load.)
+    function _emptyState(reason) {
+      return { descr: Lampa.Lang.translate(reason === 'error' ? 'cherry_load_error'
+        : (object.is_favorites ? 'cherry_fav_empty_hint' : (object.query ? 'cherry_search_empty' : 'cherry_empty'))) };
+    }
+
+    // Favorites: «Недоступно» badge on cards whose video stopped playing, kept current by a light
+    // background check while the screen is open (2 at a time, ≤ 20 per open, due cards only).
+    var _favCards = {};           // 'id@source' → card jQuery, for live badge updates
+    var _availStop = false;
+    function _availBadge($card, dead) {
+      $card.find('.cherry-dead').remove();
+      if (dead) $card.find('.card__view').append('<div class="cherry-dead">' + Lampa.Lang.translate('cherry_unavailable') + '</div>');
+    }
+    function _availCheck() {
+      if (!object.is_favorites) return;
+      var favs = Fav.all(), now = Date.now();
+      Avail.prune(favs);
+      var queue = favs.filter(function (v) { return Avail.due(v, now); }).slice(0, 20);
+      function next() {
+        if (_availStop || !queue.length) return;
+        var v = queue.shift(), src = sourceById(v.source);
+        if (!src) { next(); return; }
+        var f0 = _netFails;
+        Promise.race([
+          Promise.resolve(src.getStream(v)).catch(function () { return null; }),
+          new Promise(function (r) { setTimeout(function () { r(null); }, 30000); })
+        ]).then(function (st) {
+          var ok = !!(st && (st.url || bestQualityUrl(st.quality)));
+          // A miss while page requests failed says nothing about the video → not counted.
+          if (ok || _netFails === f0) {
+            var dead = Avail.record(v, ok), $c = _favCards[v.id + '@' + v.source];
+            if ($c) _availBadge($c, dead);
+          }
+          next();
+        });
+      }
+      next(); next();
+    }
+
+    function _card(ui, element) {
+      if (object.is_favorites && element.id != null) {
+        _favCards[element.id + '@' + element.source] = ui.html;
+        _availBadge(ui.html, Avail.dead(element));
+      }
+      ui.onEnter(function () {
+        _stopCurrentPreview();
+        // Model card → open that performer's videos via the model_url grid path.
+        if (element._model) {
+          Lampa.Activity.push({
+            component: 'cherry_grid',
+            title:     element.title,
+            source_id: element.source,
+            model_url: element.model_url,
+            page:      1
+          });
+          return;
+        }
+        // Studio card → open that studio's videos via the studio_url grid path.
+        if (element._studio) {
+          Lampa.Activity.push({
+            component:  'cherry_grid',
+            title:      element.title,
+            source_id:  element.source,
+            studio_url: element.studio_url,
+            page:       1
+          });
+          return;
+        }
+        var s = sourceById(element.source);
+        if (s) playVideo(element, s);
+        else Lampa.Noty.show(Lampa.Lang.translate('cherry_error'), { style: 'warn' });
+      });
+
+      // Tag EVERY card with its origin channel (owner requirement: source must be
+      // visible in all scenarios without exception — search, favorites, history,
+      // related, and single-source grids alike). Visual overlay via element.source.
+      if (element.source) {
+        try {
+          var os = sourceById(element.source);
+          if (os) {
+            var $v = ui.html.find('.card__view');
+            if ($v.length) $v.append('<div class="cherry-src-badge">' + os.name + '</div>');
+          }
+        } catch (e) {}
+      }
+
+      // Self-heal an expired/broken poster. Some CDNs sign thumbnails with a short TTL
+      // (pornhub: ~24h IP-bound token) → a FAVORITED card's stored thumb 404s later and
+      // the card goes blank. If the source can re-resolve a fresh thumb, swap it in on the
+      // FIRST load error (one-shot guard so a still-broken refresh can't loop). Generic:
+      // helps any transient CDN failure, not just favorites.
+      try {
+        var _adp = sourceById(element.source);
+        if (_adp && typeof _adp.refreshThumb === 'function' && element.thumb) {
+          var _img = ui.html.find('.card__img')[0];
+          if (_img && _img.tagName === 'IMG') {
+            var _heal = function () {
+              if (_img.getAttribute('data-cherry-refreshed')) return;
+              _img.setAttribute('data-cherry-refreshed', '1');
+              _adp.refreshThumb(element).then(function (u) {
+                // img/poster too: Lampa's card retries the poster from them on its own errors
+                if (u && u !== element.thumb) { element.thumb = element.img = element.poster = u; _img.src = u; }
+              }).catch(function () {});
+            };
+            _img.addEventListener('error', _heal);
+            // Already failed before this hook attached (lazy-loaded src set earlier).
+            if (_img.complete && _img.naturalWidth === 0 && _img.getAttribute('src')) _heal();
+          }
+        }
+      } catch (e) {}
+
+      // Metadata overlays on every card: dur/HD pill (bottom-right) + views (bottom-left).
+      // HD is merged INTO the duration pill ("HD · 12:34"), or shown alone if there is
+      // no duration — so a card carries at most 3 badges (source TL, views BL, dur/HD BR).
+      try {
+        var $v2 = ui.html.find('.card__view');
+        if ($v2.length) {
+          if (element.duration) {
+            $v2.append('<div class="cherry-dur">' + (element.hd ? element.hd + ' · ' : '') + secToTime(element.duration) + '</div>');
+          } else if (element.hd) {
+            $v2.append('<div class="cherry-dur">' + element.hd + '</div>');
+          }
+          var vstr = formatViews(element.views);
+          if (vstr) {
+            $v2.append('<div class="cherry-views">' + vstr + '</div>');
+          }
+          // RESUME progress bar: if this video has a watch record, draw a thin
+          // bottom bar (width = watched %) over a faint track + dim the thumb so
+          // a glance reads "seen / 60%". Shown on every grid (browse + history).
+          try {
+            if (Hist.get(element)) {
+              var pct = Hist.percent(element);
+              $v2.addClass('cherry-watched');
+              $v2.append('<div class="cherry-progress-track"></div>');
+              $v2.append('<div class="cherry-progress" style="width:' + pct + '%"></div>');
+            }
+          } catch (_p) {}
+        }
+      } catch (e) {}
+
+      ui.onLong(function () {
+        var isFav   = Fav.has(element);
+        var cardSrc = sourceById(element.source) || sourceById(object.source_id);
+        // Order: «Похожие» (site's own related, only when adapter.getRelated exists)
+        //        → «Похожие названия» (keyword search, always) → «Избранное».
+        var items = [];
+        // 'related' = adapter.getRelated() curated list from the video page.
+        if (cardSrc && cardSrc.getRelated) {
+          items.push({
+            title: Lampa.Lang.translate('cherry_related'),
+            action: 'related'
+          });
+        }
+        // 'similar' = keyword search across all sources by title words.
+        items.push({
+          title: Lampa.Lang.translate('cherry_similar_titles'),
+          action: 'similar'
+        });
+        items.push({
+          title: isFav
+            ? Lampa.Lang.translate('cherry_rem_fav_action')
+            : Lampa.Lang.translate('cherry_add_fav_action'),
+          action: 'fav'
+        });
+        // A saved video: look for the same upload on the other channels (first when it is dead).
+        if (isFav) {
+          var copyItem = { title: Lampa.Lang.translate('cherry_find_copy'), action: 'copy' };
+          if (Avail.dead(element)) items.unshift(copyItem); else items.push(copyItem);
+        }
+        // Browse all videos of the card's performer (only sources that surface
+        // a listing-level model field — currently pornhub).
+        if (element.model && element.model.name) {
+          items.push({
+            title: Lampa.Lang.translate('cherry_model') + ': ' + element.model.name,
+            action: 'model'
+          });
+        }
+        Lampa.Select.show({
+          title: element.title,
+          items: items,
+          onSelect: function (item) {
+            if (item.action === 'fav') {
+              Fav.toggle(element);
+              Lampa.Noty.show(
+                Fav.has(element)
+                  ? Lampa.Lang.translate('cherry_add_fav')
+                  : Lampa.Lang.translate('cherry_rem_fav')
+              );
+              Lampa.Controller.toggle('content');
+            } else if (item.action === 'copy') {
+              Lampa.Controller.toggle('content');
+              _findCopy(element);
+            } else if (item.action === 'similar') {
+              var query = _searchKeywords(element.title, 4);
+              Lampa.Activity.push({
+                component:   'cherry_grid',
+                title:       Lampa.Lang.translate('cherry_similar_titles') + ': ' + element.title,
+                source_id:   element.source,
+                query:       query,
+                all_sources: true,
+                page:        1
+              });
+              Lampa.Controller.toggle('content');
+            } else if (item.action === 'related') {
+              // «Похожие» = the card's SOURCE-site related, opened as a PAGINATED
+              // grid (carry the video + its source; the grid fetches getRelated per
+              // page). On all_sources/related result cards, cardSrc resolves from
+              // element.source so it opens the exact channel the card came from.
+              Lampa.Controller.toggle('content');
+              Lampa.Activity.push({
+                component:            'cherry_grid',
+                title:                Lampa.Lang.translate('cherry_related') + ': ' + element.title,
+                source_id:            cardSrc.id,
+                related_video:        element,
+                related_video_source: cardSrc.id,
+                page:                 1
+              });
+            } else if (item.action === 'model') {
+              Lampa.Controller.toggle('content');
+              Lampa.Activity.push({
+                component: 'cherry_grid',
+                title:     element.model.name,
+                source_id: element.source,
+                model_url: element.model.url,
+                page:      1
+              });
+            }
+          },
+          onBack: function () { Lampa.Controller.toggle('content'); }
+        });
+      });
+
+      ui.onFocus(function (target) {
+        _stopCurrentPreview();
+        // Dwell-timer: only start preview after the focus rests ~600ms on a card.
+        // D-pad scrolling through a row clears the timer (in _stopCurrentPreview)
+        // before it fires, so passing-through cards never trigger video.load()+play().
+        // Android included (v0.13.14): the TV WebView autoplays a muted <video> without a
+        // gesture — stand-verified (playing event, currentTime advances). The Settings toggle
+        // is the kill switch; the dwell timer keeps D-pad scrolling free of video loads.
+        if (element.preview && Lampa.Storage.get('cherry_preview_enabled', true)) {
+          _previewTimer = setTimeout(function () {
+            _startPreview(target, element.preview);
+          }, 600);
+        }
+      });
+    }
+
+    var comp = _cherryScreen(object, {
+      cols: 5, rootClass: 'cherry-cat', skeleton: true,   // 16:9 landscape cards, 5 per row
+      load: _load, empty: _emptyState, card: _card,
+      right: openActionsMenu,          // RIGHT at the edge → Поиск / Сортировка / Категории
+      // no hover preview survives a pause / stop / destroy; the availability check stops with it
+      pause: function () { _stopCurrentPreview(); _availStop = true; }
+    });
+    // Background availability check once the favorites grid is on screen.
+    if (object.is_favorites) setTimeout(_availCheck, 3000);
+    // P3.4: the persistent header filter button (addFilterButton) opens the same menu.
+    comp.openActionsMenu = openActionsMenu;
+    return comp;
+  }
+
+  // ============================================================
+  // CHERRY MAIN COMPONENT
+  // Source list + global search bar + favorites button.
+  // ============================================================
+
+  // Stable brand hue from a string seed → consistent per-source tile colour.
+  function _tileColor(seed) {
+    var h = 0, str = String(seed || '');
+    for (var i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 360;
+    return 'hsl(' + h + ',55%,38%)';
+  }
+
+  /**
+   * @constructor
+   * @param {Object} object  Activity params
+   */
+  function CherryMain(object) {
+
+    // Channel health dots (owner: "a small green/gray dot on the channel tile so I can see
+    // whether it works"). Status is cached 6h in Storage and refreshed in the background
+    // AFTER the picker renders, a few sources at a time, each dot painted as its probe
+    // settles. Probe = browse p1 (the very request opening the channel makes) capped at 8s;
+    // ok = it returned cards. Hollow ring = not probed yet.
+    var _HEALTH_KEY = 'cherry_src_health', _HEALTH_TTL = 6 * 3600 * 1000;
+    var _dots = {};
+    function _healthGet() { var h = Lampa.Storage.get(_HEALTH_KEY, {}); return (h && typeof h === 'object') ? h : {}; }
+    function _paintDot(id, ok) {
+      var $d = _dots[id];
+      if (!$d) return;
+      $d.removeClass('cherry-dot--ok cherry-dot--bad cherry-dot--unk')
+        .addClass(ok === null ? 'cherry-dot--unk' : (ok ? 'cherry-dot--ok' : 'cherry-dot--bad'));
+    }
+    function _healthRefresh() {
+      var cache = _healthGet(), now = Date.now();
+      var _act = _activeSources();
+      _act.forEach(function (s) { var e = cache[s.id]; _paintDot(s.id, e ? !!e.ok : null); });
+      var stale = _act.filter(function (s) { var e = cache[s.id]; return !e || (now - e.t) > _HEALTH_TTL; });
+      var i = 0, running = 0, LIMIT = 4;
+      function next() {
+        while (running < LIMIT && i < stale.length) {
+          (function (s) {
+            running++;
+            var sort0 = (s.cfg && s.cfg.sorts && s.cfg.sorts[0] && s.cfg.sorts[0].id) || '';
+            var probe = Promise.resolve().then(function () { return s.browse('', 1, sort0); })
+              .then(function (r) { return !!(r && r.items && r.items.length); })
+              .catch(function () { return false; });
+            Promise.race([probe, new Promise(function (res) { setTimeout(function () { res(false); }, 8000); })])
+              .then(function (ok) {
+                var c = _healthGet(); c[s.id] = { ok: ok, t: Date.now() }; Lampa.Storage.set(_HEALTH_KEY, c);
+                _paintDot(s.id, ok);
+                running--; next();
+              });
+          })(stale[i++]);
+        }
+      }
+      next();
+    }
+
+    // ---- screen hooks -----------------------------------------------------
+    // Home is a single-page source picker: [Поиск] + [Все видео] + [Избранное] + [Синхронизация]
+    // + one tile per active source (+ «Продолжить»). Enter routes to the right activity.
+
+    function _load(page, ok) {
+      if (page > 1) { ok([], 1); return; }
+      var results = [];
+      // 1) Search entry — opens keyboard, then all-sources search grid.
+      results.push({ title: Lampa.Lang.translate('cherry_search'), img: '', _kind: 'search', _initial: '⌕', _action: true });
+      // 1b) «Все видео» — unified LATEST feed mixed across every channel (all_videos grid).
+      results.push({ title: Lampa.Lang.translate('cherry_all_videos'), img: '', _kind: 'all_videos', _initial: '▦', _action: true });
+      // 2) Favorites entry.
+      results.push({ title: Lampa.Lang.translate('cherry_favorites'), img: '', _kind: 'favorites', _initial: '♥', _action: true });
+      // 3) Sync entry — set the cross-device PIN; opening Cherry also auto-syncs.
+      results.push({ title: Lampa.Lang.translate('cherry_sync'), img: '', _kind: 'sync', _initial: '⟲', _action: true });
+      // 4) One card per ACTIVE source (disabled = site down, see _activeSources) — stable
+      //    brand colour + first letter.
+      _activeSources().forEach(function (src) {
+        results.push({
+          title:      src.name,
+          img:        '',
+          _kind:      'source',
+          _source_id: src.id,
+          _initial:   (src.name || '?').charAt(0).toUpperCase(),
+          _color:     _tileColor(src.id)
+        });
+      });
+      // 5) Watch history («РП») — resume surface, placed LAST (after all sources).
+      // Shown only when history exists.
+      if (Hist.all().length) {
+        results.push({ title: Lampa.Lang.translate('cherry_continue'), img: '', _kind: 'continue', _initial: '▶', _action: true });
+      }
+
+      ok(results, 1);
+      // Opening Cherry pulls the shared bucket (non-blocking, local-first).
+      try { Sync.run(); } catch (e) {}
+      // Paint cached channel health, then refresh stale entries in the background.
+      try { _healthRefresh(); } catch (e) {}
+    }
+
+    function _card(ui, element) {
+      ui.onEnter(function () {
+        if (element._kind === 'search') {
+          // Popular quick-picks + voice + manual type — avoids D-pad typing for common queries.
+          _searchPicker('', function (q) {
+            Lampa.Activity.push({
+              component:   'cherry_grid',
+              title:       Lampa.Lang.translate('cherry_search') + ': ' + q,
+              source_id:   (SOURCES[0] && SOURCES[0].id) || '',
+              query:       q,
+              all_sources: true,
+              page:        1
+            });
+          });
+        } else if (element._kind === 'all_videos') {
+          // Unified «Все видео» — latest mixed across every channel (all_videos grid).
+          Lampa.Activity.push({
+            component:  'cherry_grid',
+            title:      Lampa.Lang.translate('cherry_all_videos'),
+            source_id:  (SOURCES[0] && SOURCES[0].id) || '',
+            all_videos: true,
+            page:       1
+          });
+        } else if (element._kind === 'continue') {
+          Lampa.Activity.push({
+            component:  'cherry_grid',
+            title:      Lampa.Lang.translate('cherry_continue'),
+            source_id:  (SOURCES[0] && SOURCES[0].id) || '',
+            is_history: true,
+            page:       1
+          });
+        } else if (element._kind === 'favorites') {
+          Lampa.Activity.push({
+            component:    'cherry_grid',
+            title:        Lampa.Lang.translate('cherry_favorites'),
+            source_id:    (SOURCES[0] && SOURCES[0].id) || '',
+            is_favorites: true,
+            page:         1
+          });
+        } else if (element._kind === 'sync') {
+          if (typeof Lampa.Input !== 'undefined' && Lampa.Input.edit) {
+            Lampa.Input.edit({
+              title:  Lampa.Lang.translate('cherry_sync'),
+              value:  Sync.getPin(),
+              free:   true,
+              nosave: true
+            }, function (v) {
+              Lampa.Controller.toggle('content');
+              // v may arrive as a string or, on some builds, an object — coerce safely.
+              var p = String(v == null ? '' : (v.value != null ? v.value : v)).trim();
+              console.log('[Cherry] sync tile: entered value =', v, '→ pin =', p);
+              if (/^[0-9]{4,12}$/.test(p)) {
+                Lampa.Noty.show(Lampa.Lang.translate('cherry_sync') + '… (PIN ' + p + ')');
+                Sync.setPin(p);   // runs a REPORTED sync → shows result/error Noty
+              } else {
+                Lampa.Noty.show('PIN — 4–12 цифр');
+              }
+            });
+          }
+        } else if (element._kind === 'source') {
+          Lampa.Activity.push({
+            component: 'cherry_grid',
+            title:     element.title,
+            source_id: element._source_id,
+            page:      1
+          });
+        }
+      });
+
+      // Letter tile: the picker has no thumbnails, so paint a coloured initial
+      // into .card__view. Search/Favorites get the brand action tint; sources
+      // get a stable per-source hue. Visual only — routing above is untouched.
+      try {
+        var $view = ui.html.find('.card__view');
+        if ($view.length) {
+          var cls = 'cherry-tile' + (element._action ? ' cherry-tile--action' : '');
+          var bg  = element._action ? '' : ' style="background:' + (element._color || '#444') + '"';
+          $view.append('<div class="' + cls + '"' + bg + '><span>' + (element._initial || '?') + '</span></div>');
+          // Health dot on source tiles (painted from cache now, refreshed by _healthRefresh).
+          if (element._kind === 'source') {
+            var $dot = $('<div class="cherry-dot cherry-dot--unk"></div>');
+            $view.append($dot);
+            _dots[element._source_id] = $dot;
+            var he = _healthGet()[element._source_id];
+            _paintDot(element._source_id, he ? !!he.ok : null);
+          }
+        }
+      } catch (e) {}
+    }
+
+    // Small square tiles, 8 per row, so every channel fits on screen.
+    // .cherry-cat → tile + focus styling; .cherry-home → square aspect override.
+    return _cherryScreen(object, {
+      cols: 8, rootClass: 'cherry-cat cherry-home',
+      load: _load, card: _card,
+      empty: function () { return { descr: Lampa.Lang.translate('cherry_empty') }; }
+    });
+  }
+
+  // ============================================================
+  // CSS  — optimised for 1080p TV (1920×1080)
+  // Base font-size on most Lampa skins ≈ 20px.
+  // All em values are relative to that context.
+  // ============================================================
+  function addStyles() {
+    var rules = [
+      /* ---- 16:9 landscape cards for Cherry (override Lampa's poster card) ---- */
+      /* Scoped to .cherry-cat so the rest of Lampa keeps its poster layout.    */
+      '.cherry-cat .card__view {',
+      '  padding-bottom: 56.25% !important;',  /* 9/16 → 16:9 box */
+      '  height: 0 !important;',
+      '  position: relative;',
+      '}',
+      '.cherry-cat .card__img {',
+      '  position: absolute; top: 0; left: 0;',
+      '  width: 100%; height: 100%;',
+      '  object-fit: cover;',
+      '}',
+
+      /* ---- Focus: brand ring + zoom on the INNER box (.card__view), so it does */
+      /* NOT double up with Lampa's outer focus frame. Larger scale + pink ring + */
+      /* drop shadow make the focused card unmistakable at 10-foot distance. */
+      '.cherry-cat .card{transform-origin:center;}',
+      '.cherry-cat .card.focus .card__view{transform:scale(1.07);box-shadow:0 0 0 .22em #e75480, 0 .6em 1.4em rgba(0,0,0,.6);border-radius:.4em;transition:transform .18s ease, box-shadow .18s ease;}',
+      /* Suppress Lampa\'s native white focus frame (.card.focus .card__view::after = 0.3em solid #fff) */
+      /* so ONLY our pink ring shows — kills the double-highlight. */
+      '.cherry-cat .card.focus .card__view::after, .cherry-cat .card.hover .card__view::after{display:none !important;}',
+
+      /* ---- Home picker: small SQUARE tiles, all sources visible -- */
+      '.cherry-home .card__view{padding-bottom:100% !important;height:0 !important;position:relative;}',
+
+      /* ---- P2.2 Title legibility (2-line clamp, full white) ----- */
+      '.cherry-cat .card__title{color:#fff;font-size:.9em;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;white-space:normal;overflow:hidden;max-height:2.6em;}',
+
+      /* ---- P2.3 Home letter tiles ------------------------------ */
+      '.cherry-cat .cherry-tile{position:absolute;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;border-radius:.6em;}',
+      '.cherry-cat .cherry-tile span{font-size:2.6em;font-weight:800;color:#fff;text-shadow:0 .05em .2em rgba(0,0,0,.4);}',
+      '.cherry-cat .cherry-tile--action{background:#e75480 !important;}',
+      /* ---- Channel health dot on home tiles: green = returns cards, gray = down, ring = unknown */
+      '.cherry-home .cherry-dot{position:absolute;top:.55em;right:.55em;width:.6em;height:.6em;border-radius:50%;z-index:3;box-shadow:0 0 0 .12em rgba(0,0,0,.45);}',
+      '.cherry-home .cherry-dot--ok{background:#3ecf6a;}',
+      '.cherry-home .cherry-dot--bad{background:#8a8a8a;}',
+      '.cherry-home .cherry-dot--unk{background:transparent;box-shadow:0 0 0 .12em rgba(255,255,255,.35);}',
+
+      /* ---- Bottom gradient scrim: lifts badge contrast over light thumbnails. */
+      /* Sits at z-index:1, BELOW the badges (z-index:2), pointer-events:none.   */
+      '.cherry-cat .card__view::after{content:\'\';position:absolute;left:0;right:0;bottom:0;height:42%;background:linear-gradient(transparent, rgba(0,0,0,.55));pointer-events:none;z-index:1;}',
+
+      /* ---- Preview <video> fade-in (motion) + object-fit so non-16:9 sources */
+      /* (e.g. eporner medium thumbs) cover the card box instead of stretching.  */
+      '.cherry-cat .cherry-card__preview, .cherry-card__preview{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;transition:opacity .25s ease;}',
+
+      /* ---- P3.3 Source attribution badge + duration/views (3 corners max) --- */
+      /* Larger + bolder for 10-foot legibility; sit above the scrim (z-index:2). */
+      '.cherry-cat .cherry-src-badge{position:absolute;top:.4em;left:.5em;z-index:2;background:rgba(0,0,0,.85);color:#fff;font-size:.85em;font-weight:700;padding:.12em .5em;border-radius:.25em;max-width:80%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+      '.cherry-cat .cherry-dead{position:absolute;top:.4em;right:.5em;z-index:3;background:rgba(170,30,30,.92);color:#fff;font-size:.95em;font-weight:700;padding:.18em .55em;border-radius:.25em;}',
+      '.cherry-cat .cherry-dur{position:absolute;bottom:.4em;right:.5em;z-index:2;background:rgba(0,0,0,.8);color:#fff;font-size:1em;font-weight:700;padding:.18em .55em;border-radius:.25em;}',
+      '.cherry-cat .cherry-views{position:absolute;bottom:.4em;left:.5em;z-index:2;background:rgba(0,0,0,.8);color:#fff;font-size:1em;font-weight:700;padding:.18em .55em;border-radius:.25em;}',
+
+      /* ---- Larger empty/error text for 10-foot readability ----------------- */
+      '.activity .empty__descr{font-size:1.5em;line-height:1.4;}',
+
+      /* ---- Skeleton placeholders while a grid loads (perceived speed) ------- */
+      '.cherry-skeleton{display:flex;flex-wrap:wrap;padding:1.5em;}',
+      '.cherry-skeleton__card{width:18%;margin:1%;padding-bottom:10.1%;border-radius:.4em;background:#1c1c1c;background-image:linear-gradient(90deg,rgba(255,255,255,0) 0,rgba(255,255,255,.07) 50%,rgba(255,255,255,0) 100%);background-size:200% 100%;animation:cherry-shimmer 1.3s linear infinite;}',
+      '@keyframes cherry-shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}',
+
+      /* ---- P3.4 Cherry header filter button -------------------- */
+      '.cherry-filter-btn{color:#fff;}',
+      '.cherry-filter-btn.focus{color:#e75480;}',
+
+      /* ---- Resume progress bar (watch history) ----------------- */
+      /* Thin bottom bar over a faint full-width track; the brand-pink fill width */
+      /* is the watched %. .cherry-watched dims the thumb slightly ("seen"). */
+      '.cherry-cat .cherry-progress-track{position:absolute;left:0;right:0;bottom:0;height:.3em;background:rgba(255,255,255,.25);z-index:2;}',
+      '.cherry-cat .cherry-progress{position:absolute;left:0;bottom:0;height:.3em;background:#e75480;z-index:3;}',
+      '.cherry-cat .card__view.cherry-watched .card__img{opacity:.8;}',
+    ];
+
+    var style = document.createElement('style');
+    style.id  = 'cherry-plugin-styles';
+    style.textContent = rules.join('\n');
+    document.head.appendChild(style);
+  }
+
+  // ============================================================
+  // LANG
+  // ============================================================
+  function addLang() {
+    Lampa.Lang.add({
+      cherry_search:      { ru: 'Поиск',               en: 'Search'             },
+      cherry_all_videos:  { ru: 'Все видео',           en: 'All videos'         },
+      cherry_search_empty:     { ru: 'По запросу ничего не найдено', en: 'Nothing found'  },
+      cherry_empty:            { ru: 'Здесь пока пусто',     en: 'Nothing here yet'   },
+      cherry_search_type:      { ru: 'Ввести запрос',       en: 'Type a query'       },
+      cherry_search_voice:     { ru: 'Голосом',             en: 'Voice'              },
+      cherry_search_listening: { ru: 'Говорите…',           en: 'Listening…'         },
+      cherry_search_hint: { ru: 'Введите запрос',      en: 'Enter a query'      },
+      cherry_recent_clear: { ru: 'Очистить недавние',  en: 'Clear recent'       },
+      cherry_sources:     { ru: 'Источники',           en: 'Sources'            },
+      cherry_favorites:   { ru: 'Случайные',           en: 'Favorites'          },
+      cherry_continue:    { ru: 'RP',                  en: 'Continue'           },
+      cherry_sync:        { ru: 'Синхронизация',       en: 'Sync'               },
+      cherry_sync_ok:     { ru: 'Избранное синхронизировано', en: 'Favorites synced' },
+      cherry_sync_err:    { ru: 'Синхронизация не удалась — проверьте сеть', en: 'Sync failed — check connection' },
+      cherry_no_results:  { ru: 'Нет результатов',     en: 'No results'         },
+      cherry_fav_empty_hint: { ru: 'Удерживайте ОК на видео чтобы добавить в избранное', en: 'Hold OK on a video to add it to favorites' },
+      cherry_loading:     { ru: 'Загрузка…',           en: 'Loading…'           },
+      cherry_error:       { ru: 'Ошибка загрузки',     en: 'Load error'         },
+      cherry_load_error:  { ru: 'Не удалось загрузить. Проверьте соединение.', en: 'Failed to load. Check your connection.' },
+      cherry_unavailable:       { ru: 'Недоступно',            en: 'Unavailable'          },
+      cherry_find_copy:         { ru: 'Найти копию',           en: 'Find a copy'          },
+      cherry_add_fav:        { ru: 'Добавлено в избранное',  en: 'Added to favorites'    },
+      cherry_rem_fav:        { ru: 'Убрано из избранного',   en: 'Removed from favorites' },
+      cherry_add_fav_action: { ru: 'Добавить в избранное',   en: 'Add to favorites'       },
+      cherry_rem_fav_action: { ru: 'Убрать из избранного',   en: 'Remove from favorites'  },
+      cherry_quality:     { ru: 'Выбор качества',      en: 'Select quality'     },
+      cherry_similar_titles:   { ru: 'Похожие названия',     en: 'Similar titles'     },
+      cherry_sort:             { ru: 'Сортировка',          en: 'Sort'               },
+      cherry_sort_default:     { ru: 'По умолчанию',        en: 'Default'            },
+      cherry_sort_relevance:   { ru: 'По умолчанию',        en: 'Default'            },
+      cherry_sort_duration:    { ru: 'Длинные сначала',     en: 'Longest first'      },
+      cherry_sort_duration_asc:{ ru: 'Короткие сначала',    en: 'Shortest first'     },
+      cherry_sort_title:       { ru: 'По названию (А-Я)',   en: 'Title (A-Z)'        },
+      cherry_sort_guaranteed:  { ru: 'Сортировка (точная)', en: 'Sort (exact)'       },
+      cherry_category:         { ru: 'Категория',           en: 'Category'           },
+      cherry_category_default: { ru: 'Все категории',       en: 'All categories'     },
+      cherry_model_videos:     { ru: 'Видео модели',        en: 'Model videos'       },
+      cherry_model:            { ru: 'Модель',              en: 'Model'              },
+      cherry_models:           { ru: 'Модели',              en: 'Models'             },
+      cherry_studios:          { ru: 'Студии',              en: 'Studios'            },
+      cherry_preview_setting:  { ru: 'Предпросмотр',        en: 'Preview'            },
+      cherry_related:          { ru: 'Похожие',             en: 'Related'            },
+      cherry_proxy_key_init:   { ru: 'Cherry: ключ прокси — 1206. Для смены — измените cherry_proxy_key в хранилище Lampa.', en: 'Cherry: proxy key — 1206. To change, update cherry_proxy_key in Lampa Storage.' }
+    });
+  }
+
+  // ============================================================
+  // P3.4 — Persistent header filter button (Cherry grids only)
+  // Mirrors sisi_full.js addFilter: a focusable header action that opens the
+  // same Поиск → Сортировка → Категории menu as the right edge, so filters are
+  // discoverable without hunting for the right-edge gesture. Shown only while a
+  // cherry_grid activity is on top; hidden everywhere else in Lampa.
+  //
+  // NOTE (global search): Lampa's global-search registration API
+  // (Lampa.Search component) is NOT exercised by the reference (sisi defines a
+  // `Search` object but never registers it — addSourceSearch() is commented
+  // out). Registering Cherry into the system-wide search bar is therefore
+  // unverified and risky; left as a TODO rather than guessed. The header button
+  // below is the safe, clear win that satisfies the discoverability goal.
+  // TODO(global-search): register Cherry into Lampa.Search once the API is
+  // confirmed on a live runtime (open the all-sources search grid for the query).
+  // ============================================================
+  function addFilterButton() {
+    if (window.cherry_filter_btn_ready) return;
+    if (!$('.head .open--search').length) return; // header not present
+    window.cherry_filter_btn_ready = true;
+
+    var activi;
+    var timer;
+    var button = $(
+      '<div class="head__action selector cherry-filter-btn">' +
+        '<svg height="36" viewBox="0 0 38 36" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+          '<rect x="1.5" y="1.5" width="35" height="33" rx="1.5" stroke="currentColor" stroke-width="3"></rect>' +
+          '<rect x="7" y="8" width="24" height="3" rx="1.5" fill="currentColor"></rect>' +
+          '<rect x="7" y="16" width="24" height="3" rx="1.5" fill="currentColor"></rect>' +
+          '<rect x="7" y="25" width="24" height="3" rx="1.5" fill="currentColor"></rect>' +
+          '<circle cx="13.5" cy="17.5" r="3.5" fill="currentColor"></circle>' +
+          '<circle cx="23.5" cy="26.5" r="3.5" fill="currentColor"></circle>' +
+          '<circle cx="21.5" cy="9.5" r="3.5" fill="currentColor"></circle>' +
+        '</svg>' +
+      '</div>'
+    );
+
+    button.hide().on('hover:enter', function () {
+      // Resolve the live component instance (Manifest digital quirk: in newer
+      // builds activity.component is the instance; in older it is a factory).
+      if (!activi) return;
+      var inst = (Lampa.Manifest && Lampa.Manifest.app_digital >= 300)
+        ? activi.activity.component
+        : (typeof activi.activity.component === 'function' ? activi.activity.component() : activi.activity.component);
+      if (inst && inst.openActionsMenu) inst.openActionsMenu();
+    });
+
+    $('.head .open--search').after(button);
+
+    Lampa.Listener.follow('activity', function (e) {
+      if (e.type === 'start') activi = e.object;
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        if (activi && activi.component !== 'cherry_grid') {
+          button.hide();
+          activi = false;
+        }
+      }, 1000);
+
+      if (e.type === 'start' && e.component === 'cherry_grid') {
+        button.show();
+        activi = e.object;
+      }
+    });
+  }
+
+  // ============================================================
+  // INIT
+  // ============================================================
+  // Lampa's «Расширения» list shows the `name` of the plugin's record and «Без названия» when
+  // there is none (fresh install on Lampa 1.13.3, stand 2026-10-07). Fill it in once — only when
+  // empty, so a name the user typed is kept.
+  function _nameInExtensions() {
+    try {
+      var list = Lampa.Storage.get('plugins', []), changed = false;
+      if (!Array.isArray(list)) return;
+      list.forEach(function (p) {
+        if (p && typeof p === 'object' && /cherry-plugin\/plugin\.js/.test(p.url || '') && !p.name) {
+          p.name = 'Cherry'; if (!p.author) p.author = '@aawersom'; changed = true;
+        }
+      });
+      if (changed) Lampa.Storage.set('plugins', list);
+    } catch (e) {}
+  }
+
+  function startPlugin() {
+    // First run: if key was never explicitly saved, store the default and notify user.
+    if (Lampa.Storage.get('cherry_proxy_key', null) === null) {
+      Lampa.Storage.set('cherry_proxy_key', '1206');
+      setTimeout(function () {
+        Lampa.Noty.show(Lampa.Lang.translate('cherry_proxy_key_init'), { time: 7000 });
+      }, 1500);
+    }
+
+    addLang();
+    addStyles();
+    _nameInExtensions();
+
+    // UX-C: register preview toggle in Lampa settings. Long-press on the main
+    // title remains as a fallback when SettingsApi is unavailable.
+    if (Lampa.SettingsApi && Lampa.SettingsApi.addComponent && Lampa.SettingsApi.addParam) {
+      Lampa.SettingsApi.addComponent({
+        component: 'cherry',
+        name: 'Cherry · v' + CHERRY_VERSION,
+        icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 21s-7-4.35-9.5-8.5C0.5 9 2 5 5.5 5c2 0 3.5 1.5 4 2.5C10 6.5 11.5 5 13.5 5 17 5 18.5 9 16.5 12.5 14 16.65 12 21 12 21z" fill="#e75480"/></svg>'
+      });
+      Lampa.SettingsApi.addParam({
+        component: 'cherry',
+        param: { name: 'cherry_preview_enabled', type: 'trigger', default: true },
+        field: { name: Lampa.Lang.translate('cherry_preview_setting'), description: '' }
+        // 'trigger' params auto-persist to Lampa.Storage under param.name (== our storage key),
+        // so no onChange handler is needed — read path Lampa.Storage.get('cherry_preview_enabled') works.
+      });
+    } else if (Lampa.SettingsApi) {
+      console.warn('[Cherry] SettingsApi present but addComponent/addParam unavailable — using long-press fallback');
+    }
+
+    Lampa.Component.add('cherry_main', CherryMain);
+    Lampa.Component.add('cherry_grid', CherryGrid);
+
+    // P3.4: persistent header filter button for cherry_grid screens.
+    try { addFilterButton(); } catch (e) { console.warn('[Cherry] addFilterButton failed', e); }
+
+    // Startup sync — only if the user has set a PIN (no default). Sync.run()
+    // no-ops on an empty/invalid PIN, so favorites stay purely local until opt-in.
+    // Non-blocking, local-first: a slow/failed sync never delays the UI.
+    setTimeout(function () { try { Sync.run(); } catch (e) {} }, 2000);
+
+    var cherryIcon = [
+      '<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">',
+        '<path d="M12 21.593c-5.63-5.539-11-10.297-11-14.402 0-3.791 3.068-5.191 5.281-5.191',
+        ' 1.312 0 4.151.501 5.719 4.457 1.59-3.968 4.464-4.447 5.726-4.447 2.54 0 5.274 1.621',
+        ' 5.274 5.181 0 4.069-5.136 8.625-11 14.402z"/>',
+      '</svg>'
+    ].join('');
+
+    Lampa.Menu.addButton(
+      cherryIcon,
+      'Cherry',
+      function () {
+        Lampa.Activity.push({
+          component: 'cherry_main',
+          title:     'Cherry',
+          page:      1
+        });
+      }
+    );
+
+    // Revoke HLS blob URLs on player close; push related panel if available (REQ-4).
+    Lampa.Listener.follow('player', function (e) {
+      // RESUME surface: snapshot the native timeline position into Hist as the
+      // user watches (timeupdate) and once more on close (destroy). Lampa OWNS
+      // the canonical position via the timeline VIEW it persists; we just mirror
+      // it so «Продолжить» + on-card progress bars stay accurate. Coexists with
+      // the related-panel destroy logic below (both run on the same destroy).
+      if ((e.type === 'timeupdate' || e.type === 'destroy') && _histVideo && _histHash) {
+        try {
+          var view = (Lampa.Timeline && Lampa.Timeline.view)
+            ? Lampa.Timeline.view(_histHash) : null;
+          if (view) {
+            var pos = view.time     || e.time     || 0;
+            var dur = view.duration || e.duration || _histVideo.duration || 0;
+            if (pos > 0 || dur > 0) Hist.mark(_histVideo, pos, dur);
+          }
+        } catch (_h) {}
+      }
+      if (e.type === 'destroy') {
+        _histVideo = null;
+        _histHash  = null;
+        if (_blobUrls.length) {
+          _blobUrls.forEach(function (u) { try { URL.revokeObjectURL(u); } catch (_) {} });
+          _blobUrls = [];
+        }
+        // REQ-4: invalidate any in-flight getRelated then push a PAGINATED related
+        // grid if page-1 related existed. We push the video + source (not the
+        // snapshot) so the panel scrolls via _gridLoad's related_video branch.
+        _relatedGeneration++;
+        if (_pendingRelated.length && _relatedVideo && _relatedSrc) {
+          var rSrc  = _relatedSrc;
+          var rVid  = _relatedVideo;
+          _pendingRelated = [];
+          _relatedSrc     = null;
+          _relatedVideo   = null;
+          Lampa.Activity.push({
+            component:            'cherry_grid',
+            title:                Lampa.Lang.translate('cherry_related'),
+            source_id:            rSrc.id,
+            related_video:        rVid,
+            related_video_source: rSrc.id,
+            page:                 1
+          });
+        }
+      }
+    });
+  }
+
+  // Handle both early-load (before app:ready) and late-load cases.
+  if (window.appready) {
+    startPlugin();
+  } else {
+    Lampa.Listener.follow('app', function (e) {
+      if (e.type === 'ready') startPlugin();
+    });
+  }
+
+  // ============================================================
+  // SOURCE ADAPTERS
+  // ============================================================
+
+// ============================================================
+// CHERRY — SOURCE ADAPTERS TIER 1
+// Eporner, Pornhub, Xvideos, Xnxx, Spankbang,
+// Hqporner, Youjizz, Tizam, Ebalovo, HellPorno, NoodleMagazine
+// ============================================================
+
+// ---- Shared helpers ----
+
+function parseDur(str) {
+  if (!str) return 0;
+  str = ('' + str).trim();
+  if (/^\d+$/.test(str)) return parseInt(str, 10);
+  // ISO-8601 duration (schema.org itemprop="duration" content="PT13M10S" / "PT790S").
+  var iso = str.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/i);
+  if (iso && (iso[1] || iso[2] || iso[3])) {
+    return (iso[1] ? parseInt(iso[1], 10) * 3600 : 0) +
+           (iso[2] ? parseInt(iso[2], 10) * 60 : 0) +
+           (iso[3] ? parseInt(iso[3], 10) : 0);
+  }
+  // Colon form (12:34 / 1:02:03) — handle before the h/m/s scan so it isn't shadowed.
+  // Only when every part is a plain number; mixed unit+colon (xozilla "17m:37s") must
+  // fall through to the unit scan below, else Number("17m")=NaN poisons the result.
+  if (str.indexOf(':') !== -1) {
+    var p = str.split(':').map(Number);
+    var allNum = p.length >= 2 && p.every(function (n) { return !isNaN(n); });
+    if (allNum && p.length === 2) return p[0] * 60 + p[1];
+    if (allNum && p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
+  }
+  // Unit form: any of h / m(in) / s, in any combination, spaces tolerated.
+  // Examples handled: "7min", "7 min", "1h2min", "1h 2m", "1h", "12m34s".
+  var h = str.match(/(\d+)\s*h/i);
+  var m = str.match(/(\d+)\s*m(?:in)?(?![a-z])/i);
+  var s = str.match(/(\d+)\s*s(?![a-z])/i);
+  if (h || m || s) {
+    return (h ? parseInt(h[1], 10) * 3600 : 0) +
+           (m ? parseInt(m[1], 10) * 60 : 0) +
+           (s ? parseInt(s[1], 10) : 0);
+  }
+  return 0;
+}
+
+function parseViews(str) {
+  if (!str) return 0;
+  str = ('' + str).replace(/[,\s]/g, '');
+  if (/k$/i.test(str)) return parseInt(str) * 1000;
+  if (/m$/i.test(str)) return parseInt(str) * 1000000;
+  return parseInt(str, 10) || 0;
+}
+
+// Hover/teaser clips that pages embed for OTHER cards (KVS data-preview …_preview.mp4, xhamster
+// thumb-v*.xhcdn.com/…t.av1.mp4, trailers). Never a candidate for the video itself.
+var _CLIP_URL_RX = /preview|trailer|teaser|thumb/i;
+
+function extractStreams(html) {
+  var quality = {};
+  var url = '';
+  var m;
+  // KVS get_file pattern
+  var kvs = html.match(/https?:\/\/[^"'\s]+get_file[^"'\s]+\.mp4[^"'\s]*/g);
+  // Skip hover clips: every sidebar/related card carries data-preview="…get_file/…/{itsId}_preview.mp4"
+  // — taking one played a clip of ANOTHER video (porno666, stand 2026-10-07: «не то видео»).
+  if (kvs) kvs.forEach(function(u) {
+    if (_CLIP_URL_RX.test(u)) return;
+    var q = (u.match(/(\d{3,4}p)/i) || ['', 'mp4'])[1]; quality[q] = u;
+  });
+  // Source tags with res/label/title attribute (both orders)
+  var srcRe = /<source\s[^>]*src="([^"]+)"[^>]*(?:res|label|title)="([^"]+)"/gi;
+  while ((m = srcRe.exec(html)) !== null) quality[m[2]] = m[1];
+  var srcRe2 = /<source\s[^>]*(?:res|label|title)="([^"]+)"[^>]*src="([^"]+)"/gi;
+  while ((m = srcRe2.exec(html)) !== null) quality[m[1]] = m[2];
+  // JWPlayer sources:[...] array multi-quality branch
+  function findMatchingBracket(str, openIdx, openCh, closeCh) {
+    var depth = 0, inStr = false, strCh = '';
+    for (var i = openIdx; i < str.length; i++) {
+      var c = str[i];
+      if (inStr) {
+        if (c === strCh) {
+          var bs = 0;
+          for (var j = i - 1; j >= 0 && str[j] === '\\'; j--) bs++;
+          if (bs % 2 === 0) inStr = false;
+        }
+        continue;
+      }
+      if (c === '"' || c === "'") { inStr = true; strCh = c; continue; }
+      // Track depth for both bracket types — handles mixed [{...}, {...}] nesting
+      if (c === '{' || c === '[') { depth++; continue; }
+      if (c === closeCh || c === '}' || c === ']') {
+        if (--depth === 0) return i;
+      }
+    }
+    return -1;
+  }
+  var srcArrayM = /sources\s*:\s*\[/i.exec(html);
+  if (srcArrayM) {
+    var arrOpen = html.indexOf('[', srcArrayM.index + srcArrayM[0].length - 1);
+    if (arrOpen !== -1) {
+      var arrClose = findMatchingBracket(html, arrOpen, '[', ']');
+      if (arrClose !== -1) {
+        var block = html.slice(arrOpen + 1, arrClose);
+        var fileRe2  = /['"]file['"]\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))['"]/i;
+        var labelRe2 = /['"]label['"]\s*:\s*['"]([^'"]+)['"]/i;
+        var bi = 0;
+        while (bi < block.length) {
+          var objStart = block.indexOf('{', bi);
+          if (objStart === -1) break;
+          var objEnd = findMatchingBracket(block, objStart, '{', '}');
+          if (objEnd === -1) break;
+          var obj = block.slice(objStart, objEnd + 1);
+          var fm2 = fileRe2.exec(obj);
+          var lm2 = labelRe2.exec(obj);
+          if (fm2 && lm2 && !quality[lm2[1]]) quality[lm2[1]] = fm2[1];
+          bi = objEnd + 1;
+        }
+      }
+    }
+  }
+  // JWPlayer / generic file
+  var jwRe = /['"]file['"]\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))['"]/g;
+  while ((m = jwRe.exec(html)) !== null) { if (!url) url = m[1]; }
+  // Plain source tags
+  var plainRe = /<source\s[^>]*src="([^"]+\.(?:mp4|m3u8)[^"']*)"/gi;
+  while ((m = plainRe.exec(html)) !== null) { if (!url) url = m[1]; }
+  // Fallback: find any mp4 URL (http/https or protocol-relative)
+  if (!url && !Object.keys(quality).length) {
+    var anyAll = html.match(/(?:https?:)?\/\/[^"'\s]+\.mp4[^"'\s]*/g) || [];
+    for (var ai = 0; ai < anyAll.length && !url; ai++) if (!_CLIP_URL_RX.test(anyAll[ai])) url = anyAll[ai];
+  }
+  if (!url && Object.keys(quality).length) url = quality[Object.keys(quality)[0]];
+  // Normalize protocol-relative URLs to https://
+  function fixProto(u) { return (u && u.slice(0, 2) === '//') ? 'https:' + u : u; }
+  url = fixProto(url);
+  Object.keys(quality).forEach(function(k) { quality[k] = fixProto(quality[k]); });
+  return { url: url, quality: quality };
+}
+
+// Strip HTML tags from a string
+function stripTags(str) {
+  // Remove tags, then fully decode entities via the shared _decodeHtml (numeric + hex +
+  // named). Scraped titles routinely carry &iexcl; &uacute; &ndash; &#039; etc. — decoding
+  // them HERE fixes every parser that titles through stripTags, not just one site.
+  return _decodeHtml(String(str == null ? '' : str).replace(/<[^>]+>/g, ''));
+}
+
+// Final title fallback: derive a readable title from a video URL's last slug
+// segment. Strips extension + leading numeric id, decodes, hyphens→spaces.
+// Returns '' for purely-numeric slugs so callers keep their own fallback.
+function _titleFromUrl(url) {
+  if (!url) return '';
+  try {
+    var seg = String(url).split('?')[0].split('#')[0].replace(/\/+$/, '').split('/').pop() || '';
+    seg = seg.replace(/\.(html?|php)$/i, '').replace(/^\d+[-_]/, '');
+    seg = decodeURIComponent(seg).replace(/[-_]+/g, ' ').trim();
+    if (/^\d+$/.test(seg)) return '';
+    return seg.charAt(0).toUpperCase() + seg.slice(1);
+  } catch (e) { return ''; }
+}
+
+// Generic words that dilute «Похожие по названию» relevance (the "woodman"
+// effect: keeping 'casting' over the model's name keys the search on the genre
+// instead of the distinctive subject). Stripped BEFORE picking top keywords so
+// the query leans on names/acts. EN + RU high-frequency fillers + porn-generic.
+var STOP_WORDS = (function () {
+  var list = ('the a an and or of to in on at for with from by as is are be ' +
+    'his her she he it its they them you your my our this that these those ' +
+    'hot sex porn porno video videos girl girls guy guys teen milf babe babes ' +
+    'amateur scene clip full hd new free' + ' ' +
+    'и в во на с со по для она его ее их они ты вы мой моя наш это эта эти тот ' +
+    'как что так все всё за из от до о об у не да нет porno секс порно видео ' +
+    'девушка девушки парень молодая молодые любительское сцена новое').split(/\s+/);
+  var set = {};
+  for (var i = 0; i < list.length; i++) if (list[i]) set[list[i]] = true;
+  return set;
+})();
+
+// Build the «Похожие по названию» query from a card title: drop punctuation,
+// remove STOP_WORDS, then take the top distinctive words. Robust fallback: if
+// filtering empties the list, use the unfiltered top words (never empty query).
+function _searchKeywords(title, limit) {
+  var n = limit || 4;
+  var all = (title || '').replace(/[^a-zа-яё0-9\s]/gi, '').trim().split(/\s+/).filter(Boolean);
+  var kept = all.filter(function (w) { return !STOP_WORDS[w.toLowerCase()]; });
+  var words = (kept.length ? kept : all).slice(0, n);
+  return words.join(' ');
+}
+
+// Infinite-scroll pagination without fragile markup parsing: a full page implies
+// there's a next one; a short page is the last. `full` = the per-source page size
+// (or a low floor). Returns the page number to report as total_pages.
+function _derivePages(itemsLen, page, full) {
+  // "Has more pages" if this page came back at least half-full (tolerant to per-site
+  // count variance). When it does, promise a GENEROUS window ahead so the base
+  // InteractionCategory keeps requesting on scroll — returning page+1 made it stop
+  // after a single extra page (the infinite-scroll bug). A short/empty page caps it.
+  // nextPageReuest re-derives each page, so the window re-extends as long as pages
+  // stay full → effectively infinite while the site has content.
+  var f = full || 12;
+  var hasMore = itemsLen >= Math.max(1, Math.floor(f / 2));
+  return hasMore ? (page + 50) : page;
+}
+
+// ============================================================
+// CHERRY — SOURCE ADAPTERS TIER 2
+// Porntrex, Xozilla, 3Movs, Analdin, PornVe, FamilyPorn,
+// Porndig, CrocoTube, Huyamba, VePorn, Ebun, LenPorno,
+// 24Rolika, JopaOnline, PornOne, Pornobolt, PerfektDamen, GayPornTube
+// ============================================================
+
+// ---------------------------------------------------------------------------
+// Shared card parser utilities
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract text content from an HTML attribute or tag region.
+ * @param {string} html
+ * @param {RegExp} rx
+ * @param {number} [group=1]
+ * @returns {string}
+ */
+function _attr(html, rx, group) {
+    var m = rx.exec(html);
+    return m ? (m[group != null ? group : 1] || '').trim() : '';
+}
+
+/**
+ * Decode common HTML entities found in title strings.
+ * @param {string} str
+ * @returns {string}
+ */
+// Named entities common in scraped titles (Latin accents, punctuation dashes/quotes,
+// symbols). Numeric (&#233;) and hex (&#xE9;) are handled generically below, so only
+// NAMED ones need a map. Unknown named entities are left literal (safe, never mangled).
+var _HTML_ENTITIES = {
+    amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", excl: '!', nbsp: ' ',
+    // HTML5 punctuation names some sites emit (pornone «E&period;r», «&lpar;6&rpar;», xvideos &times;)
+    period: '.', comma: ',', colon: ':', semi: ';', quest: '?', num: '#', percnt: '%', lpar: '(', rpar: ')',
+    lsqb: '[', rsqb: ']', ast: '*', plus: '+', equals: '=', sol: '/',
+    vert: '|', lowbar: '_', hyphen: '-', dash: '-', commat: '@', dollar: '$', times: '×', divide: '÷', star: '☆', hearts: '♥',
+    iexcl: '¡', iquest: '¿', laquo: '«', raquo: '»', hellip: '…',
+    ndash: '–', mdash: '—', lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”',
+    deg: '°', middot: '·', bull: '•', copy: '©', reg: '®', trade: '™',
+    euro: '€', pound: '£', cent: '¢', sect: '§',
+    eacute: 'é', egrave: 'è', ecirc: 'ê', euml: 'ë',
+    aacute: 'á', agrave: 'à', acirc: 'â', auml: 'ä', atilde: 'ã', aring: 'å',
+    iacute: 'í', igrave: 'ì', icirc: 'î', iuml: 'ï',
+    oacute: 'ó', ograve: 'ò', ocirc: 'ô', ouml: 'ö', otilde: 'õ', oslash: 'ø',
+    uacute: 'ú', ugrave: 'ù', ucirc: 'û', uuml: 'ü', yacute: 'ý', yuml: 'ÿ',
+    ntilde: 'ñ', ccedil: 'ç', szlig: 'ß',
+    Eacute: 'É', Aacute: 'Á', Iacute: 'Í', Oacute: 'Ó', Uacute: 'Ú',
+    Ntilde: 'Ñ', Ccedil: 'Ç', Auml: 'Ä', Ouml: 'Ö', Uuml: 'Ü'
+};
+// Repair text whose UTF-8 bytes were decoded as Windows-1252 / Latin-1 upstream (eporner's API:
+// «HeiÃŸe Erwachsene … WeiÃ\u009fen» for «Heiße … Weißen», stand 2026-10-07). Only text with the
+// telltale lead byte (U+00C2…U+00F4 + a continuation char) is touched; every char is mapped back to
+// its byte and the bytes are re-decoded as UTF-8 — anything that does not round-trip stays as is.
+// The lead range covers 3-byte UTF-8 too, so CJK titles («ç\u0088±ç\u008e©…» → «爱玩…», eporner
+// 2026-10-08) are repaired; real Latin text (Ménage, Señorita) has no continuation char after it.
+var _CP1252 = { 0x20AC: 0x80, 0x201A: 0x82, 0x0192: 0x83, 0x201E: 0x84, 0x2026: 0x85, 0x2020: 0x86, 0x2021: 0x87,
+    0x02C6: 0x88, 0x2030: 0x89, 0x0160: 0x8A, 0x2039: 0x8B, 0x0152: 0x8C, 0x017D: 0x8E, 0x2018: 0x91, 0x2019: 0x92,
+    0x201C: 0x93, 0x201D: 0x94, 0x2022: 0x95, 0x2013: 0x96, 0x2014: 0x97, 0x02DC: 0x98, 0x2122: 0x99, 0x0161: 0x9A,
+    0x203A: 0x9B, 0x0153: 0x9C, 0x017E: 0x9E, 0x0178: 0x9F };
+function _fixMojibake(str) {
+    str = String(str == null ? '' : str);
+    if (!/[Â-ô][\u0080-¿ŒœŠšŸŽžƒˆ˜–-›€™]/.test(str)) return str;
+    var hex = '';
+    for (var i = 0; i < str.length; i++) {
+        var c = str.charCodeAt(i), b = c <= 0xFF ? c : _CP1252[c];
+        if (b === undefined) return str;
+        hex += '%' + (b < 16 ? '0' : '') + b.toString(16);
+    }
+    try { return decodeURIComponent(hex); } catch (e) { return str; }
+}
+
+// A stored card title as it should be shown: entities decoded, mojibake repaired, and the
+// «&#'s» leftover of a half-stripped «&#039;» (youjizz titles saved before v0.13.26) mended.
+function _cleanTitle(str) {
+    return _fixMojibake(_decodeHtml(String(str == null ? '' : str).replace(/&#'/g, "'")))
+        .replace(/[​-‍⁠﻿]/g, '');
+}
+
+function _decodeHtml(str) {
+    return String(str == null ? '' : str)
+        .replace(/&(#x?[0-9a-f]+|[a-z][a-z0-9]*);/gi, function (m, e) {
+            if (e.charAt(0) === '#') {
+                var isHex = (e.charAt(1) === 'x' || e.charAt(1) === 'X');
+                var code = isHex ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+                return isNaN(code) ? m : String.fromCharCode(code);
+            }
+            return _HTML_ENTITIES.hasOwnProperty(e) ? _HTML_ENTITIES[e] : m;  // unknown named → leave literal
+        })
+        .trim();
+}
+
+// ---- Search text normalization + light synonyms (global search relevance) -------------
+// Normalize for matching/dedup: lowercase, ё→е, non-alphanumeric → space, collapse.
+// Parse the JSON array literal that starts at html[start] === '[' (string-aware bracket scan,
+// so `];` inside a title can't cut it short). Returns the array or null.
+function _jsonArrayAt(html, start) {
+    if (start < 0 || html.charAt(start) !== '[') return null;
+    var depth = 0, inStr = false, esc = false;
+    for (var i = start; i < html.length; i++) {
+        var c = html.charAt(i);
+        if (inStr) { if (esc) esc = false; else if (c === '\\') esc = true; else if (c === '"') inStr = false; continue; }
+        if (c === '"') inStr = true;
+        else if (c === '[' || c === '{') depth++;
+        else if (c === ']' || c === '}') { depth--; if (depth === 0) { try { return JSON.parse(html.slice(start, i + 1)); } catch (e) { return null; } } }
+    }
+    return null;
+}
+function _normText(s) {
+    return (s || '').toLowerCase().replace(/ё/g, 'е')
+        .replace(/[^a-z0-9а-я]+/gi, ' ').trim().replace(/\s+/g, ' ');
+}
+// Conservative synonym groups — a query word matches a title if ANY member appears. Keeps
+// recall high for equivalent terms without over-broadening (e.g. "milf" finds "mom"/"mature").
+var _SEARCH_SYN = {
+    milf: ['milf', 'mature', 'mom', 'mommy', 'mother'],
+    mom: ['mom', 'mommy', 'mother', 'milf'],
+    mature: ['mature', 'milf', 'mom'],
+    teen: ['teen', 'young', 'teenage'],
+    young: ['young', 'teen'],
+    stepmom: ['stepmom', 'step mom', 'milf', 'mom'],
+    stepsister: ['stepsister', 'step sister', 'sister'],
+    wife: ['wife', 'wifey'],
+    big: ['big', 'huge', 'large'],
+    anal: ['anal', 'ass'],
+    lesbian: ['lesbian', 'lesbians']
+};
+// Russian → English concept map. The user searches in Russian but ~18/24 sites have ENGLISH
+// titles, so a Cyrillic query sent verbatim returns garbage there. Each RU term maps to its EN
+// equivalents (first = primary, used to build the translated site query). Multi-word RU phrases
+// are matched greedily BEFORE single words (see _translateQuery) so "большие сиськи" → "big tits".
+var _RU_EN = {
+    'большие сиськи': ['big tits', 'tits', 'busty'], 'большие титьки': ['big tits', 'tits'],
+    'большая грудь': ['big tits', 'busty'], 'большая жопа': ['big ass', 'ass'],
+    'большая попа': ['big ass', 'ass'], 'первый раз': ['first time', 'defloration'],
+    'молодая мама': ['young mom', 'milf'], 'на публике': ['public'],
+    'мама': ['mom', 'milf'], 'мамка': ['milf', 'mom'], 'мамочка': ['milf', 'mom'], 'мать': ['mom', 'milf'],
+    'зрелая': ['mature', 'milf'], 'зрелые': ['mature', 'milf'], 'молодая': ['teen', 'young'],
+    'молоденькая': ['teen', 'young'], 'молодые': ['teen', 'young'], 'девушка': ['girl'], 'девушки': ['girls'],
+    'жена': ['wife'], 'сестра': ['sister', 'stepsister'], 'сестренка': ['sister'], 'мачеха': ['stepmom', 'milf'],
+    'брат': ['brother'], 'минет': ['blowjob'], 'отсос': ['blowjob'], 'анал': ['anal'], 'анальный': ['anal'],
+    'сиськи': ['tits', 'boobs'], 'титьки': ['tits'], 'грудь': ['tits'], 'жопа': ['ass', 'butt'], 'попа': ['ass', 'butt'],
+    'задница': ['ass'], 'блондинка': ['blonde'], 'брюнетка': ['brunette'], 'рыжая': ['redhead'],
+    'азиатка': ['asian'], 'японка': ['japanese'], 'негритянка': ['ebony'], 'латинка': ['latina'],
+    'лесбиянки': ['lesbian'], 'лесби': ['lesbian'], 'массаж': ['massage'], 'любительское': ['amateur'],
+    'домашнее': ['homemade', 'amateur'], 'компиляция': ['compilation'], 'кастинг': ['casting'],
+    'чулки': ['stockings'], 'колготки': ['pantyhose'], 'госпожа': ['femdom', 'mistress'], 'игрушки': ['toys'],
+    'сквирт': ['squirt'], 'камшот': ['cumshot'], 'групповуха': ['gangbang', 'group'], 'втроем': ['threesome'],
+    'волосатая': ['hairy'], 'беременная': ['pregnant'], 'медсестра': ['nurse'], 'учительница': ['teacher'],
+    'училка': ['teacher'], 'секретарша': ['secretary'], 'горничная': ['maid'], 'толстая': ['bbw'],
+    'пышка': ['bbw'], 'худая': ['skinny'], 'жесткое': ['hardcore'], 'измена': ['cheating'],
+    'инцест': ['taboo', 'family'], 'пикап': ['pickup'], 'русская': ['russian'], 'русское': ['russian']
+};
+// Known RUSSIAN-title sources — they should receive the ORIGINAL Cyrillic query, not the
+// translated one (their catalog is in Russian). Everything else defaults to English-title.
+var _RU_SOURCES = { tizam: 1, lenporno: 1, '24rolika': 1, ebun: 1, jopaonline: 1, pornobolt: 1, huyamba: 1, xhamster: 1, ebalovo: 1, porno666: 1, lenkino: 1, pornobriz: 1 };  // xhamster: RU-localised titles, site search takes RU or EN as typed
+// More everyday query words (2026-10-07: voice queries like «блондинка в машине», «студентка»
+// lost every word the map did not know). Added only where the key is not already mapped.
+(function () {
+    var extra = {
+        'машина': ['car'], 'машине': ['car'], 'офис': ['office'], 'душ': ['shower'], 'ванна': ['bath'],
+        'пляж': ['beach'], 'кухня': ['kitchen'], 'спальня': ['bedroom'], 'улица': ['outdoor', 'public'],
+        'школьница': ['schoolgirl'], 'студентка': ['student', 'college'], 'студенты': ['college', 'student'],
+        'большой': ['big'], 'огромный': ['huge'], 'член': ['cock', 'dick'], 'хуй': ['cock', 'dick'],
+        'черный': ['black', 'bbc'], 'негр': ['black', 'bbc'], 'оргия': ['orgy'], 'косплей': ['cosplay'],
+        'китаянка': ['chinese'], 'кореянка': ['korean'], 'индианка': ['indian'], 'арабка': ['arab'],
+        'француженка': ['french'], 'немка': ['german'], 'итальянка': ['italian'], 'британка': ['british'],
+        'спящая': ['sleeping'], 'пьяная': ['drunk'], 'папа': ['dad', 'daddy'], 'отчим': ['stepdad', 'dad'],
+        'дочь': ['daughter', 'stepdaughter'], 'дочка': ['daughter', 'stepdaughter'], 'падчерица': ['stepdaughter'],
+        'тетя': ['aunt'], 'бабушка': ['granny'], 'бабка': ['granny'], 'старуха': ['granny', 'old'],
+        'врач': ['doctor'], 'доктор': ['doctor'], 'порка': ['spanking'], 'связанная': ['bondage', 'tied'],
+        'бдсм': ['bdsm'], 'фемдом': ['femdom'], 'ножки': ['feet', 'legs'], 'ступни': ['feet'],
+        'хентай': ['hentai'], 'аниме': ['anime', 'hentai'], 'вебкам': ['webcam'], 'соло': ['solo'],
+        'мастурбация': ['masturbation'], 'дилдо': ['dildo'], 'страпон': ['strapon'], 'транс': ['trans', 'shemale'],
+        'милфа': ['milf'], 'мамаша': ['milf', 'mom'], 'кремпай': ['creampie'], 'кунилингус': ['cunnilingus', 'pussy licking'],
+        'фистинг': ['fisting'], 'киска': ['pussy'], 'пизда': ['pussy'], 'попка': ['ass'], 'красотка': ['beauty', 'babe'],
+        'худенькая': ['skinny', 'petite'], 'миниатюрная': ['petite'], 'грудастая': ['busty', 'big tits'],
+        'татуировки': ['tattoo'], 'очки': ['glasses'], 'униформа': ['uniform'], 'медсестры': ['nurse'],
+        'соседка': ['neighbor'], 'подруга': ['girlfriend', 'friend'], 'парень': ['boyfriend', 'guy'],
+        'муж': ['husband'], 'рогоносец': ['cuckold'], 'куколд': ['cuckold'], 'свингеры': ['swingers'],
+        'двойное проникновение': ['double penetration'], 'глубокая глотка': ['deepthroat'], 'первого лица': ['pov'],
+        'скрытая камера': ['hidden camera', 'voyeur'], 'русское порно': ['russian'], 'секс': ['sex']
+    };
+    for (var k in extra) if (!_RU_EN[k]) _RU_EN[k] = extra[k];
+})();
+
+// Russian inflection: a voice recognizer returns «блондинки», «азиатку», «зрелых», «большими
+// сиськами» — none of them a dictionary key, so the query reached English-title sites verbatim
+// (0 results on eporner/youjizz/porntrex…). _ruStem strips one case/number ending; _ruLookup
+// falls back from the exact key to the stem (single words and two-word phrases).
+var _RU_STEM_RX = /(ами|ями|ого|его|ому|ему|ыми|ими|ый|ий|ая|яя|ое|ее|ые|ие|ой|ей|ую|юю|ых|их|ам|ям|ах|ях|ов|ев|ом|ем|а|я|о|е|ы|и|у|ю|ь|й)$/;
+function _ruStem(w) {
+    if (!/[а-я]/.test(w) || w.length < 4) return w;
+    var st = w.replace(_RU_STEM_RX, '');
+    return st.length >= 3 ? st : w;
+}
+var _RU_EN_BY_STEM = null;
+function _ruLookup(key) {
+    if (_RU_EN[key]) return _RU_EN[key];
+    if (!_RU_EN_BY_STEM) {
+        _RU_EN_BY_STEM = {};
+        for (var k in _RU_EN) {
+            var sk = k.split(' ').map(_ruStem).join(' ');
+            if (!_RU_EN_BY_STEM[sk]) _RU_EN_BY_STEM[sk] = _RU_EN[k];
+        }
+    }
+    return _RU_EN_BY_STEM[key.split(' ').map(_ruStem).join(' ')] || null;
+}
+// Sources whose SEARCH matches by site TAGS, not title words (stand-measured share of 'blonde'
+// results with the word in the title: hqporner 0%, perfektdamen 5%, porndig 17%, eporner/pornhub
+// 23%, analdin 26%, xozilla 39% — yet each honours the query). Their results are site-relevant even
+// when no title word matches; the global ranker credits them instead of sinking them.
+var _TAG_SEARCH = { hqporner: 1, perfektdamen: 1, porndig: 1, eporner: 1, pornhub: 1, analdin: 1, xozilla: 1, xhamster: 1 };  // xhamster: real full-text search, but titles are RU-localised → an EN query never appears in them  // crocotube: English titles (stand-verified) — a Cyrillic query there returns 0
+
+// Translate a Cyrillic query to English for English-title sites. Greedy multi-word phrase match
+// first, then single words; untranslatable words are dropped. Returns '' if nothing translated
+// (caller then keeps the original query).
+function _translateQuery(query) {
+    var q = _normText(query);
+    if (/^[\x00-\x7f]*$/.test(q)) return '';            // already Latin
+    var out = [], used = false;
+    // try 2-word phrases first
+    var words = q.split(' ').filter(Boolean);
+    for (var i = 0; i < words.length; ) {
+        var two = (i + 1 < words.length) ? (words[i] + ' ' + words[i + 1]) : '';
+        var t2 = two && _ruLookup(two);
+        if (t2) { out.push(t2[0]); used = true; i += 2; continue; }
+        var t1 = _ruLookup(words[i]);
+        if (t1) { out.push(t1[0]); used = true; }
+        i += 1;
+    }
+    return used ? out.join(' ') : '';
+}
+
+// Turn a query into synonym-expanded word groups: [[w1,syn…],[w2,syn…]]. A title "hits" a group
+// if it contains any member. Bilingual: a Russian word expands to [ru, …EN equivalents] so the
+// same groups filter+rank both English-title and Russian-title results. Used in global search.
+// Filler words of a spoken/typed phrase («блондинка в машине», «секс с мачехой», "sex with
+// stepmom"). As AND-groups they sank every result (no English title contains «в»), so they are
+// ignored whenever the query has a meaningful word too.
+var _SEARCH_STOP = { 'в': 1, 'во': 1, 'на': 1, 'с': 1, 'со': 1, 'и': 1, 'у': 1, 'к': 1, 'о': 1, 'по': 1, 'из': 1,
+    'за': 1, 'для': 1, 'без': 1, 'под': 1, 'от': 1, 'до': 1, 'секс': 1, 'порно': 1, 'видео': 1, 'трах': 1,
+    'with': 1, 'and': 1, 'the': 1, 'in': 1, 'on': 1, 'of': 1, 'a': 1, 'an': 1, 'porn': 1, 'video': 1, 'sex': 1 };
+function _searchGroups(query) {
+    var q = _normText(query);
+    var out = [];
+    var words = q.split(' ').filter(Boolean);
+    var meaningful = words.filter(function (w) { return !_SEARCH_STOP[w]; });
+    if (meaningful.length && meaningful.length < words.length) {
+        // keep two-word dictionary phrases that contain a filler word («от первого лица», «на публике»)
+        var kept = [];
+        for (var j = 0; j < words.length; j++) {
+            var ph = (j + 1 < words.length) ? words[j] + ' ' + words[j + 1] : '';
+            if (ph && _ruLookup(ph)) { kept.push(words[j], words[j + 1]); j++; continue; }
+            if (!_SEARCH_STOP[words[j]]) kept.push(words[j]);
+        }
+        words = kept;
+    }
+    for (var i = 0; i < words.length; ) {
+        var two = (i + 1 < words.length) ? (words[i] + ' ' + words[i + 1]) : '';
+        var t2 = two && _ruLookup(two);
+        if (t2) { out.push([two].concat(t2)); i += 2; continue; }
+        var w = words[i];
+        // A Russian word also matches by its stem (≥4 chars) so «блондинки» hits «блондинка».
+        var st = _ruStem(w), g = (st !== w && st.length >= 4) ? [w, st] : [w];
+        var t1 = _ruLookup(w);
+        if (t1) out.push(g.concat(t1));
+        else if (_SEARCH_SYN[w]) out.push(_SEARCH_SYN[w].slice());
+        else out.push(g);
+        i += 1;
+    }
+    return out;
+}
+
+// Relevance score of a title against pre-built query groups. Rewards matching MORE groups,
+// the exact multi-word phrase, and a title that LEADS with the query; mildly penalizes very
+// long titles (keyword-stuffed spam). Short tokens (≤3 chars) match on word boundary so
+// "ass" doesn't hit "bass"/"class". Higher = more relevant. Shared by global + single search.
+function _relScore(title, groups, phrase, firstWord) {
+    var t = _normText(title);
+    if (!t) return -100;
+    var hit = 0;
+    for (var g = 0; g < groups.length; g++) {
+        var members = groups[g], got = false;
+        for (var k = 0; k < members.length; k++) {
+            var mem = members[k];
+            if (!mem) continue;
+            if (mem.length <= 3) {
+                if (new RegExp('(^| )' + mem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '($| )').test(t)) { got = true; break; }
+            } else if (t.indexOf(mem) !== -1) { got = true; break; }
+        }
+        if (got) hit++;
+    }
+    var s = hit * 10 - (groups.length - hit) * 8;
+    if (phrase && phrase.indexOf(' ') !== -1 && t.indexOf(phrase) !== -1) s += 6;  // exact multi-word phrase
+    if (firstWord && t.lastIndexOf(firstWord, 0) === 0) s += 3;                     // title leads with query
+    s -= Math.min(t.length / 60, 2);                                               // mild anti-stuffing
+    return s;
+}
+
+// Stable relevance re-rank of search results. No-op for empty/short lists or no query so
+// browse/all_videos ordering is untouched. Page-local (each page ranks independently).
+function _rankByRelevance(items, query) {
+    if (!query || !items || items.length < 2) return items;
+    var groups = _searchGroups(query);
+    if (!groups.length) return items;
+    var phrase = _normText(query);
+    var firstWord = (groups[0] && groups[0][0]) ? _normText(groups[0][0]).split(' ')[0] : '';
+    return items
+        .map(function (v, i) {
+            var s = _relScore(v.title, groups, phrase, firstWord);
+            // Site-ranked results from tag-search sources: the site matched the query (tags), only
+            // the title lacks the words. They rank BELOW every title that names the whole query
+            // (worst full match ≈ groups*10 − 2) but above partial matches: ranked level with full
+            // matches they filled a third of the first screen with titles like «slippery pleasures»
+            // for «азиатка массаж» (owner 2026-10-08: «низкое качество поиска»).
+            if (v._siteRelevant) s = Math.max(s, groups.length * 10 - 5);
+            return { v: v, s: s, i: i };
+        })
+        // Ties: interleave across sources (position within own source), then original order.
+        .sort(function (a, b) { return b.s - a.s || ((a.v._srcRank || 0) - (b.v._srcRank || 0)) || a.i - b.i; })
+        .map(function (x) { return x.v; });
+}
+
+// Popular search terms — quick picks so the user rarely has to type on a D-pad. RUSSIAN:
+// the owner searches in Russian; every term below has an _RU_EN entry, so _translateQuery
+// routes it to English-title sites while Russian-title sites get it verbatim.
+var _POPULAR_TERMS = ['мамка', 'молодая', 'анал', 'блондинка', 'зрелая', 'лесби', 'японка',
+    'большие сиськи', 'втроем', 'массаж', 'мачеха', 'любительское', 'азиатка', 'минет', 'русская'];
+
+// Recent queries (last 10) — kept DISCREET on purpose: they surface ONLY inside Cherry's own
+// search picker (never on the Lampa home or its global search — Cherry's Input uses nosave, so
+// Lampa's search history never records them), under a neutral storage key, without a heading,
+// with a one-tap clear. Shared across devices through the favorites PIN bucket (Sync.run): each
+// query is a record { id: normalized query, source: _RECENT_SRC, title, added, deleted } that the
+// worker merges exactly like a favorite (last write wins, a clear is a tombstone) — no worker change.
+var _RECENT_KEY = 'cherry_rq', _RECENT_MAX = 10, _RECENT_KEEP = 50, _RECENT_SRC = '__rq';
+function _recentTs(r) { return Math.max(r.added || 0, r.deleted || 0); }
+// Raw records; plain strings from before the sync (v0.13.27 and older) become low-priority
+// records in their old order, so any real action on another device wins over them.
+function _recentRecords() {
+    var l = Lampa.Storage.get(_RECENT_KEY, []);
+    if (!Array.isArray(l)) return [];
+    return l.map(function (x, i) {
+        if (x && typeof x === 'object') return x;
+        var q = String(x || '').trim();
+        return q ? { id: _normText(q) || q.toLowerCase(), source: _RECENT_SRC, title: q, added: l.length - i, deleted: 0 } : null;
+    }).filter(function (r) { return r && r.id; });
+}
+function _recentSave(recs) {
+    recs.sort(function (a, b) { return _recentTs(b) - _recentTs(a); });
+    Lampa.Storage.set(_RECENT_KEY, recs.slice(0, _RECENT_KEEP));
+}
+function _recentQueries() {
+    return _recentRecords().filter(function (r) { return r.added > r.deleted; })
+        .sort(function (a, b) { return b.added - a.added; })
+        .slice(0, _RECENT_MAX).map(function (r) { return r.title; });
+}
+function _recentAdd(q) {
+    q = String(q || '').trim();
+    if (!q) return;
+    var id = _normText(q) || q.toLowerCase();
+    var recs = _recentRecords();
+    // Strictly increasing stamps: two searches in the same millisecond still keep their order.
+    var now = Math.max(Date.now(), recs.reduce(function (m, r) { return Math.max(m, _recentTs(r)); }, 0) + 1);
+    recs = recs.filter(function (r) { return r.id !== id; });
+    recs.push({ id: id, source: _RECENT_SRC, title: q, added: now, deleted: 0 });
+    _recentSave(recs);
+    try { Sync.schedule(); } catch (e) {}
+}
+// Remote records from the bucket: per id the newer of max(added, deleted) wins (= worker's rule).
+function _recentMerge(remote) {
+    if (!Array.isArray(remote) || !remote.length) return;
+    var byId = {};
+    _recentRecords().forEach(function (r) { byId[r.id] = r; });
+    remote.forEach(function (r) {
+        if (r && r.id && r.source === _RECENT_SRC && (!byId[r.id] || _recentTs(r) > _recentTs(byId[r.id]))) byId[r.id] = r;
+    });
+    _recentSave(Object.keys(byId).map(function (k) { return byId[k]; }));
+}
+function _recentClear() {
+    var now = Date.now();
+    _recentSave(_recentRecords().map(function (r) {
+        if (r.added > r.deleted) r.deleted = Math.max(now, r.added + 1);
+        return r;
+    }));
+    try { Sync.schedule(); } catch (e) {}
+}
+
+// Voice availability — two distinct mechanisms:
+//  • NATIVE (LAMPA Android TV app): recognition runs in the app via AndroidJS.voiceStart()
+//    using the REMOTE mic; the app delivers the text by calling window.voiceResult(text)
+//    — the exact hook Lampa's own search keyboard registers. This is the ONLY voice that
+//    works on a TV.
+//  • WEB Speech API: the WebView exposes the SpeechRecognition constructor but has NO mic
+//    pipeline (navigator.mediaDevices is absent on Android WebView) → rec.start() errors
+//    silently. So only offer/use it where a real mic API exists (e.g. a desktop browser).
+function _voiceNative() {
+    return !!(window.AndroidJS && typeof window.AndroidJS.voiceStart === 'function'
+              && typeof Lampa !== 'undefined' && Lampa.Android && typeof Lampa.Android.voiceStart === 'function');
+}
+function _voiceWeb() {
+    return !!((window.SpeechRecognition || window.webkitSpeechRecognition)
+              && navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function');
+}
+function _voiceAvailable() { return _voiceNative() || _voiceWeb(); }
+
+// Start voice input → onText(query) on success. Returns false (caller falls back to the
+// keyboard) when no working voice path exists.
+function _voiceQuery(onText) {
+    // Native Android TV — the recognizer is the app's; result arrives via window.voiceResult.
+    if (_voiceNative()) {
+        try {
+            window.voiceResult = function (text) {
+                window.voiceResult = null;
+                var t = ('' + (text || '')).trim();
+                if (t) onText(t);
+                else { try { Lampa.Controller.toggle('content'); } catch (e2) {} }
+            };
+            try { Lampa.Noty.show(Lampa.Lang.translate('cherry_search_listening')); } catch (e) {}
+            Lampa.Android.voiceStart();
+            return true;
+        } catch (e) { window.voiceResult = null; }
+    }
+    // Web Speech (desktop browsers with a real mic).
+    if (_voiceWeb()) {
+        var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        try {
+            var rec = new SR();
+            rec.lang = 'ru-RU';
+            rec.interimResults = false;
+            rec.maxAlternatives = 1;
+            try { Lampa.Noty.show(Lampa.Lang.translate('cherry_search_listening')); } catch (e) {}
+            rec.onresult = function (e) {
+                var t = (e.results && e.results[0] && e.results[0][0] && e.results[0][0].transcript) || '';
+                if (t.trim()) onText(t.trim());
+                else { try { Lampa.Controller.toggle('content'); } catch (e2) {} }
+            };
+            rec.onerror = function () { try { Lampa.Noty.show(Lampa.Lang.translate('cherry_error'), { style: 'warn' }); Lampa.Controller.toggle('content'); } catch (e2) {} };
+            rec.start();
+            return true;
+        } catch (e) { return false; }
+    }
+    return false;
+}
+
+// Search entry picker: popular quick-picks + voice + manual type. `onQuery(text)` runs the
+// actual search. Avoids D-pad typing for the common case. Used by global + per-channel search.
+function _searchPicker(prefill, onQuery) {
+    // Every path that yields a query goes through onPick so it lands in the recents list.
+    var onPick = function (q) { _recentAdd(q); onQuery(q); };
+    function _type() {
+        if (typeof Lampa.Input === 'undefined' || !Lampa.Input.edit) return;
+        Lampa.Input.edit({ title: Lampa.Lang.translate('cherry_search'), value: prefill || '', free: true, nosave: true },
+            function (value) {
+                var q = (value || '').trim();
+                if (!q) { try { Lampa.Controller.toggle('content'); } catch (e) {} return; }
+                onPick(q);
+            });
+    }
+    var items = [{ title: '✎ ' + Lampa.Lang.translate('cherry_search_type'), id: '__type__' }];
+    if (_voiceAvailable()) {
+        items.push({ title: '🎤 ' + Lampa.Lang.translate('cherry_search_voice'), id: '__voice__' });
+    }
+    // Recents first (↺, no heading), then a one-tap clear, then the popular picks.
+    var recents = _recentQueries();
+    recents.forEach(function (q) { items.push({ title: '↺ ' + q, id: q }); });
+    if (recents.length) items.push({ title: '✕ ' + Lampa.Lang.translate('cherry_recent_clear'), id: '__clear__' });
+    _POPULAR_TERMS.forEach(function (t) { items.push({ title: t.charAt(0).toUpperCase() + t.slice(1), id: t }); });
+    Lampa.Select.show({
+        title: Lampa.Lang.translate('cherry_search'),
+        items: items,
+        onSelect: function (item) {
+            if (item.id === '__type__') _type();
+            else if (item.id === '__voice__') { if (!_voiceQuery(onPick)) _type(); }
+            else if (item.id === '__clear__') { _recentClear(); _searchPicker(prefill, onQuery); }
+            else onPick(item.id);
+        },
+        onBack: function () { try { Lampa.Controller.toggle('content'); } catch (e) {} }
+    });
+}
+
+/**
+ * Split an HTML string into per-card chunks.
+ * @param {string} html
+ * @param {RegExp} splitRx  — pattern that marks the start of each card block
+ * @returns {string[]}
+ */
+function _splitCards(html, splitRx) {
+    var parts = html.split(splitRx);
+    parts.shift(); // first element is content before first match
+    return parts;
+}
+
+/**
+ * Humanize a URL slug into a display name: "abella-danger" → "Abella Danger".
+ * Used for model index entries whose markup carries no clean name text.
+ * @param {string} slug
+ * @returns {string}
+ */
+function _humanizeName(slug) {
+    var s = String(slug || '').replace(/\.(html?|php)$/i, '').replace(/[-_]+/g, ' ').trim();
+    return s.replace(/\b([a-z])/g, function (m) { return m.toUpperCase(); });
+}
+
+/**
+ * Generic model-INDEX scraper shared by HTML adapters. Walks each href matching
+ * `hrefRx`, derives the model page url + display name (+ optional thumb) from the
+ * surrounding chunk, and dedups by url. Mirrors the per-card parser pattern but
+ * returns [{name, url, thumb}] for the "Модели" discovery grid.
+ *
+ * @param {string} html
+ * @param {Object} opts
+ * @param {RegExp} opts.hrefRx       global regex; group1 = href (group used for url)
+ * @param {Function} [opts.normalizeUrl]  (rawHref) → absolute model url
+ * @param {Function} [opts.exclude]  (url) → true to skip (nav/pagination/sort links)
+ * @param {RegExp[]} [opts.nameRx]   title/alt/span patterns tried against the chunk
+ * @param {RegExp[]} [opts.thumbRx]  thumb patterns tried against the chunk
+ * @param {number} [opts.window]     chunk size after the href (default 500)
+ * @returns {Array<{name:string,url:string,thumb:string}>}
+ */
+function _parseModelIndex(html, opts) {
+    var items = [];
+    var seen  = {};
+    var win   = opts.window || 500;
+    var m;
+    opts.hrefRx.lastIndex = 0;
+    while ((m = opts.hrefRx.exec(html)) !== null) {
+        var raw = m[1];
+        var url = opts.normalizeUrl ? opts.normalizeUrl(raw, m) : raw;
+        if (!url || seen[url]) continue;
+        if (opts.exclude && opts.exclude(url)) continue;
+        seen[url] = true;
+
+        var chunk = html.slice(m.index, m.index + win);
+
+        var name = '';
+        var nameRx = opts.nameRx || [];
+        for (var ni = 0; ni < nameRx.length; ni++) {
+            name = _decodeHtml(_attr(chunk, nameRx[ni]));
+            if (name) break;
+        }
+        if (!name) name = _humanizeName(url.replace(/\/+$/, '').split('/').pop());
+
+        var thumb = '';
+        var thumbRx = opts.thumbRx || [];
+        for (var ti = 0; ti < thumbRx.length; ti++) {
+            thumb = _attr(chunk, thumbRx[ti]);
+            if (thumb) break;
+        }
+
+        items.push({ name: name, url: url, thumb: thumb });
+    }
+    return items;
+}
+
+/**
+ * Pick the highest MP4 quality label from a set of KVS stream URLs.
+ * Labels found in filename portion: _480p, _720p, _1080p, _2160p.
+ * @param {string[]} urls
+ * @returns {{url: string, quality: Object}}
+ */
+function _kvsPickBest(urls) {
+    var order = ['2160p', '1080p', '720p', '480p', '360p', '240p'];
+    var quality = {};
+    var best = '';
+    var bestIdx = order.length;
+
+    urls.forEach(function (u) {
+        var labelMatch = /[_-](\d+p)\./i.exec(u);
+        var label = labelMatch ? labelMatch[1].toLowerCase() : 'default';
+        quality[label] = u;
+        var idx = order.indexOf(label);
+        if (idx === -1) idx = order.length - 1;
+        if (idx < bestIdx) {
+            bestIdx = idx;
+            best = u;
+        }
+    });
+
+    if (!best && urls.length) best = urls[0];
+    return { url: best, quality: quality };
+}
+
+// ---- Pornhub ----
+SOURCES.push({
+  id: 'pornhub',
+  name: 'Pornhub',
+  host: 'pornhub.com',
+
+  _mapVideo: function(v) {
+    // The webmasters API hands back the SAME frame under two signings: hash&validto
+    // (host pix-cdn77) and hdnea (Akamai token, host pix-fl). hash&validto URLs are
+    // IP-bound to the fetching host (our proxy), so they 404 in the device's <img>
+    // (blank card); hdnea URLs are time-tokened and render from any IP. Pick the
+    // first hdnea candidate across thumb/default_thumb/thumbs — verified 30/30 loads
+    // on-device (was v.thumbs[last], an always-hash&validto URL → ~40% blank).
+    var thumb = '';
+    var cands = [];
+    if (v.thumb) cands.push(v.thumb);
+    if (v.default_thumb) cands.push(v.default_thumb);
+    if (v.thumbs && v.thumbs.length) v.thumbs.forEach(function (t) { if (t && t.src) cands.push(t.src); });
+    for (var ci = 0; ci < cands.length; ci++) { if (cands[ci].indexOf('hdnea=') !== -1) { thumb = cands[ci]; break; } }
+    if (!thumb) thumb = cands[0] || '';
+    // Extract video ID from URL for stable id
+    var idMatch = (v.url || '').match(/viewkey=([a-z0-9]+)/i);
+    var id = idMatch ? idMatch[1] : (v.video_id ? String(v.video_id) : String(Math.random()));
+    var card = {
+      id: id,
+      source: 'pornhub',
+      title: v.title || '',
+      thumb: thumb,
+      url: v.url ? (v.url.indexOf('http') === 0 ? v.url : 'https://www.pornhub.com' + v.url) : '',
+      duration: parseDur(v.duration),
+      views: parseViews(String(v.views || 0))
+    };
+    // Surface the performer so the card onMenu can offer "browse by model".
+    // browseByModel() appends "/videos?page=P" itself, so model.url is the
+    // pornstar page BASE (/pornstar/{slug}) WITHOUT a trailing /videos.
+    if (v.pornstars && v.pornstars[0] && v.pornstars[0].pornstar_name) {
+      var pn = v.pornstars[0].pornstar_name;
+      card.model = {
+        name: pn,
+        url: 'https://www.pornhub.com/pornstar/' +
+             pn.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+      };
+    }
+    return card;
+  },
+
+  // Re-resolve a FRESH poster when the stored one expired. Pornhub thumbs are IP-bound
+  // signed URLs with a ~24h TTL, so a FAVORITED card's stored thumb 404s the next day →
+  // blank poster. The video page re-signs its og:image on every fetch; prefer any
+  // hdnea-signed candidate (pix-fl, renders from any IP) — hash&validto (pix-cdn77) is
+  // IP-bound and would 404 in the device <img>. Consumed by cardRender's self-heal hook.
+  refreshThumb: function (video) {
+    if (!video || !video.url) return Promise.resolve('');
+    return cherryFetch(video.url).then(function (html) {
+      var hd = html.match(/https?:\/\/[a-z0-9.-]*phncdn\.com\/[^"'\s<>]*hdnea=[^"'\s<>]*/i);
+      if (hd) return hd[0].replace(/&amp;/g, '&');
+      var og = html.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i);
+      return og ? og[1].replace(/&amp;/g, '&') : '';
+    }).catch(function () { return ''; });
+  },
+
+  cfg: {
+    // Valid webmasters API orderings (verified distinct): mostviewed, mostrecent, rating.
+    // `longest` dropped — the API silently ignored it (returned byte-identical to mostrecent).
+    // Time-window sorts are COMPOSITE ids `ordering:period` (id itself carries a ':' so they
+    // are appended as literal objects, NOT via _cats which splits on the first ':'). browse()/
+    // search() split the id on ':' → &ordering= + &period= (no ':' = all-time, no period param).
+    // Default (sorts[0]) = "popular THIS WEEK" so the listing refreshes weekly instead of
+    // showing the same all-time top videos every time. All-time + rating + recent stay available.
+    // The webmasters API IGNORES &period (the week/month windows returned the all-time list,
+    // verified 30/30 overlap) → those period sorts were a no-op and are removed. Default to
+    // mostrecent («Свежее»): it actually filters (newest first) AND refreshes constantly.
+    sorts: _cats('mostrecent:Свежее,mostviewed:По популярности,rating:По рейтингу'),
+    // Pornhub categories are SLUGS passed to the webmasters API (&category=), not numeric ids.
+    // Slugs verified against the webmasters/categories endpoint.
+    categories: _cats('18-25:Teen 18-25,ai:AI,ai-straight:AI Straight,amateur:Amateur,anal:Anal,arab:Arab,asian:Asian,babe:Babe,babysitter-18:Babysitter 18+,bbw:BBW,behind-the-scenes:Behind The Scenes,big-ass:Big Ass,big-dick:Big Dick,big-tits:Big Tits,bisexual-male:Bisexual Male,black:Black,blonde:Blonde,blowjob:Blowjob,bondage:Bondage,brazilian:Brazilian,british:British,brunette:Brunette,bukkake:Bukkake,cartoon:Cartoon,casting:Casting,celebrity:Celebrity,college-18:College 18+,compilation:Compilation,cosplay:Cosplay,creampie:Creampie,cuckold:Cuckold,cumshot:Cumshot,czech:Czech,deepthroat:Deepthroat,double-penetration:Double Penetration,ebony:Ebony,euro:Euro,exclusive:Exclusive,feet:Feet,female-orgasm:Female Orgasm,fetish:Fetish,ffm:FFM,fingering:Fingering,fisting:Fisting,fmm:FMM,french:French,gangbang:Gangbang,gay:Gay,german:German,golden-shower:Golden Shower,handjob:Handjob,hardcore:Hardcore,hd-porn:HD Porn,hentai:Hentai,indian:Indian,interracial:Interracial,italian:Italian,japanese:Japanese,korean:Korean,latina:Latina,lesbian:Lesbian,lipstick:Lipstick,massage:Massage,masturbation:Masturbation,mature:Mature,milf:MILF,muscular-men:Muscular Men,old-young-18:Old/Young 18+,orgy:Orgy,parody:Parody,party:Party,pissing:Pissing,pornstar:Pornstar,pov:POV,public:Public,pussy-licking:Pussy Licking,real-couples:Real Couples,reality:Reality,red-head:Red Head,role-play:Role Play,romantic:Romantic,rough-sex:Rough Sex,russian:Russian,school-18:School 18+,scissoring:Scissoring,small-tits:Small Tits,smoking:Smoking,solo-female:Solo Female,solo-male:Solo Male,squirt:Squirt,step-fantasy:Step Fantasy,strap-on:Strap On,striptease:Striptease,tattooed-women:Tattooed Women,threesome:Threesome,toys:Toys,trans-male:Trans Male,trans-with-girl:Trans With Girl,trans-with-guy:Trans With Guy,transgender:Transgender,twink-18:Twink 18+,uncensored:Uncensored,verified-amateurs:Verified Amateurs,verified-couples:Verified Couples,verified-models:Verified Models,vintage:Vintage,vr:VR,webcam:Webcam,wet-pussy:Wet Pussy')
+  },
+
+  // Webmasters API returns {videos:[...]} with NO total_pages key. It serves a
+  // full batch of PAGE_SIZE per page, so a full batch => assume next page exists.
+  _PAGE_SIZE: 30,
+
+  // Split a (possibly composite) sort id "ordering:period" into the two API params.
+  // No ':' → all-time (no &period=). Verified: &period=weekly|monthly changes results.
+  _sortParams: function(sort) {
+    // Default (single-channel open, no sort) → mostrecent (newest), matching pornhub's home feed
+    // + cfg.sorts[0]. Was 'mostviewed' (all-time) — that contradicted the homepage-default policy.
+    var parts = String(sort || 'mostrecent').split(':');
+    var period = parts[1] || '';
+    // The webmasters API period vocabulary is week/month/year — NOT weekly/monthly. Sending
+    // 'weekly' returns {code:2001,"No Videos found!"} → empty catalog. Map our sort-id periods
+    // to the API's. (Verified: period=week → 30 videos, period=weekly → 0.)
+    var P = { weekly: 'week', monthly: 'month', daily: 'day', yearly: 'year' };
+    return { ordering: parts[0] || 'mostviewed', period: P[period] || period };
+  },
+
+  // The webmasters API intermittently returns an empty {videos:[]} (~50% from a hammered IP) —
+  // retry up to `tries` times until it yields cards, so catalog/search don't flicker to empty.
+  // The webmasters API answers some IPs with a 200 HTML bot page or an empty list (the
+  // device's native fetch on Android) — JSON.parse fails, no videos. Re-asking the SAME
+  // route 4× only burned time; alternate native ↔ proxy between attempts instead: both
+  // the CF worker and the VPS return the JSON (verified). In the browser cherryFetch is the
+  // proxy already, so the alternation is a no-op there.
+  _apiFetch: function(url, tries, viaProxy, retry) {
+    var self = this;
+    // a retry must reach the network: through the page cache it would re-read the same empty answer
+    var get = (viaProxy && _isAndroid()) ? _proxyText(url) : (retry ? _cherryFetchNow(url) : cherryFetch(url));
+    return get.then(function(text) {
+      var data; try { data = JSON.parse(text); } catch (e) { data = null; }
+      var videos = (data && (data.videos || (data.data && data.data.videos))) || [];
+      if (!videos.length && tries > 0) return self._apiFetch(url, tries - 1, !viaProxy, true);
+      return videos.map(function(v) { return self._mapVideo(v); });
+    }).catch(function() { if (tries > 0) return self._apiFetch(url, tries - 1, !viaProxy, true); return []; });
+  },
+
+  search: function(query, page, sort) {
+    var self = this;
+    var p = page || 1;
+    var sp = self._sortParams(sort);
+    var url = 'https://www.pornhub.com/webmasters/search?search=' + encodeURIComponent(query) +
+      '&page=' + p + '&ordering=' + sp.ordering +
+      (sp.period ? '&period=' + sp.period : '') + '&thumbsize=medium_hd';
+    return self._apiFetch(url, 4).then(function(items) {
+      return { items: items, total_pages: _derivePages(items.length, p, self._PAGE_SIZE) };
+    });
+  },
+
+  browse: function(category, page, sort) {
+    var self = this;
+    var p = page || 1;
+    var sp = self._sortParams(sort);
+    var url = 'https://www.pornhub.com/webmasters/search?search=&page=' + p +
+      '&ordering=' + sp.ordering + (sp.period ? '&period=' + sp.period : '') +
+      '&thumbsize=medium_hd' +
+      (category ? '&category=' + encodeURIComponent(category) : '');
+    return self._apiFetch(url, 4).then(function(items) {
+      return { items: items, total_pages: _derivePages(items.length, p, self._PAGE_SIZE) };
+    });
+  },
+
+  // Parse pornhub video-listing HTML (model /videos pages AND related blocks).
+  // Iterate by the canonical card container <li class="…videoblock…"> so each
+  // card's thumb/preview/duration are bound to ITS block — a fixed char-window
+  // around the href clipped the deeply-nested mediabook (+~1500) / duration
+  // (+~3000) and yielded bare cards inside models. Field regexes mirror the API
+  // _mapVideo output (source/thumb/title/url/duration/views) plus data-mediabook
+  // preview, so model cards render IDENTICALLY to listing cards (now WITH preview).
+  _parseHtmlCards: function(html) {
+    var items = [];
+    var seen = {};
+    // Split into per-card blocks by the videoblock <li> boundaries. Append the
+    // tail so the last card gets a full block.
+    var liRx = /<li[^>]*class="[^"]*videoblock[^"]*"/g;
+    var starts = [];
+    var lm;
+    while ((lm = liRx.exec(html)) !== null) starts.push(lm.index);
+    // Fallback: no videoblock containers (markup change) → degrade to href scan
+    // over the whole document so we still surface SOMETHING rather than nothing.
+    if (!starts.length) starts.push(0);
+    starts.push(html.length);
+    for (var i = 0; i < starts.length - 1; i++) {
+      var block = html.slice(starts[i], starts[i + 1]);
+      var vk = block.match(/viewkey=([a-z0-9]+)/);
+      if (!vk) continue;
+      var vkey = vk[1];
+      if (seen[vkey]) continue;
+      seen[vkey] = true;
+      var href = _attr(block, /href="(\/view_video\.php\?viewkey=[a-z0-9]+[^"]*)"/);
+      var videoUrl = href ? 'https://www.pornhub.com' + href
+                          : 'https://www.pornhub.com/view_video.php?viewkey=' + vkey;
+      var thumb = _attr(block, /data-mediumthumb="([^"]+)"/) ||
+                  _attr(block, /data-thumb_url="([^"]+)"/) ||
+                  _attr(block, /data-image="([^"]+)"/) ||
+                  _attr(block, /<img[^>]+(?:data-src|src)="(https?:\/\/[^"]*phncdn[^"]+\.jpg[^"]*)"/) || '';
+      var preview = _attr(block, /data-mediabook="([^"]+)"/);
+      var title = _decodeHtml(
+        _attr(block, /class="[^"]*videoTitle[^"]*"[^>]*>([^<]+)/) ||
+        _attr(block, /title="([^"]+)"/)
+      );
+      // Duration class varies (`duration` vs `bgShadeEffect duration tooltipTrig`),
+      // so match the word `duration` anywhere in the <var> class.
+      var duration = parseDur(_attr(block, /<var class="[^"]*\bduration\b[^"]*"[^>]*>([^<]+)</));
+      var views    = parseViews(_attr(block, /class="[^"]*videoViewCount[^"]*"[^>]*>([^<]+)</));
+      if (title || thumb) {
+        items.push({ id: vkey, source: 'pornhub', title: title, thumb: thumb,
+                     preview: preview, url: videoUrl, duration: duration, views: views });
+      }
+    }
+    return items;
+  },
+
+  // Model videos via the webmasters API SEARCH by the performer's name (de-slugged from the
+  // url). The HTML /pornstar/{slug}/videos path was doubly unreliable: the slug is GUESSED
+  // from the name so it 404s on mismatches (e.g. "Lisa Canon"), and _parseHtmlCards on the
+  // model page intermittently yields a single junk card. The API returns clean _mapVideo
+  // cards (playable m3u8 + paginated + carrying card.model), works for ANY name, and shares
+  // the same empty-retry as catalog/search. Stand-verified: 30/page, page 2 brings fresh.
+  browseByModel: function(modelUrl, page) {
+    var p = page || 1;
+    var slug = (String(modelUrl || '').match(/\/(?:pornstar|model|channels|channel)\/([^\/?#]+)/) || [null, ''])[1] || '';
+    var name = slug.replace(/[-_]+/g, ' ').trim();
+    if (!name) return Promise.resolve({ items: [], total_pages: 0 });
+    return this.search(name, p, 'mostrecent');
+  },
+
+  // Models: /pornstars HTML index (paginated ?page=N). Links /pornstar/{slug};
+  // name in alt=, thumb in data-image. modelUrl = /pornstar/{slug} (NO /videos —
+  // the existing browseByModel appends "/videos?page=P" itself).
+  getModels: function(page) {
+    var p = page || 1;
+    var url = 'https://www.pornhub.com/pornstars' + (p > 1 ? '?page=' + p : '');
+    return cherryFetch(url).then(function(html) {
+      return _parseModelIndex(html, {
+        hrefRx: /href="(\/pornstar\/[^"\/?#]+)"/g,
+        normalizeUrl: function(raw) { return 'https://www.pornhub.com' + raw; },
+        nameRx: [/alt="([^"]+)"/, /title="([^"]+)"/],
+        // Most performer cards render a plain <img class="pornstarThumb" src="…phncdn…">
+        // (no data-image). Fall back to the first <img src|data-thumb_url> after the href.
+        thumbRx: [/data-image="(https?:\/\/[^"]+)"/i, /data-mediumthumb="(https?:\/\/[^"]+)"/i,
+                  /<img[^>]+(?:data-thumb_url|src)="(https?:\/\/[^"]+\.jpg[^"]*)"/i]
+      });
+    }).catch(function() { return []; });
+  },
+
+  // Related block of a video page. Pornhub ships it in one of three shapes (newest first):
+  //   1) `var relatedVideosData = [[thumb, title, "m:ss", rating, url, views, previewMp4,
+  //      channel, channelUrl, badge, {highResThumb,…}], …]` — 2026-10 markup;
+  //   2) `var relatedVideosJSON = [{…}]` — the webmasters-shaped objects (old markup);
+  //   3) videoblock <li> cards (the HTML the VPS still receives).
+  // Before 2026-10 only 2)+3) were known, so the new page fell through to the whole-document
+  // href scan and produced ONE junk card titled «Pornhub» (stand 2026-10-07) — «похожие
+  // показываются некорректно». The native page (device IP) is tried first; when it yields too
+  // few cards (blocked ISP, age gate, markup drift) the VPS copy is parsed instead.
+  _parseRelated: function (html, seedKey) {
+    var self = this, items = [];
+    var at = html.indexOf('relatedVideosData');
+    var arr = at !== -1 ? _jsonArrayAt(html, html.indexOf('[', at)) : null;
+    if (arr && arr.length) {
+      arr.forEach(function (row) {
+        if (!row || !row[4]) return;
+        var meta = row[10] || {};
+        var thumbs = [row[0], meta.highResThumb].filter(Boolean);
+        var thumb = thumbs.filter(function (t) { return t.indexOf('hdnea=') !== -1; })[0] || thumbs[0] || '';
+        var vk = (String(row[4]).match(/viewkey=([a-z0-9]+)/i) || [])[1];
+        if (!vk) return;
+        items.push({ id: vk, source: 'pornhub', title: _decodeHtml(String(row[1] || '')), thumb: thumb,
+                     url: 'https://www.pornhub.com/view_video.php?viewkey=' + vk,
+                     duration: parseDur(row[2]), views: parseViews(String(row[5] || 0)) });
+      });
+    }
+    if (!items.length) {
+      var jsonMatch = html.match(/var\s+relatedVideosJSON\s*=\s*(\[[\s\S]+?\]);\s*\n/);
+      if (jsonMatch) {
+        try { items = JSON.parse(jsonMatch[1]).map(function (v) { return self._mapVideo(v); }); } catch (e) { items = []; }
+      }
+    }
+    if (!items.length) items = self._parseHtmlCards(html);
+    // Drop the seed itself and title-less / site-chrome entries («Pornhub» logo link).
+    return items.filter(function (v) {
+      return v && v.id && v.id !== seedKey && v.title && !/^pornhub(\.com)?$/i.test(v.title.trim());
+    }).slice(0, 40);
+  },
+
+  getRelated: function(video) {
+    var self = this;
+    var seedKey = (String(video.url || '').match(/viewkey=([a-z0-9]+)/i) || [])[1] || '';
+    function parse(html) { return html ? self._parseRelated(html, seedKey) : []; }
+    return cherryFetch(video.url).then(parse, function () { return []; }).then(function (items) {
+      if (items.length >= 4) return items;
+      return cherryFetch(buildProxyUrl(video.url, 'https://www.pornhub.com/')).then(parse, function () { return []; })
+        .then(function (viaVps) { return viaVps.length > items.length ? viaVps : items; });
+    }).catch(function() { return []; });
+  },
+
+  getStream: function(video) {
+    var pageUrl = video.url;
+    if (!pageUrl) return Promise.resolve({ url: '', quality: {} });
+
+    // ROUTE. The page, its playlists and segments leave through ONE exit: scheme-A tokens carry
+    // ipa=1 (bound to the IP that fetched the page). The VPS first (unmetered video); when pornhub
+    // answers it with a bot page (a ~1.5 KB stub without the player — the VPS IP gets flagged after
+    // heavy use, 2026-10-08), the CF worker (residential exit for pornhub) for the whole chain.
+    // The page host varies (rt. from the API, www. from search) — proxying normalizes both.
+    var REF = 'https://www.pornhub.com/';
+    function _page(viaCF, fresh) {
+      if (_isAndroid()) {
+        var u = buildProxyUrl(pageUrl, REF, viaCF);
+        return fresh ? _cherryFetchNow(u) : cherryFetch(u);
+      }
+      if (viaCF) return _getText(buildProxyUrl(pageUrl, REF, true));
+      // a retry must reach the network: through the page cache it would get the same page back
+      return fresh ? _cherryFetchNow(pageUrl) : cherryFetch(pageUrl);
+    }
+    function _media(html) {
+      var fvMatch = html && html.match(/var\s+flashvars_\d+\s*=\s*(\{[\s\S]+?\});\s*\n/);
+      if (!fvMatch) return null;
+      var flashvars;
+      try { flashvars = JSON.parse(fvMatch[1]); } catch (e) { return null; }
+      var hls = {}, mp4 = {};
+      (flashvars.mediaDefinitions || []).forEach(function(def) {
+        var qNum = parseInt(def.quality, 10) || 0;
+        if (!qNum) return;
+        var vUrl = (def.videoUrl || '').replace(/\\\//g, '/').replace(/\/\/\//g, '//');
+        if (!vUrl) return;
+        var label = def.quality + 'p';
+        if (def.format === 'hls')      hls[label] = vUrl;
+        else if (def.format === 'mp4') mp4[label] = vUrl;
+      });
+      return { hls: hls, mp4: mp4 };
+    }
+
+    // EDGE. The page's tokens play on only one of the two phncdn edges, and pornhub keeps flipping
+    // which: 2026-09 hv-h answered 410 for every playlist and ev-h played; 2026-10-08 scheme A
+    // (validfrom/ipa) plays on ev-h, scheme B (h/e) plays on hv-h for some videos and 410s for others,
+    // while ev-h serves B's playlists but 470 for every SEGMENT. A playlist check can't see that — so
+    // prove master → media playlist → first segment (2 bytes) on the page's own edge, then on the
+    // other. Neither → another render (each render is signed anew; A comes ~1 in 3–5).
+    var EDGE_RX = /^https?:\/\/(hv-h|ev-h)\.phncdn\.com\//;
+    function _otherEdge(u) {
+      return u.replace(EDGE_RX, function (m, e) { return 'https://' + (e === 'hv-h' ? 'ev-h' : 'hv-h') + '.phncdn.com/'; });
+    }
+    function same(u) { return u; }
+    function _firstUri(text, base) {
+      var line = String(text || '').split('\n').map(function (l) { return l.trim(); })
+        .filter(function (l) { return l && l.charAt(0) !== '#'; })[0];
+      if (!line) return '';
+      try { return new URL(line, base).href; } catch (e) { return ''; }
+    }
+    function _delivers(master, viaCF) {
+      var mu = buildProxyUrl(master, REF, viaCF);
+      return _getText(mu).then(function (m) {
+        var next = _firstUri(m, mu);
+        if (!next) return false;
+        // a master lists media playlists; a single-rendition playlist lists segments directly
+        if (!/\.m3u8/i.test(decodeURIComponent(next))) return _probeOk(next);
+        return _getText(next).then(function (t) {
+          var seg = _firstUri(t, next);
+          return seg ? _probeOk(seg) : false;
+        });
+      }).catch(function () { return false; });
+    }
+    // The proxied map on the proven edge + route, then keep only the qualities whose playlist answers:
+    // hls.js has no second chance after a 410/404 manifest, and Lampa plays the HIGHEST entry of the
+    // map regardless of `url`, so the map itself must hold only playable playlists.
+    function _map(hls, edge, viaCF) {
+      var quality = {}, labels = Object.keys(hls);
+      labels.forEach(function (lbl) { quality[lbl] = buildProxyUrl(edge(hls[lbl]), REF, viaCF); });
+      return Promise.all(labels.map(function (lbl) {
+        return fetch(quality[lbl]).then(function (r) { return r.ok ? r.text() : ''; })
+          .then(function (t) { return /^\s*#EXTM3U/.test(t); }).catch(function () { return false; });
+      })).then(function (okList) {
+        var playable = {};
+        labels.forEach(function (lbl, i) { if (okList[i]) playable[lbl] = quality[lbl]; });
+        var m = Object.keys(playable).length ? playable : quality;
+        return { url: bestQualityUrl(m), quality: m };
+      });
+    }
+
+    var NONE = { url: '', quality: {} };
+    // One render on one route → a proven map, NONE (the page has no playable media at all), or null
+    // (this route refused / no edge delivered → the caller tries another render or route).
+    function _try(viaCF, rendersLeft, fresh) {
+      return _page(viaCF, fresh).then(function (html) {
+        var media = _media(html);
+        if (!media) return null;                      // bot page: don't hammer this route
+        if (Object.keys(media.mp4).length) return { url: bestQualityUrl(media.mp4), quality: media.mp4 };
+        var hls = media.hls;
+        if (!Object.keys(hls).length) return NONE;
+        var top = bestQualityUrl(hls), alt = _otherEdge(top);
+        return _delivers(top, viaCF).then(function (ok) {
+          if (ok) return _map(hls, same, viaCF);
+          return (alt !== top ? _delivers(alt, viaCF) : Promise.resolve(false)).then(function (okAlt) {
+            if (okAlt) return _map(hls, _otherEdge, viaCF);
+            return rendersLeft > 0 ? _try(viaCF, rendersLeft - 1, true) : null;
+          });
+        });
+      }, function () { return null; });
+    }
+    // ≤ 3 renders via the VPS, then ≤ 4 via the CF worker (≤ 7 page fetches per play).
+    return _try(false, 2, false)
+      .then(function (r) { return r || _try(true, 3, true); })
+      .then(function (r) { return r || NONE; })
+      .catch(function () { return NONE; });
+  }
+});
+
+// xvideos/xnxx video pages embed related as a JSON array `video_related=[...]`.
+// `idPrefix` must match the channel's feed ids ('xv' / 'xnxx-' + the URL token = o.eid): a bare eid
+// gave the same video two ids, so Fav/Hist/progress/dedup treated a related copy as a new video.
+function _xvideosRelated(html, host, sourceId, idPrefix) {
+  var m = html.match(/video_related\s*=\s*(\[[\s\S]*?\])\s*;/);
+  if (!m) return [];
+  var arr;
+  try { arr = JSON.parse(m[1]); } catch (e) { return []; }
+  var out = [];
+  arr.forEach(function (o) {
+    if (!o || !o.u) return;
+    // o.d is "10 min" / "1 h 5 min" / "45 sec" (was: minutes only → a 70-min video showed 10:00)
+    var ds = String(o.d || ''), dur = 0, dh = ds.match(/(\d+)\s*h/), dmn = ds.match(/(\d+)\s*min/), dsc = ds.match(/(\d+)\s*sec/);
+    if (dh) dur += parseInt(dh[1], 10) * 3600;
+    if (dmn) dur += parseInt(dmn[1], 10) * 60;
+    if (dsc) dur += parseInt(dsc[1], 10);
+    out.push({
+      id:     (idPrefix || '') + (o.eid || o.id),
+      // titles arrive HTML-escaped in the JSON («&amp;», «&#039;» showed on the card, stand 2026-10-07)
+      title:  _decodeHtml(o.tf || o.t || ''),
+      thumb:  o.i || o.il || '',
+      url:    host + o.u,
+      source: sourceId,
+      duration: dur || undefined,
+      hd:     o.hm ? 'HD' : undefined
+    });
+  });
+  return out;
+}
+
+// ---- Xvideos ----
+SOURCES.push({
+  id: 'xvideos',
+  name: 'Xvideos',
+  host: 'xvideos2.com',
+
+  _parseCards: function(html, page) {
+    var items = [];
+    // Split on thumb-block divs (handles double-space and modifier classes)
+    var blocks = html.split(/<div[^>]+class="[^"]*thumb-block[^"]*"/);
+    // Skip first element (it's content before the first block)
+    for (var i = 1; i < blocks.length; i++) {
+      var block = blocks[i];
+      // New URL format: /video.TOKEN/slug  (TOKEN is alphanumeric, replaces old /video{numId}/)
+      var hrefMatch = block.match(/href="(\/video\.([a-z0-9]+)\/[^"]+)"/);
+      if (!hrefMatch) continue;
+      var href = hrefMatch[1];
+      var numId = hrefMatch[2];
+      var videoUrl = 'https://www.xvideos2.com' + href;
+
+      var thumbMatch = block.match(/data-src="([^"]+)"/) || block.match(/src="([^"]+\.jpg[^"]*)"/);
+      var thumb = thumbMatch ? thumbMatch[1] : '';
+      // The listing <img data-src> may hold the unsubstituted hover-frame template
+      // (…/xv_THUMBNUM_t.jpg); the site's JS swaps THUMBNUM→frame index at runtime.
+      // Left literal it 404s as a static poster (blank card), so mirror the site's
+      // default and pin frame 1 — verified to load on-device (368×208).
+      if (thumb.indexOf('THUMBNUM') !== -1) thumb = thumb.replace(/THUMBNUM/g, '1');
+      // Real preview: the data-pvv attr on the card (a .../preview.mp4 CDN URL).
+      // Confirmed via curl on xvideos.com listing markup. No /preview.mp4 guess.
+      var pvvMatch = block.match(/data-pvv="([^"]+)"/);
+      var preview = pvvMatch ? pvvMatch[1].replace(/\\\//g, '/') : '';
+
+      var titleMatch = block.match(/<p[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)/) ||
+                       block.match(/title="([^"]+)"/);
+      var title = titleMatch ? stripTags(titleMatch[1]) : '';
+      if (!title) title = _titleFromUrl(videoUrl);
+
+      var durMatch = block.match(/<span[^>]*class="[^"]*duration[^"]*"[^>]*>([^<]+)/);
+      var duration = durMatch ? parseDur(durMatch[1].trim()) : 0;
+
+      // HD/4K badge: real per-card marker <span class="video-hd-mark">1080p</span>
+      // (also 720p/1440p/2160p). Confirmed via curl. 2160 → '4K', else 'HD'.
+      var hdMatch = block.match(/class="video-hd-mark"[^>]*>\s*(\d+)/);
+      var hd = hdMatch ? (parseInt(hdMatch[1], 10) >= 2160 ? '4K' : 'HD') : '';
+
+      if (!numId && href) {
+        var idFromHref = href.match(/video(\d+)\//);
+        numId = idFromHref ? idFromHref[1] : String(i);
+      }
+
+      items.push({
+        id: 'xv' + numId,
+        source: 'xvideos',
+        title: title,
+        thumb: thumb,
+        preview: preview,
+        hd: hd,
+        url: videoUrl,
+        duration: duration,
+        views: 0
+      });
+    }
+    return items;
+  },
+
+  cfg: {
+    // Base sorts (map 1:1 to /c/ category path segments AND to search &sort=).
+    // The faceted entries below are SEARCH-ONLY (duration/quality/date facets exist
+    // only on /?k=); browse() strips the ~facet suffix so they degrade to the base
+    // sort if ever chosen on a category. All combos curl-verified (HTTP 200+cards).
+    sorts: _cats('views:По популярности,uploaddate:Свежее,rating:По рейтингу,length:Длинные').concat([
+      { id: 'rating~quality=hd',                 label: 'Поиск: HD по рейтингу' },
+      { id: 'rating~quality=1080P',              label: 'Поиск: 1080p по рейтингу' },
+      { id: 'relevance~durf=10min_more',         label: 'Поиск: длинные (10+ мин)' },
+      { id: 'relevance~durf=20min_more',         label: 'Поиск: длинные (20+ мин)' },
+      { id: 'relevance~durf=1-3min',             label: 'Поиск: короткие (1-3 мин)' },
+      { id: 'uploaddate~datef=today',            label: 'Поиск: за сегодня' },
+      { id: 'uploaddate~datef=week',             label: 'Поиск: за неделю' },
+      { id: 'uploaddate~datef=month',            label: 'Поиск: за месяц' }
+    ]),
+    categories: _cats('AI-239:AI,Amateur-65:Amateur,Anal-12:Anal,Arab-159:Arab,Asian_Woman-32:Asian,ASMR-229:ASMR,Ass-14:Ass,bbw-51:BBW,Bi_Sexual-62:Bi,Big_Ass-24:Big Ass,Big_Cock-34:Big Cock,Big_Tits-23:Big Tits,Black_Woman-30:Black,Blonde-20:Blonde,Blowjob-15:Blowjob,Brunette-25:Brunette,Cam_Porn-58:Cam Porn,Creampie-40:Creampie,Cuckold-237:Cuckold/Hotwife,Cumshot-18:Cumshot,Femdom-235:Femdom,Fisting-165:Fisting,Fucked_Up_Family-81:Fucked Up Family,Gangbang-69:Gangbang,Gapes-167:Gapes,Indian-89:Indian,Interracial-27:Interracial,Latina-16:Latina,Lesbian-26:Lesbian,Lingerie-83:Lingerie,Mature-38:Mature,Milf-19:Milf,Oiled-22:Oiled,Redhead-31:Redhead,Solo_and_Masturbation-33:Solo,Squirting-56:Squirting,Stockings-28:Stockings,Teen-13:Teen')
+  },
+
+  // Parse a (possibly faceted) search sort id into the xvideos /?k= query params.
+  // Plain sort ids (views/uploaddate/rating/length) come from the shared sort
+  // dropdown and map 1:1 to &sort=. SEARCH-ONLY facets (duration/quality/date)
+  // ride along as a `~durf=…~quality=…~datef=…` suffix on the id (no ':' so _cats
+  // keeps the id intact). All combos curl-verified (HTTP 200 + cards) on /?k=.
+  _searchFacets: function(sort) {
+    var s = String(sort || '');
+    var parts = s.split('~');
+    var out = { sort: parts[0] || '' };
+    for (var i = 1; i < parts.length; i++) {
+      var kv = parts[i].split('=');
+      if (kv[0] && kv[1]) out[kv[0]] = kv[1];   // durf | quality | datef
+    }
+    return out;
+  },
+
+  search: function(query, page, sort) {
+    var self = this;
+    var p = page || 1;
+    // Xvideos p is 0-indexed. Search HONOURS sort + the search-only duration/
+    // quality/date facets (previously the sort param was received but ignored).
+    var f = self._searchFacets(sort);
+    var url = 'https://www.xvideos2.com/?k=' + encodeURIComponent(query) + '&p=' + (p - 1) +
+      (f.sort    ? '&sort='    + f.sort    : '') +
+      (f.durf    ? '&durf='    + f.durf    : '') +
+      (f.quality ? '&quality=' + f.quality : '') +
+      (f.datef   ? '&datef='   + f.datef   : '');
+    return cherryFetch(url).then(function(html) {
+      var items = self._parseCards(html, p);
+      // xvideos grid serves ~27 cards/page; full batch ⇒ next page exists.
+      return { items: items, total_pages: _derivePages(items.length, p, 20) };
+    }).catch(function() { return { items: [], total_pages: 0 }; });
+  },
+
+  browse: function(category, page, sort) {
+    var self = this;
+    var p = page || 1;
+    var url;
+    // Category/homepage listings accept ONLY the base sort (duration/quality/date
+    // facets are search-only on xvideos), so strip any ~facet suffix here.
+    var baseSort = self._searchFacets(sort).sort;
+    if (category) {
+      // /c/s:{value}/{Label-id}/{page} — sort is a path segment BEFORE the slug;
+      // page is 0-based, omitted on page 1. Default sort = views (По популярности).
+      var s = baseSort || 'views';
+      url = _buildCatUrl('https://www.xvideos.com/c/s:' + s + '/{slug}/{page}', category, p, 0, true);
+    } else {
+      // Non-category global feed → /new/{p} (1-based; /new/0 → 404). It's the site's
+      // paginating NEWEST listing. The homepage / and bare /best/ DON'T paginate
+      // (page2 == page1), so route the global feed here to guarantee infinite scroll.
+      // Per-sort global listings aren't paginable on xvideos — sorts apply in categories.
+      url = 'https://www.xvideos2.com/new/' + p;
+    }
+    return cherryFetch(url).then(function(html) {
+      var items = self._parseCards(html, p);
+      return { items: items, total_pages: _derivePages(items.length, p, 20) };
+    }).catch(function() { return { items: [], total_pages: 0 }; });
+  },
+
+  // Map ONE xvideos profile-videos JSON object to a card identical in shape to
+  // _parseCards output (id/source/title/thumb/preview/hd/url/duration). The model
+  // page does NOT server-render thumb-block cards — it loads them from the JSON
+  // endpoint /profiles/{slug}/videos/best/{page}. The video URL is built from the
+  // `eid` token as /video.{eid}/{slug} (same canonical form _parseCards yields, so
+  // getStream is unchanged); preview is the per-card ipu (…/preview.mp4) attr.
+  _mapModelVideo: function(o) {
+    if (!o || !o.eid) return null;
+    var dur = 0;
+    var dm = o.d && String(o.d).match(/(\d+)\s*min/);
+    if (dm) dur = parseInt(dm[1], 10) * 60;
+    return {
+      id:       'xv' + o.eid,
+      source:   'xvideos',
+      title:    _decodeHtml(o.tf || o.t || ''),
+      thumb:    o.il || o.i || o.ip || '',
+      preview:  o.ipu || '',
+      hd:       o.hm ? (/2160|4k/i.test(String(o.h || '')) ? '4K' : 'HD') : '',
+      // /video.{eid}/{slug}: slug is cosmetic (token resolves the page), but pull
+      // the real slug from `u` (…/{eid}/{slug}) when present for a clean URL.
+      url:      'https://www.xvideos.com/video.' + o.eid + '/' +
+                ((String(o.u || '').match(/\/[a-z0-9]+\/([^\/?#]+)\/?$/) || [, o.eid])[1]),
+      duration: dur,
+      views:    parseViews(String(o.n || 0))
+    };
+  },
+
+  browseByModel: function(modelUrl, page) {
+    var self = this;
+    var p = page || 1;
+    var pageIdx = p - 1;
+    // modelUrl is the /pornstars/{slug} (or /profiles/{slug}) page. Its videos are
+    // served from a sibling JSON endpoint /profiles/{slug}/videos/best/{pageIdx}.
+    // Normalize ANY /pornstars|/models|/profiles base to /profiles/{slug}.
+    var slugM = modelUrl.replace(/\/$/, '').match(/\/(?:pornstars|models|profiles)\/([^\/?#]+)/);
+    var slug = slugM ? slugM[1] : modelUrl.replace(/\/$/, '').split('/').pop();
+    var url = 'https://www.xvideos.com/profiles/' + slug + '/videos/best/' + pageIdx;
+    return cherryFetch(url).then(function(text) {
+      var data;
+      try { data = JSON.parse(text); } catch (e) { data = null; }
+      var vids = (data && data.videos) || [];
+      var items = [];
+      vids.forEach(function(o) { var c = self._mapModelVideo(o); if (c) items.push(c); });
+      // total_pages from nb_videos / nb_per_page when present, else derive.
+      var total = (data && data.nb_videos && data.nb_per_page)
+        ? Math.ceil(data.nb_videos / data.nb_per_page)
+        : _derivePages(items.length, p, 20);
+      return { items: items, total_pages: total || 1 };
+    }).catch(function() { return { items: [], total_pages: 0 }; });
+  },
+
+  // Models: /pornstars-index → /pornstars/{slug} links. ONLY the /pornstars/
+  // links are used (they render thumb-block cards parseable by _parseCards via
+  // browseByModel); /models/{slug} pages use a non-thumb-block markup _parseCards
+  // misses, so they are skipped. Each card carries the avatar in an <img src=
+  // "…xvideos-cdn…"> (inside a document.write) and the name as the <a> link text.
+  getModels: function() {
+    return cherryFetch('https://www.xvideos.com/pornstars-index').then(function(html) {
+      return _parseModelIndex(html, {
+        hrefRx: /href="(\/pornstars\/[^"\/?#]+)"/g,
+        normalizeUrl: function(raw) { return 'https://www.xvideos.com' + raw; },
+        nameRx: [/<a[^>]*href="\/pornstars\/[^"]+"[^>]*>([^<]{2,60})<\/a>/],
+        thumbRx: [/<img[^>]+src="(https?:\/\/[^"]+xvideos-cdn[^"]+\.jpg)"/i,
+                  /(?:data-src|src)="(https?:\/\/[^"]+\.jpg)"/i]
+      });
+    }).catch(function() { return []; });
+  },
+
+  getRelated: function(video) {
+    if (!video || !video.url) return Promise.resolve([]);
+    return cherryFetch(video.url).then(function(html) {
+      return _xvideosRelated(html, 'https://www.xvideos.com', 'xvideos', 'xv').filter(function(v) {
+        return v.url !== video.url;
+      }).slice(0, 20);
+    }).catch(function() { return []; });
+  },
+
+  getStream: function(video) {
+    return cherryFetch(video.url).then(function(html) {
+      var hlsMatch = html.match(/(?:html5player\.)?setVideoHLS\s*\(\s*['"]([^'"]+)['"]\)/);
+      var highMatch = html.match(/(?:html5player\.)?setVideoUrlHigh\s*\(\s*['"]([^'"]+)['"]\)/);
+      var lowMatch = html.match(/(?:html5player\.)?setVideoUrlLow\s*\(\s*['"]([^'"]+)['"]\)/);
+
+      var hlsUrl = hlsMatch ? hlsMatch[1] : '';
+      var highUrl = highMatch ? highMatch[1] : '';
+      var lowUrl = lowMatch ? lowMatch[1] : '';
+
+      // Prefer HLS everywhere: its adaptive ladder carries 1080p/4K, while xvideos'
+      // progressive `setVideoUrlHigh` MP4 caps at ~720p → looked "low quality" on a 4K TV.
+      // Modern Android players (Google TV / ExoPlayer) play the HLS master inline. The MP4
+      // High/Low entries stay in the quality map as a manual fallback for any player that
+      // can't do HLS (so they're never stranded), but the default is HLS.
+      var quality = {};
+      if (hlsUrl) quality['HLS'] = hlsUrl;
+      if (highUrl) quality['High'] = highUrl;
+      if (lowUrl && lowUrl !== highUrl) quality['Low'] = lowUrl;
+
+      var url = hlsUrl || highUrl || lowUrl;
+      return url ? { url: url, quality: quality } : { url: '', quality: {} };
+    }).catch(function() { return { url: '', quality: {} }; });
+  }
+});
+
+// ---- Xnxx ----
+SOURCES.push({
+  id: 'xnxx',
+  name: 'Xnxx',
+  host: 'xnxx.com',
+
+  _parseCards: function(html) {
+    var items = [];
+    // Narrow to the mozaique container
+    var mozParts = html.split('<div class="mozaique"');
+    var content = mozParts.length > 1 ? mozParts[mozParts.length - 1] : html;
+
+    // Split on the OUTER card wrapper (thumb-block) — like xvideos — so each
+    // block holds BOTH this card's .thumb image and its .thumb-under caption.
+    // Splitting on the inner thumb-under caused an off-by-one: data-src (in
+    // .thumb of the NEXT card) was paired with the href/title of the current.
+    var blocks = content.split(/<div[^>]+class="[^"]*thumb-block[^"]*"/);
+    for (var i = 1; i < blocks.length; i++) {
+      var block = blocks[i];
+      var hrefMatch = block.match(/href="(\/video-?([^/]+)\/[^"]+)"/);
+      if (!hrefMatch) {
+        hrefMatch = block.match(/href="(\/video([a-z0-9]+)[^"]*)"/) ;
+      }
+      if (!hrefMatch) continue;
+
+      var href = hrefMatch[1];
+      var rawId = hrefMatch[2] || '';
+      var videoUrl = 'https://www.xnxx.com' + href;
+      // Listing hrefs now carry a thumbnail-hover placeholder segment
+      // /video-{id}/{numid}/THUMBNUM/{slug} — the literal "THUMBNUM" is never substituted,
+      // so the page returns a 77-byte "Please visit xnxx.com" stub → getStream finds no
+      // stream. Collapse to the canonical /video-{id}/{slug} (verified playable).
+      videoUrl = videoUrl.replace(/\/\d+\/THUMBNUM\//, '/').replace('/THUMBNUM/', '/').replace('/THUMBNUM', '');
+
+      var thumbMatch = block.match(/data-src="([^"]+)"/) || block.match(/src="([^"]+\.jpg[^"]*)"/);
+      var thumb = thumbMatch ? thumbMatch[1] : '';
+      // Same hover-frame template as xvideos: data-src can be …/xn_THUMBNUM_t.jpg,
+      // which the site's JS substitutes at runtime. Static, it 404s (blank card) —
+      // pin frame 1 to mirror the default view. Verified to load on-device (368×208).
+      if (thumb.indexOf('THUMBNUM') !== -1) thumb = thumb.replace(/THUMBNUM/g, '1');
+      // Real preview: the data-pvv attr on the card (a .../preview.mp4 CDN URL).
+      // Confirmed via curl on xnxx.com/search listing markup. No /preview.mp4 guess.
+      var pvvMatch = block.match(/data-pvv="([^"]+)"/);
+      var preview = pvvMatch ? pvvMatch[1].replace(/\\\//g, '/') : '';
+
+      var titleMatch = block.match(/class="title"[^>]*>([^<]+)/) ||
+                       block.match(/title="([^"]+)"/) ||
+                       block.match(/<a[^>]+>([^<]{5,})/);
+      var title = titleMatch ? stripTags(titleMatch[1]) : '';
+      if (!title) title = _titleFromUrl(videoUrl);
+
+      // Duration is BARE text inside <p class="metadata"> (after the views <span>,
+      // before the <span class="video-hd">): e.g. `…</span>\n5min\n<span class="video-hd">`.
+      // It is NOT wrapped in its own span, so grab the first bare HH:MM / Nmin / NhNm
+      // token within this card's metadata paragraph (anchored to the block chunk).
+      var metaMatch = block.match(/class="metadata"[^>]*>([\s\S]*?)<\/p>/);
+      var metaTxt = metaMatch ? metaMatch[1] : block;
+      var durMatch = metaTxt.match(/(\d+h\s*)?\d+\s*min\b|\d+:\d+/i);
+      var duration = durMatch ? parseDur(durMatch[0].trim()) : 0;
+
+      items.push({
+        id: 'xnxx-' + rawId,
+        source: 'xnxx',
+        title: title,
+        thumb: thumb,
+        preview: preview,
+        url: videoUrl,
+        duration: duration,
+        views: 0
+      });
+    }
+    return items;
+  },
+
+  search: function(query, page) {
+    var self = this;
+    var p = page || 1;
+    // Space → + in URL, page appended as /{p}
+    var q = encodeURIComponent(query).replace(/%20/g, '+');
+    var url = 'https://www.xnxx.com/search/' + q + '/' + p;
+    return cherryFetch(url).then(function(html) {
+      var items = self._parseCards(html);
+      // xnxx grid serves ~27 cards/page; full batch ⇒ next page exists.
+      return { items: items, total_pages: _derivePages(items.length, p, 20) };
+    }).catch(function() { return { items: [], total_pages: 0 }; });
+  },
+
+  cfg: { categories: _cats('amateur:Amateur,anal:Anal,asian:Asian,bbw:BBW,big-ass:Big Ass,big-tits:Big Tits,blonde:Blonde,blowjob:Blowjob,brunette:Brunette,creampie:Creampie,cumshot:Cumshot,ebony:Ebony,gangbang:Gangbang,hardcore:Hardcore,hentai:Hentai,interracial:Interracial,japanese:Japanese,latina:Latina,lesbian:Lesbian,massage:Massage,mature:Mature,milf:MILF,pov:POV,public:Public,redhead:Redhead,step-mom:Step Mom,teen:Teen,threesome:Threesome'),
+    // Sort is a FILTER prefix on the paginating /search/{filter}/{slug}/{page} route
+    // (the abandoned /tags/{slug}/{sort} route ignored the page param). Verified: this
+    // route returns 200 + distinct first-ids per filter AND paginates (page2 ≠ page1).
+    // hits = most-viewed (популярность); month/year = top of period.
+    sorts: _cats('hits:По популярности,month:Топ за месяц,year:Топ за год') },
+
+  browse: function(category, page, sort) {
+    var self = this;
+    var p = page || 1;
+    // xnxx categories via the /search/{slug}/{page} route, which DOES paginate
+    // (the /tags/ route ignores the page number → infinite page-1 duplicates).
+    // With a sort chosen, prepend it as a filter segment: /search/{sort}/{slug}/{page}.
+    var prefix = sort ? encodeURIComponent(sort) + '/' : '';
+    // NO category → /todays-selection (xnxx's curated cross-topic homepage feed).
+    // Was /?k=new&p=N — a KEYWORD SEARCH for the word "new" (videos with "new" in the
+    // title), NOT a recency feed. /todays-selection paginates /todays-selection/{p}
+    // (p1 = bare, real p1≠p2), 48 cards/page, and is month-INDEPENDENT (never goes stale,
+    // unlike /best/{YYYY-MM}). Curl-verified 200 + distinct paginated cross-topic cards.
+    var url = category
+      ? 'https://www.xnxx.com/search/' + prefix + encodeURIComponent(category) + '/' + p
+      : (p > 1 ? 'https://www.xnxx.com/todays-selection/' + p : 'https://www.xnxx.com/todays-selection');
+    return cherryFetch(url).then(function(html) {
+      var items = self._parseCards(html);
+      return { items: items, total_pages: _derivePages(items.length, p, 20) };
+    }).catch(function() { return { items: [], total_pages: 0 }; });
+  },
+
+  getRelated: function(video) {
+    if (!video || !video.url) return Promise.resolve([]);
+    return cherryFetch(video.url).then(function(html) {
+      return _xvideosRelated(html, 'https://www.xnxx.com', 'xnxx', 'xnxx-').filter(function(v) {
+        return v.url !== video.url;
+      }).slice(0, 20);
+    }).catch(function() { return []; });
+  },
+
+  getStream: function(video) {
+    return cherryFetch(video.url).then(function(html) {
+      var hlsMatch = html.match(/(?:html5player\.)?setVideoHLS\s*\(\s*['"]([^'"]+)['"]\)/);
+      var highMatch = html.match(/(?:html5player\.)?setVideoUrlHigh\s*\(\s*['"]([^'"]+)['"]\)/);
+      var lowMatch = html.match(/(?:html5player\.)?setVideoUrlLow\s*\(\s*['"]([^'"]+)['"]\)/);
+
+      var hlsUrl = hlsMatch ? hlsMatch[1] : '';
+      var highUrl = highMatch ? highMatch[1] : '';
+      var lowUrl = lowMatch ? lowMatch[1] : '';
+
+      // Prefer HLS everywhere: its adaptive ladder carries 1080p/4K, while the progressive
+      // `setVideoUrlHigh` MP4 caps at ~720p → "low quality" on a 4K TV. Google TV / ExoPlayer
+      // plays the HLS master inline; MP4 High/Low stay in the map as a manual fallback.
+      var quality = {};
+      if (hlsUrl) quality['HLS'] = hlsUrl;
+      if (highUrl) quality['MP4 High'] = highUrl;
+      if (lowUrl) quality['MP4 Low'] = lowUrl;
+
+      var url = hlsUrl || highUrl || lowUrl || '';
+      return { url: url, quality: quality };
+    }).catch(function() { return { url: '', quality: {} }; });
+  },
+
+  getModels: function(page) {
+    var p = page || 1;
+    var url = 'https://www.xnxx.com/pornstars' + (p > 1 ? '/' + p : '');
+    return cherryFetch(url).then(function(html) {
+      return _parseModelIndex(html, {
+        window: 800,
+        hrefRx: /href="(\/pornstar\/[^"\/?#]+)"/g,
+        normalizeUrl: function(raw) { return 'https://www.xnxx.com' + raw; },
+        nameRx: [/<p class="title"><a[^>]*>([^<]{2,60})<\/a>/, /<a[^>]+href="\/pornstar\/[^"]+"[^>]*>([^<]{2,60})<\/a>/],
+        thumbRx: [/<img[^>]+src="(https?:\/\/[^"]+xnxx-cdn[^"]+\.jpg)"/i]
+      });
+    }).catch(function() { return []; });
+  },
+
+  _mapModelVideo: function(o) {
+    if (!o || !o.eid) return null;
+    var dm = o.d && String(o.d).match(/(\d+)\s*min/);
+    var slug2 = (String(o.u||'').replace(/\/$/,'').split('/').pop()) || o.eid;
+    return { id: 'xnxx-' + o.eid, source: 'xnxx', title: _decodeHtml(o.tf || o.t || ''),
+      thumb: o.il || o.i || '', preview: o.ipu || '',
+      url: 'https://www.xnxx.com/video-' + o.eid + '/' + slug2,
+      duration: dm ? parseInt(dm[1],10)*60 : 0, views: parseViews(String(o.n||0)) };
+  },
+
+  browseByModel: function(modelUrl, page) {
+    var self = this; var p = page || 1;
+    var slug = (modelUrl.replace(/\/$/,'').match(/\/pornstar\/([^\/?#]+)/) || [,''])[1] || modelUrl.replace(/\/$/,'').split('/').pop();
+    var url = 'https://www.xnxx.com/pornstar/' + slug + '/videos/best/' + (p - 1);
+    return cherryFetch(url).then(function(text) {
+      var data; try { data = JSON.parse(text); } catch(e) { data = null; }
+      var vids = (data && data.videos) || []; var items = [];
+      vids.forEach(function(o){ var c = self._mapModelVideo(o); if (c) items.push(c); });
+      var total = (data && data.nb_videos && data.nb_per_page) ? Math.ceil(data.nb_videos/data.nb_per_page) : _derivePages(items.length, p, 50);
+      return { items: items, total_pages: total || 1 };
+    }).catch(function(){ return { items: [], total_pages: 0 }; });
+  }
+});
+
+// eporner VIDEO pages embed related as `mbcontent` HTML cards (the JSON API,
+// used by browse/_mapVideo, returns none for a video page). Each card:
+//   <div class="mbcontent"><a href="/video-XXX/slug/">
+//     <img ... data-src="THUMB" alt="TITLE" /></a> ... <div class="mvhdico"><span>720p</span>
+// Confirmed via curl on a real video page (2026-06).
+function _epornerRelated(html) {
+  var out = [];
+  var seen = {};
+  var rx = /<div class="mbcontent"><a href="(\/video-([^/"]+)\/[^"]*)"[^>]*>([\s\S]*?)<\/a>/g;
+  var m;
+  while ((m = rx.exec(html)) !== null) {
+    var path = m[1];
+    var id = m[2];
+    var inner = m[3];
+    if (seen[id]) continue;
+    seen[id] = true;
+    var url = 'https://www.eporner.com' + path;
+    var thumb = _attr(inner, /data-src="([^"]+)"/) || _attr(inner, /src="(https?:\/\/[^"]+\.jpe?g[^"]*)"/i) || '';
+    var title = _decodeHtml(_attr(inner, /alt="([^"]+)"/)) || _titleFromUrl(url);
+    out.push({ id: id, source: 'eporner', title: title, thumb: thumb, url: url });
+  }
+  return out;
+}
+
+// ---- Eporner ----
+SOURCES.push({
+  id: 'eporner',
+  name: 'Eporner',
+  host: 'eporner.com',
+  cfg: { categories: _cats('4k-porn:4K Ultra HD,vr-porn:VR Porn,amateur:Amateur,anal:Anal,asian:Asian,asmr:ASMR,bbw:BBW,bdsm:BDSM,big-ass:Big Ass,big-dick:Big Dick,big-tits:Big Tits,bisexual:Bisexual,blonde:Blonde,blowjob:Blowjob,bondage:Bondage,brunette:Brunette,bukkake:Bukkake,creampie:Creampie,cumshot:Cumshot,double-penetration:Double Penetration,ebony:Ebony,fetish:Fetish,fisting:Fisting,footjob:Footjob,for-women:For Women,gay:Gay,group-sex:Group Sex,handjob:Handjob,hardcore:Hardcore,hentai:Hentai,homemade:Homemade,indian:Indian,interracial:Interracial,japanese:Japanese,latina:Latina,lesbians:Lesbian,lingerie:Lingerie,massage:Massage,masturbation:Masturbation,mature:Mature,milf:MILF,orgy:Orgy,outdoor:Outdoor,petite:Petite,pornstar:Pornstar,pov-porn:POV,public:Public,redhead:Redhead,shemale:Shemale,small-tits:Small Tits,squirt:Squirt,striptease:Striptease,students:Students,swingers:Swinger,teens:Teen,threesome:Threesome,toys:Toys,uniform:Uniform,vintage:Vintage,webcam:Webcam'), sorts: _cats('latest:Свежее,most-popular:По популярности,top-rated:По рейтингу,longest:Длинные,top-weekly:За неделю,top-monthly:За месяц').concat([
+    // Orientation filter via the API `gay` param (0=straight default, 1=gay, 2=trans).
+    // Encoded as a `~gayN` suffix on the order id (no ':' so _cats keeps it intact);
+    // _orient() splits it back into {order, gay}. Curl-verified each value returns a
+    // distinct content vertical. Straight is the default everywhere (gay omitted).
+    { id: 'latest~gay1', label: 'Гей' },
+    { id: 'latest~gay2', label: 'Транс' }
+  ]) },
+
+  // Split a (possibly orientation-suffixed) sort id "order~gayN" into the order +
+  // gay API params. No suffix → straight (gay=0). Mirrors pornhub's _sortParams.
+  _orient: function(sort) {
+    var m = String(sort || '').match(/^(.*?)~gay([012])$/);
+    if (m) return { order: m[1] || 'latest', gay: m[2] };
+    // Default (no sort) → latest, matching eporner's "Most recent" home + cfg.sorts[0].
+    return { order: sort || 'latest', gay: '0' };
+  },
+
+  _apiFetch: function(url) {
+    // eporner JSON search/browse API has Access-Control-Allow-Origin: * — direct fetch is safe here.
+    // Do NOT use for HTML page fetches (video pages, XHR endpoint) — use cherryFetch() for those.
+    return fetch(url).then(function(r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.text();
+    });
+  },
+
+  _mapVideo: function(v) {
+    return {
+      id: String(v.id),
+      source: 'eporner',
+      title: _fixMojibake(v.title || ''),   // the API double-encodes non-ASCII titles
+      thumb: (v.default_thumb && v.default_thumb.src) ? v.default_thumb.src : '',
+      url: v.url || ('https://www.eporner.com/video-' + v.id + '/'),
+      duration: parseInt(v.length_sec, 10) || 0,
+      views: parseInt(v.views, 10) || 0
+    };
+  },
+
+  search: function(query, page, sort) {
+    var self = this;
+    var p = page || 1;
+    // A3(a): SEARCH uses eporner's default/relevance order (NO order param) so real
+    // title matches surface instead of being drowned by all-time-popular videos.
+    // browse() below keeps order=most-popular intentionally (category = popularity sort).
+    // Orientation (&gay=) is honoured from the sort id's ~gayN suffix (default straight=0).
+    var gay = self._orient(sort).gay;
+    var url = 'https://www.eporner.com/api/v2/video/search/?query=' + encodeURIComponent(query) +
+      '&per_page=30&page=' + p + '&thumbsize=medium&gay=' + gay + '&format=json';
+    return self._apiFetch(url).then(function(text) {
+      var data = JSON.parse(text);
+      return { items: (data.videos || []).map(self._mapVideo), total_pages: parseInt(data.total_pages, 10) || 1 };
+    }).catch(function() { return { items: [], total_pages: 0 }; });
+  },
+
+  browse: function(category, page, sort) {
+    var self = this;
+    var p = page || 1;
+    // Category via the JSON API search (slug → keyword); reuses _mapVideo. Hyphen → space.
+    var q = category ? encodeURIComponent(category.replace(/-/g, ' ')) : '';
+    // Native API order param (default popular). All values curl-verified.
+    // Orientation (&gay=) is carried in the sort id's ~gayN suffix (default straight=0);
+    // _orient() returns the bare order for normal sorts so existing behaviour is unchanged.
+    var o = self._orient(sort);
+    var url = 'https://www.eporner.com/api/v2/video/search/?query=' + q + '&per_page=30&page=' + p +
+      '&thumbsize=medium&order=' + o.order + '&gay=' + o.gay + '&format=json';
+    return self._apiFetch(url).then(function(text) {
+      var data = JSON.parse(text);
+      return { items: (data.videos || []).map(self._mapVideo), total_pages: parseInt(data.total_pages, 10) || 1 };
+    }).catch(function() { return { items: [], total_pages: 0 }; });
+  },
+
+  getRelated: function(video) {
+    if (!video || !video.url) return Promise.resolve([]);
+    return cherryFetch(video.url).then(function(html) {
+      return _epornerRelated(html).filter(function(v) {
+        return v.url !== video.url;
+      }).slice(0, 20);
+    }).catch(function() { return []; });
+  },
+
+  getStream: function(video) {
+    var pageUrl = video.url;
+    if (!pageUrl) return Promise.resolve({ url: '', quality: {} });
+    return cherryFetch(pageUrl).then(function(html) {
+      var hashM = html.match(/(?:EHH|hash)\s*[=:]\s*['"]([0-9a-f]{32})['"]/i);
+      if (!hashM) throw new Error('eporner: hash not found');
+      var raw = hashM[1];
+      var computed = [raw.slice(0,8), raw.slice(8,16), raw.slice(16,24), raw.slice(24,32)]
+        .map(function(c) { return parseInt(c, 16).toString(36); }).join('');
+      var xhrUrl = 'https://www.eporner.com/xhr/video/' + video.id +
+        '?hash=' + computed + '&device=generic&domain=www.eporner.com&fallback=false';
+      return cherryFetch(xhrUrl);
+    }).then(function(text) {
+      var data = JSON.parse(text);
+      var mp4 = data.sources && data.sources.mp4;
+      if (!mp4) return { url: '', quality: {} };
+      var quality = {};
+      Object.keys(mp4).forEach(function(lbl) {
+        if (mp4[lbl] && mp4[lbl].src) quality[lbl] = mp4[lbl].src;
+      });
+      return { url: bestQualityUrl(quality), quality: quality };
+    }).catch(function() {
+      return { url: '', quality: {} };
+    });
+  },
+
+  getModels: function(page) {
+    var p = page || 1;
+    var url = 'https://www.eporner.com/pornstar-list/' + (p > 1 ? p + '/' : '');
+    return cherryFetch(url).then(function(html) {
+      return _parseModelIndex(html, {
+        window: 400,
+        hrefRx: /href="(\/pornstar\/[^"\/?#]+\/)"/g,
+        normalizeUrl: function(raw) { return 'https://www.eporner.com' + raw; },
+        nameRx: [/title="([^"]+)"/, /alt="([^"]+)"/, /<span>([^<]{2,60})<\/span>/],
+        thumbRx: [/data-src="(https?:\/\/[^"]+\.jpe?g[^"]*)"/i]
+      });
+    }).catch(function() { return []; });
+  },
+
+  browseByModel: function(modelUrl, page) {
+    var p = page || 1; var url = modelUrl.replace(/\/+$/,'') + '/' + p + '/';
+    return cherryFetch(url).then(function(html) {
+      var items = _epornerRelated(html);
+      return { items: items, total_pages: _derivePages(items.length, p, 38) };
+    }).catch(function(){ return { items: [], total_pages: 0 }; });
+  }
+});
+
+// ---- xHamster (added v0.13.21) ----
+// Every listing page embeds its cards as JSON (`window.initials` → …videoThumbProps[]): title
+// (RU-localised on ru.xhamster.com), pageURL, duration (s), views, thumbURL (webp),
+// trailerFallbackUrl (h264 hover clip; trailerURL is AV1 — TV WebViews can't decode it).
+// URLs: feed /{p} (trending), /newest/{p}, /best[/weekly|/monthly]/{p}; categories
+// /categories/{slug}[/newest|/best…]/{p}; search /search/{q}?page={p} (the site's own full-text
+// search, RU or EN); pornstars /pornstars/{p} + /pornstars/{slug}/{p}.
+// Stream: the video page PRELOADS the HLS master (<link rel="preload" href="…video-nss…m3u8">) —
+// multi-quality, token NOT IP-bound (stand: device-issued master + segments fetched via the VPS →
+// 206). The mp4 "sources" ARE IP-bound (data={ip}-dvp) → never used. m3u8 → inner player on
+// Android (playVideo). The page host is VPS-routed + force-proxied on Android: the native fetch
+// tripped on HTTP 103 Early Hints and the CF worker got a 503 once; the VPS is steady.
+function _xhInitials(html) {
+    var m = /window\.initials\s*=\s*(\{[\s\S]*?\});\s*<\/script>/.exec(html);
+    if (!m) return null;
+    try { return JSON.parse(m[1]); } catch (e) { return null; }
+}
+
+// The page's main card list: the LONGEST videoThumbProps[] that is not the "moments" (shorts)
+// block — pornstar pages put momentsListComponent before the real videoListProps.
+function _xhThumbProps(root) {
+    var best = null;
+    function walk(o, path, depth) {
+        if (!o || typeof o !== 'object' || depth > 6) return;
+        if (Object.prototype.toString.call(o) === '[object Array]') {
+            for (var i = 0; i < o.length && i < 3; i++) walk(o[i], path, depth + 1);
+            return;
+        }
+        if (o.videoThumbProps && o.videoThumbProps.length && !/moment/i.test(path)) {
+            if (!best || o.videoThumbProps.length > best.length) best = o.videoThumbProps;
+        }
+        for (var k in o) {
+            if (o.hasOwnProperty(k) && o[k] && typeof o[k] === 'object') walk(o[k], path + '/' + k, depth + 1);
+        }
+    }
+    walk(root, '', 0);
+    return best || [];
+}
+
+function _xhCards(html) {
+    var root = _xhInitials(html);
+    if (!root) return [];
+    var arr = _xhThumbProps(root), items = [], seen = {};
+    for (var i = 0; i < arr.length; i++) {
+        var v = arr[i];
+        if (!v || !v.pageURL || !v.id || seen[v.id]) continue;
+        seen[v.id] = true;
+        items.push({
+            id: 'xh-' + v.id,
+            source: 'xhamster',
+            title: _decodeHtml(v.title || '') || _titleFromUrl(v.pageURL),
+            thumb: v.thumbURL || v.previewThumbURL || '',
+            preview: v.trailerFallbackUrl || v.trailerURL || undefined,
+            url: v.pageURL,
+            duration: parseInt(v.duration, 10) || 0,
+            views: parseInt(v.views, 10) || 0
+        });
+    }
+    return items;
+}
+
+// Pornstar index cards: the first pornstars[] whose entries carry pageURL (layoutPage.pornstarListProps).
+function _xhModels(html) {
+    var root = _xhInitials(html);
+    if (!root) return [];
+    var list = null;
+    function walk(o, depth) {
+        if (list || !o || typeof o !== 'object' || depth > 5) return;
+        if (Object.prototype.toString.call(o) === '[object Array]') {
+            for (var i = 0; i < o.length && i < 3; i++) walk(o[i], depth + 1);
+            return;
+        }
+        if (o.pornstars && o.pornstars.length && o.pornstars[0] && o.pornstars[0].pageURL) { list = o.pornstars; return; }
+        for (var k in o) {
+            if (o.hasOwnProperty(k) && o[k] && typeof o[k] === 'object') walk(o[k], depth + 1);
+        }
+    }
+    walk(root, 0);
+    var items = [], seen = {};
+    for (var i = 0; list && i < list.length; i++) {
+        var m = list[i];
+        if (!m || !m.pageURL || seen[m.pageURL]) continue;
+        seen[m.pageURL] = true;
+        items.push({ name: _decodeHtml(m.name || '') || _humanizeName(m.pageURL.split('/').pop()),
+                     url: m.pageURL, thumb: m.imageThumbUrl || m.logoThumbUrl || '' });
+    }
+    return items;
+}
+
+// lastPageNumber (feed/category/pornstar pages) or maxPages (search); else derive from fullness.
+function _xhPages(html, page, itemsLen) {
+    var m = /"lastPageNumber":(\d+)/.exec(html) || /"maxPages":(\d+)/.exec(html);
+    return (m && parseInt(m[1], 10)) || _derivePages(itemsLen, page, 46);
+}
+
+// Sort → path segment; `trend` (site root = trending) is the «По популярности» default.
+var _XH_SORT = { trend: '', newest: '/newest', best: '/best', 'best-weekly': '/best/weekly', 'best-monthly': '/best/monthly' };
+function _xhUrl(category, page, sort) {
+    var p = page || 1;
+    var seg = _XH_SORT[sort || 'trend'];
+    if (seg === undefined) seg = '';
+    var path = (category ? '/categories/' + category : '') + seg;
+    return 'https://ru.xhamster.com' + path + (p > 1 ? '/' + p : (path ? '' : '/'));
+}
+
+SOURCES.push({
+    id: 'xhamster',
+    name: 'xHamster',
+    host: 'ru.xhamster.com',
+    cfg: { categories: _cats('russian:Русские,amateur:Любительницы,anal:Анал,asian:Азиатки,bbw:Толстушки,big-ass:Большие жопы,big-tits:Большие титьки,blonde:Блондинки,blowjob:Минет,brunette:Брюнетки,casting:Кастинг,cheating:Измена,creampie:Кримпай,cuckold:Куколд,cumshot:Камшот,double-penetration:Двойное проникновение,gangbang:Генгбенг,hairy:Волосатые,handjob:Хенджоб,hardcore:Хардкор,homemade:Домашнее,indian:Индийки,interracial:Межрасовое,latina:Латинки,lesbian:Лесбиянки,lingerie:Кружевное белье,massage:Массаж,mature:Зрелые,milf:Милфа,mom:Мамки,orgasm:Оргазм,pov:POV,redhead:Рыжая,squirting:Сквирт,stockings:В чулках,18-year-old:18 летние,threesome:Тройничок,vintage:Винтаж,webcam:Веб-камера,wife:Жена,turkish:Турки,skinny:Худые,granny:Бабушки,bdsm:БДСМ,hentai:Хентай,czech:Чешки,french:Француженки,ukrainian:Украинки,office:В офисе,nurse:Медсестра,beach:На пляже,arab:Арабки,chinese:Китаянки,thai:Тайки,british:Британки'),
+           sorts: _cats('trend:По популярности,newest:Свежее,best-weekly:Лучшие за неделю,best-monthly:Лучшие за месяц,best:Лучшие за всё время') },
+
+    search: function (query, page) {
+        var p = page || 1;
+        var url = 'https://ru.xhamster.com/search/' + encodeURIComponent(query) + (p > 1 ? '?page=' + p : '');
+        return cherryFetch(url).then(function (html) {
+            var items = _xhCards(html);
+            return { items: items, total_pages: _xhPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    browse: function (category, page, sortId) {
+        var p = page || 1;
+        return cherryFetch(_xhUrl(category, p, sortId)).then(function (html) {
+            var items = _xhCards(html);
+            return { items: items, total_pages: _xhPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    // «Похожие» = the player's own relatedVideos list on the video page (JSON).
+    getRelated: function (video) {
+        if (!video || !video.url) return Promise.resolve([]);
+        return cherryFetch(video.url).then(function (html) {
+            var root = _xhInitials(html);
+            var rel = root && root.xplayerPluginSettings && root.xplayerPluginSettings.relatedVideos;
+            if (!rel || !rel.length) return [];
+            return rel.filter(function (r) { return r && r.url && r.url !== video.url; }).slice(0, 20).map(function (r) {
+                return { id: 'xh-' + (r.idHash || r.url), source: 'xhamster', title: _decodeHtml(r.title || '') || _titleFromUrl(r.url),
+                         thumb: r.thumbUrl || '', url: r.url, duration: parseInt(r.duration, 10) || 0,
+                         views: parseInt(r.views, 10) || 0, hd: r.isHD ? 'HD' : undefined };
+            });
+        }).catch(function () { return []; });
+    },
+
+    // Stream order (stand 2026-10-07 — 3 of 4 pages had moved off video-nss.xhcdn.com to
+    // video7 / video-nss-a / video-b, so the old host-pinned regex returned NO url → «не играет»):
+    //   1) the page's direct H.264 MP4 map ("mp4":{"480p":…,"720p":…}) — plays in any TV player;
+    //   2) the HLS master from <link rel=preload> on ANY *.xhcdn.com host. It is AV1
+    //      (_TPL_.av1.mp4.m3u8) — black screen on TVs without AV1 decode — so try the H.264
+    //      twin first (path-token hosts serve it; key= hosts answer 403 → keep AV1).
+    getStream: function (video) {
+        return cherryFetch(video.url).then(function (html) {
+            var block = (/"mp4":\{[^{}]*\}/.exec(html) || [''])[0].replace(/\\\//g, '/');
+            var quality = {}, qm, qrx = /"(\d{3,4}p)":"(https:[^"]+?\.mp4[^"]*)"/g;
+            while ((qm = qrx.exec(block))) if (parseInt(qm[1], 10) >= 360) quality[qm[1]] = qm[2];
+            if (Object.keys(quality).length) return { url: bestQualityUrl(quality), quality: quality };
+            var m = /<link rel="preload" href="(https:\/\/[a-z0-9.-]+\.xhcdn\.com\/[^"]+\.m3u8)"/.exec(html) ||
+                    /"(https:(?:\\\/\\\/|\/\/)[a-z0-9.-]+\.xhcdn\.com(?:\\\/|\/)[^"]+?\.m3u8)"/.exec(html);
+            if (!m) return { url: '', quality: {} };
+            var hls = m[1].replace(/\\\//g, '/');
+            var h264 = hls.replace('.av1.mp4.m3u8', '.h264.mp4.m3u8');
+            if (h264 === hls) {
+                // key= hosts serve only the AV1 master (…/media=hls4/multi=…). On Android its picture never
+                // decodes (BRAVIA 2026-10-11: MX audio only, WebView demuxer error) although the WebView claims
+                // AV1 support — take the page's open H.264 MP4 (the <noscript> player, ≤480p) instead.
+                var mp4 = _isAndroid() && /src="(https:\/\/video\d*\.xhcdn\.com\/key=[^"]+?(\d{3,4})p\.h264\.mp4)"/.exec(html);
+                if (mp4) { var q = {}; q[mp4[2] + 'p'] = mp4[1]; return { url: mp4[1], quality: q }; }
+                return { url: hls, quality: {} };
+            }
+            return cherryFetch(h264).then(function (t) {
+                return { url: /^\s*#EXTM3U/.test(t || '') ? h264 : hls, quality: {} };
+            }, function () { return { url: hls, quality: {} }; });
+        }).catch(function () { return { url: '', quality: {} }; });
+    },
+
+    // Pornstar index /pornstars/{p} (547 pages, 60/page) — JSON like the cards (…pornstarListProps.pornstars[]).
+    getModels: function (page) {
+        var p = page || 1;
+        return cherryFetch('https://ru.xhamster.com/pornstars' + (p > 1 ? '/' + p : '')).then(_xhModels)
+            .catch(function () { return []; });
+    },
+
+    browseByModel: function (modelUrl, page) {
+        var p = page || 1;
+        var url = modelUrl.replace(/\/+$/, '') + (p > 1 ? '/' + p : '');
+        return cherryFetch(url).then(function (html) {
+            var items = _xhCards(html);
+            return { items: items, total_pages: _xhPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    }
+});
+
+// ---- Spankbang ----
+SOURCES.push({
+  id: 'spankbang',
+  name: 'Spankbang',
+  // Behind a Cloudflare challenge from every proxy tier (2026-10-08: listing + getStream empty,
+  // all 5 favorites dead) — kept registered so its favorites/history cards still resolve.
+  disabled: true,
+  cfg: { categories: _cats('amateur:Любительское,anal:Анал,anime:Аниме,arab:Арабское,asian:Азиатки,ass:Жопа,babe:Красотки,bbc:BBC,bbw:BBW,bdsm:БДСМ,blonde:Блондинки,blowjob:Минет,bondage:Бондаж,british:Британское,brunette:Брюнетки,busty:Грудастые,cam:Вебкам,casting:Кастинг,cheating:Измена,chinese:Китайское,compilation:Компиляция,cosplay:Косплей,creampie:Кремпай,cuckold:Куколд,cumshot:Камшот,ebony:Чёрные,feet:Ножки,femdom:Фемдом,fetish:Фетиш,gangbang:Групповуха,hentai:Хентай,indian:Индийское,japanese:Японское,latina:Латинки,massage:Массаж,milf:MILF,pov:POV,shemale:Трансы,solo:Соло,squirt:Сквирт,stepmom:Мачеха,teen:Молодые,big+tits:Большие сиськи,big+ass:Большая жопа'),
+    // GLOBAL-feed sorts: per-category sort unsupported; sort is a separate listing root /{sort}/{page}/.
+    sorts: _cats('new_videos:Свежее,most_popular:По популярности,trending_videos:В тренде,upcoming:Скоро') },
+  host: 'ru.spankbang.com',
+
+  _parseCards: function(html) {
+    var items = [];
+    // Splits AFTER class="...video-item..." quote — data-video attr remains in each block
+    var blocks = html.split(/<div[^>]+class="[^"]*video-item[^"]*"/);
+    for (var i = 1; i < blocks.length; i++) {
+      var block = blocks[i];
+      // href pattern: /{id}/video/
+      var hrefMatch = block.match(/href="\/([\w-]+)\/video\//);
+      if (!hrefMatch) continue;
+      var id = hrefMatch[1];
+      var videoUrl = 'https://ru.spankbang.com/' + id + '/video/';
+
+      // Only accept absolute https:// URLs — skips data: placeholders from lazy-loaders
+      var thumb = '';
+      var tM = block.match(/data-(?:src|original|lazy|thumb)="(https?:\/\/[^"]+\.(?:jpg|jpeg|webp|png)[^"]*)"/i) ||
+               block.match(/src="(https?:\/\/tbi\.sb-cd\.com\/[^"]+)"/i) ||
+               block.match(/src="(https?:\/\/[^"]+\.(?:jpg|jpeg|webp)(?:\?[^"]*)?)"/i);
+      if (tM) thumb = tM[1];
+
+      // Preview: data-video on the card div, or <source>/<video> inside card
+      var previewMatch = block.match(/data-video="([^"]+)"/) ||
+                         block.match(/<source[^>]+src="([^"]+\.(?:mp4|webm))"/) ||
+                         block.match(/<video[^>]+src="([^"]+\.(?:mp4|webm))"/);
+      var preview = previewMatch ? previewMatch[1] : '';
+
+      // Title: class with "n" or similar label
+      var titleMatch = block.match(/<div[^>]*class="[^"]*\bn\b[^"]*"[^>]*>([\s\S]*?)<\/div>/) ||
+                       block.match(/title="([^"]+)"/) ||
+                       block.match(/<a[^>]+title="([^"]+)"/);
+      var title = titleMatch ? stripTags(titleMatch[1]) : '';
+      if (!title) title = _titleFromUrl(videoUrl);
+
+      // Duration: span class "i-f" or similar
+      var durMatch = block.match(/<span[^>]*class="[^"]*i-f[^"]*"[^>]*>([^<]+)/) ||
+                     block.match(/<span[^>]*class="[^"]*duration[^"]*"[^>]*>([^<]+)/);
+      var duration = durMatch ? parseDur(durMatch[1].trim()) : 0;
+
+      items.push({
+        id: 'sb-' + id,
+        source: 'spankbang',
+        title: title,
+        thumb: thumb,
+        preview: preview,
+        url: videoUrl,
+        duration: duration,
+        views: 0
+      });
+    }
+    return items;
+  },
+
+  _parseTotalPages: function(html) {
+    // Look for last page number in pagination links
+    var pageNums = [];
+    var re = /href="[^"]*\/(\d+)\/"[^>]*>[^<]*\d/g;
+    var m;
+    while ((m = re.exec(html)) !== null) {
+      var n = parseInt(m[1], 10);
+      if (!isNaN(n) && n > 0) pageNums.push(n);
+    }
+    if (pageNums.length) return Math.max.apply(null, pageNums);
+    return 20;
+  },
+
+  search: function(query, page) {
+    var self = this;
+    var p = page || 1;
+    var q = encodeURIComponent(query);
+    var url = 'https://ru.spankbang.com/s/' + q + '/' + p + '/';
+    return cherryFetch(url).then(function(html) {
+      var items = self._parseCards(html);
+      var total = self._parseTotalPages(html);
+      return { items: items, total_pages: total };
+    }).catch(function() { return { items: [], total_pages: 0 }; });
+  },
+
+  browse: function(category, page, sort) {
+    var self = this;
+    var p = page || 1;
+    // CATEGORY (search-as-category) → /s/{slug}/{page}/ (no sort — site has no per-category sort).
+    // NO category → GLOBAL sorted feed /{sort}/{page}/, defaulting to most_popular (По популярности).
+    var url = category
+      ? _buildCatUrl('https://ru.spankbang.com/s/{slug}/{page}/', category, p, 1, true)
+      : 'https://ru.spankbang.com/' + (sort || 'new_videos') + '/' + p + '/';
+    return cherryFetch(url).then(function(html) {
+      var items = self._parseCards(html);
+      var total = self._parseTotalPages(html);
+      return { items: items, total_pages: total };
+    }).catch(function() { return { items: [], total_pages: 0 }; });
+  },
+
+  getStream: function(video) {
+    return cherryFetch(video.url).then(function(html) {
+      // Phase 1 (PRIMARY): quality map JS literal
+      var qMap = {};
+      var qRe = /'([0-9]+(?:p|k))'\s*:\s*\['(https?:\/\/[^']+)'/gi;
+      var qm;
+      while ((qm = qRe.exec(html)) !== null) {
+        qMap[qm[1]] = qm[2];
+      }
+      if (Object.keys(qMap).length) {
+        return { url: bestQualityUrl(qMap), quality: qMap };
+      }
+
+      // Phase 2 (FALLBACK): streamkey POST
+      var skMatch = html.match(/data-streamkey="([^"]+)"/);
+      if (skMatch) {
+        var streamkey = skMatch[1];
+        return cherryPost(
+          'https://ru.spankbang.com/api/videos/stream',
+          'id=' + streamkey + '&data=0'
+        ).then(function(text) {
+          var data;
+          try { data = JSON.parse(text); } catch (e) { return extractStreams(html); }
+          var q = {};
+          Object.keys(data).forEach(function(k) {
+            if (typeof data[k] === 'string' && data[k].indexOf('http') === 0) q[k] = data[k];
+          });
+          var best = bestQualityUrl(q);
+          if (best) return { url: best, quality: q };
+          return extractStreams(html);
+        }).catch(function() { return extractStreams(html); });
+      }
+
+      // Phase 3: generic extractStreams
+      return extractStreams(html);
+    }).catch(function() { return { url: '', quality: {} }; });
+  },
+
+  getModels: function(page) {
+    var p = page || 1;
+    var url = p > 1 ? 'https://ru.spankbang.com/pornstars/' + p : 'https://ru.spankbang.com/pornstars';
+    return cherryFetch(url).then(function(html) {
+      var items = []; var seen = {};
+      var blocks = html.split('data-testid="hottest-models"');
+      for (var i = 1; i < blocks.length; i++) {
+        var b = blocks[i];
+        var hrefM = b.match(/href="(\/[a-z0-9]+\/pornstar\/[^"]+\/)"/i); if (!hrefM) continue;
+        var u = 'https://ru.spankbang.com' + hrefM[1]; if (seen[u]) continue; seen[u] = 1;
+        var nameM = b.match(/alt="([^"]+)"/);
+        var name = nameM ? nameM[1] : decodeURIComponent(hrefM[1].split('/pornstar/')[1] || '').replace(/[+\/]/g,' ').trim();
+        var thumbM = b.match(/data-src="(\/\/spankbang\.com\/pornstarimg\/[^"]+)"/i);
+        items.push({ name: name, url: u, thumb: thumbM ? 'https:' + thumbM[1] : '' });
+      }
+      return items;
+    }).catch(function() { return []; });
+  },
+
+  browseByModel: function(modelUrl, page) {
+    var self = this; var p = page || 1;
+    var url = p > 1 ? modelUrl + p + '/' : modelUrl;
+    return cherryFetch(url).then(function(html) {
+      return { items: self._parseCards(html), total_pages: self._parseTotalPages(html) };
+    }).catch(function(){ return { items: [], total_pages: 0 }; });
+  }
+});
+
+
+// ---- HQPorner ----
+SOURCES.push({
+  id: 'hqporner',
+  name: 'HQPorner',
+  host: 'hqporner.com',
+
+  _parseCards: function(html) {
+    var items = [];
+    var seen = {};
+    // Cards are in <section class="box feature"> blocks; skip first (site header)
+    var raw = html.split('<section class="box feature"');
+    for (var i = 2; i < raw.length; i++) {
+      var block = raw[i];
+      var hrefMatch = block.match(/href="((?:https?:\/\/hqporner\.com)?\/hdporn\/[^"]+)"/);
+      if (!hrefMatch) continue;
+      var videoUrl = hrefMatch[1].charAt(0) === '/'
+        ? 'https://hqporner.com' + hrefMatch[1]
+        : hrefMatch[1];
+
+      var idMatch = videoUrl.match(/\/hdporn\/([^/]+?)(?:\.html)?(?:\/)?$/);
+      var id = idMatch ? idMatch[1] : videoUrl;
+      if (seen[id]) continue;
+      seen[id] = true;
+
+      // Thumbnail: in defaultImage(...) or first img
+      var thumbMatch = block.match(/defaultImage\("(\/\/[^"]+_main\.jpg)"/) ||
+                       block.match(/<img[^>]*src="([^"]+)"/);
+      var rawThumb = thumbMatch ? (thumbMatch[1].charAt(0) === '/' ? 'https:' + thumbMatch[1] : thumbMatch[1]) : '';
+      // CDN blocks direct hotlink access — route through proxy
+      var thumb = rawThumb ? buildProxyUrl(rawThumb) : '';
+
+      // Title: in <h3 class="meta-data-title"><a>TITLE</a></h3>
+      var titleMatch = block.match(/<h3[^>]*meta-data-title[^>]*><a[^>]*>([^<]+)<\/a>/) ||
+                       block.match(/<h3[^>]*><a[^>]*>([^<]+)<\/a>/);
+      var slug = id.replace(/^\d+-/, '').replace(/_/g, ' ');
+      var title = titleMatch ? stripTags(titleMatch[1]) : slug;
+
+      // Duration: "12m 28s" format in <span class="icon fa-clock-o...">
+      var durMatch = block.match(/fa-clock-o[^>]*>([^<]+)/) ||
+                     block.match(/([\d]+:[\d]{2})/);
+      var duration = durMatch ? parseDur(durMatch[1].trim()) : 0;
+
+      items.push({
+        id: 'hqp-' + id,
+        source: 'hqporner',
+        title: title,
+        thumb: thumb,
+        url: videoUrl,
+        duration: duration,
+        views: 0
+      });
+    }
+    return items;
+  },
+
+  search: function(query, page) {
+    // Canonical GET search: form is <form method="get" action="/"> → /?q={query}&p={N}
+    // with a real paginator (?q=...&p=2, &p=3). The old /search/{slug}/ route soft-404s
+    // (falls back to the "anal" category → wrong cards). 50 cards/page → _derivePages(50).
+    var self = this;
+    var p = page || 1;
+    var url = 'https://hqporner.com/?q=' + encodeURIComponent(query) + '&p=' + p;
+    return cherryFetch(url).then(function(html) {
+      var items = self._parseCards(html);
+      return { items: items, total_pages: _derivePages(items.length, p, 50) };
+    }).catch(function() { return { items: [], total_pages: 0 }; });
+  },
+
+  cfg: { categories: _cats('4k-porn:4K porn,1080p-porn:1080p porn,60fps-porn:60 FPS porn,amateur:Amateur,anal-sex-hd:Anal,asian:Asian,babe:Babe,bdsm:BDSM,beach-porn:Beach,big-ass:Big ass,big-dick:Big dick,big-tits:Big tits,bisexual:Bisexual,blonde:Blonde,blowjob:Blowjob,bondage:Bondage,brunette:Brunette,casting:Casting,creampie:Creampie,cumshot:Cumshot,deepthroat:Deepthroat,ebony:Ebony,fetish:Fetish,fingering:Fingering,fisting:Fisting,gangbang:Gangbang,group-sex:Group sex,hairy-pussy:Hairy pussy,handjob:Handjob,hentai:Hentai,interracial:Interracial,japanese-girls-porn:Japanese,latina:Latina,lesbian:Lesbian,long-hair:Long hair,masturbation:Masturbation,mature:Mature,milf:MILF,old-and-young:Old and young,orgasm:Orgasm,orgy:Orgy,outdoor:Outdoor,pickup:Pickup,pov:POV,public:Public,pussy-licking:Pussy licking,redhead:Redhead,russian:Russian,porn-massage:Sex massage,sex-parties:Sex party,shaved-pussy:Shaved pussy,shemale:Shemale,small-tits:Small tits,squirt:Squirt,stockings:Stockings,tattooed:Tattooed,teen-porn:Teen porn,threesome:Threesome,vintage:Vintage'),
+    // GLOBAL-feed sorts: per-category sort unsupported; sorts are base-path swaps.
+    // 'top/week'/'top/month' are slash-bearing path bases → https://hqporner.com/top/week/{p}.
+    sorts: _cats('hdporn:Свежее,top:По популярности,top/week:За неделю,top/month:За месяц') },
+
+  browse: function(category, page, sort) {
+    var self = this;
+    var p = page || 1;
+    // CATEGORY → /category/{slug}/{page} (no sort — site has no per-category sort).
+    // NO category → GLOBAL feed base /{sort} (default top = По популярности); page appended as /{p} when p>1.
+    var url;
+    if (category) {
+      url = _buildCatUrl('https://hqporner.com/category/{slug}/{page}', category, p, 1, true);
+    } else {
+      var base = 'https://hqporner.com/' + (sort || 'hdporn');
+      url = p > 1 ? base + '/' + p : base;
+    }
+    return cherryFetch(url).then(function(html) {
+      var items = self._parseCards(html);
+      // Generous forward window; the cross-page dedup guard caps it cleanly at the real
+      // end. (The old `/hdporn/N` page-number scrape matched the leading digits of video
+      // SLUGS, e.g. /hdporn/82041-... → 82041, producing a huge bogus total_pages.)
+      return { items: items, total_pages: _derivePages(items.length, p, 50) };
+    }).catch(function() { return { items: [], total_pages: 0 }; });
+  },
+
+  // «Similar HD porn» box on the video page (no related before 2026-10-07).
+  getRelated: function(video) {
+    var self = this;
+    return _relatedSection(function (h) { return self._parseCards(h); }, /Similar HD porn/, /<h2 class="major"|<footer/)(video);
+  },
+
+  getStream: function(video) {
+    return cherryFetch(video.url).then(function(html) {
+      // HQPorner loads its player via AJAX: url: '/blocks/altplayer.php?i=//mydaddy.cc/video/ID/'
+      var embedM = /url:\s*['"]\/blocks\/altplayer\.php\?i=\/\/mydaddy\.cc\/video\/([^'"\/]+)\//i.exec(html);
+      if (embedM) {
+        return cherryFetch('https://mydaddy.cc/video/' + embedM[1] + '/').then(function(embedHtml) {
+          var clean = embedHtml.replace(/\\"/g, '"');
+          // bigcdn.cc serves multi-quality: //sN.bigcdn.cc/pubs/HASH/HEIGHT.mp4
+          // Hash may contain dots (e.g. "6a14af53d51110.31758800") — use [^/\s"']+ instead of hex
+          var bigRe = /(?:https?:)?\/\/(s\d+\.bigcdn\.cc)\/pubs\/([^\/\s"']+)\/(\d{3,4})\.mp4/gi;
+          var hashM = bigRe.exec(clean);
+          if (hashM) {
+            var cdnHost = hashM[1], hash = hashM[2];
+            // Collect all heights present in the HTML to only offer existing qualities
+            bigRe.lastIndex = 0;
+            var seenHeights = {};
+            var hm2;
+            while ((hm2 = bigRe.exec(clean)) !== null) {
+              if (hm2[2] === hash) seenHeights[hm2[3]] = true;
+            }
+            var heights = Object.keys(seenHeights).length ? Object.keys(seenHeights) : [hashM[3]];
+            heights.sort(function(a, b) { return parseInt(a, 10) - parseInt(b, 10); });
+            // Return RAW stream URLs — px() in playVideo is the single proxy-decision
+            // point (browser → proxied via buildProxyUrl, Android → raw device-IP fetch).
+            var quality = {};
+            heights.forEach(function(h) {
+              quality[h + 'p'] = 'https://' + cdnHost + '/pubs/' + hash + '/' + h + '.mp4';
+            });
+            var best = quality[heights[heights.length - 1] + 'p'];
+            return { url: best, quality: quality };
+          }
+          var result = extractStreams(clean);
+          return result.url ? result : { url: '', quality: {} };
+        }).catch(function() { return { url: '', quality: {} }; });
+      }
+      return extractStreams(html);
+    }).catch(function() { return { url: '', quality: {} }; });
+  },
+
+  getModels: function(page) {
+    if ((page || 1) > 1) return Promise.resolve([]);   // /girls is a single page
+    return cherryFetch('https://hqporner.com/girls').then(function(html) {
+      var sec = html; var gi = html.indexOf('<span>Girls</span>');
+      if (gi >= 0) sec = html.slice(gi, html.indexOf('</section>', gi));
+      var items = []; var re = /<a href="(\/actress\/[^"]+)" class="sidebar-link[^"]*">([^<]+)<\/a>/g; var m;
+      while ((m = re.exec(sec)) !== null) items.push({ name: stripTags(m[2]).trim(), url: 'https://hqporner.com' + m[1], thumb: '' });
+      return items;
+    }).catch(function() { return []; });
+  },
+
+  browseByModel: function(modelUrl, page) {
+    var self = this; var p = page || 1;
+    var url = p > 1 ? modelUrl + '/' + p : modelUrl;
+    return cherryFetch(url).then(function(html) {
+      var items = self._parseCards(html);
+      return { items: items, total_pages: _derivePages(items.length, p, 50) };
+    }).catch(function(){ return { items: [], total_pages: 0 }; });
+  }
+});
+
+// ---- YouJizz ----
+SOURCES.push({
+  id: 'youjizz',
+  name: 'YouJizz',
+  cfg: { categories: _cats('amateur:Amateur,anal:Anal,asian:Asian,bbc:BBC,big-ass:Big Ass,big-tits:Big Tits,blonde:Blonde,blowjob:Blowjob,casting:Casting,compilation:Compilation,creampie:Creampie,daddy:Daddy,ebony:Ebony,gangbang:Gangbang,hentai:Hentai,homemade:Homemade,interracial:Interracial,japanese:Japanese,japanese-uncensored:Japanese Uncensored,japanese-wife:Japanese Wife,latina:Latina,massage:Massage,mature:Mature,milf:MILF,mind-control:Mind Control,pinay:Pinay,pov:POV,sister:Sister,sleeping:Sleeping,stepdaughter:Stepdaughter,stepmom:Stepmom,stepmom-and-son:Stepmom And Son,stepsister:Stepsister,superheroine:Superheroine,taboo:Taboo,teen:Teen,threesome:Threesome,ai-generated:AI Generated,czech-streets:Czech Streets,private-society:Private Society'),
+    // GLOBAL-feed sorts: per-category sort unsupported; sort is a separate listing root /{sort}/{page}.html.
+    sorts: _cats('most-popular:По популярности,trending:В тренде,top-rated:По рейтингу,top-rated-week:Топ за неделю,top-rated-month:Топ за месяц,highdefinition:Только HD,newest-clips:Свежее') },
+  host: 'youjizz.com',
+
+  _parseCards: function(html) {
+    var items = [];
+    var blocks = html.split('<div class="video-thumb"');
+
+    for (var i = 1; i < blocks.length; i++) {
+      var block = blocks[i];
+      var hrefMatch = block.match(/href="(\/videos\/[^"]+\.html)"/);
+      if (!hrefMatch) continue;
+      var href = hrefMatch[1];
+      var videoUrl = 'https://www.youjizz.com' + href;
+
+      // ID: digits from /videos/{slug}-{id}.html
+      var idMatch = href.match(/(\d+)\.html/);
+      var id = idMatch ? idMatch[1] : String(i);
+
+      var thumbMatch = block.match(/data-original="([^"?#]+\.jpe?g)/i) ||
+                       block.match(/data-src="([^"?#]+\.jpe?g)/i) ||
+                       block.match(/src="([^"?#]+\.jpe?g)/i);
+      var thumb = thumbMatch ? thumbMatch[1] : '';
+      // youjizz serves protocol-relative thumbs (//cdne-pics.youjizz.com/…); normalize to
+      // https:// so cards render consistently (matches every other source's absolute URL).
+      if (thumb.indexOf('//') === 0) thumb = 'https:' + thumb;
+
+      var titleMatch = block.match(/<div[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\/div>/);
+      var title = titleMatch ? stripTags(titleMatch[1]) : '';
+      if (!title) {
+        var altTitle = block.match(/title="([^"]+)"/);
+        title = altTitle ? altTitle[1] : '';
+      }
+      // Decode HTML entities (&amp; etc.) like other adapters before the URL fallback.
+      if (title) title = _decodeHtml(title);
+      if (!title) title = _titleFromUrl(videoUrl);
+
+      // Duration: real markup is <span class="time"><i class="fa fa-clock-o"></i>&nbsp;11:23</span>
+      // (NOT class="duration"). Capture the bare HH:MM / Nmin token after the icon+&nbsp;.
+      var durMatch = block.match(/class="time"[^>]*>(?:\s*<[^>]+>)*\s*(?:&nbsp;)?\s*([\d:]+(?:\s*min)?)/i) ||
+                     block.match(/<div[^>]*class="[^"]*duration[^"]*"[^>]*>([^<]+)/);
+      var duration = durMatch ? parseDur(durMatch[1].trim()) : 0;
+
+      // HD badge: real per-card marker <span class="i-hd" ...>HD</span>.
+      // Confirmed via curl on youjizz.com. No resolution exposed → 'HD' only.
+      var hd = /class="i-hd"/.test(block) ? 'HD' : '';
+
+      // Views: real per-card marker <span class="format-views">236827</span>.
+      var viewsMatch = block.match(/class="[^"]*format-views[^"]*"[^>]*>\s*([\d.,]+)/);
+      var views = viewsMatch ? parseViews(viewsMatch[1]) : 0;
+
+      // Hover-preview mp4 — the <a class="frame video"> carries data-clip="…-clip.mp4?…".
+      // URL is protocol-relative (//cdne-mobile.youjizz.com/…); prefix https:.
+      var pvM = block.match(/data-clip="([^"]+\.mp4[^"]*)"/i);
+      var preview = pvM ? pvM[1].replace(/^\/\//, 'https://') : '';
+
+      items.push({
+        id: 'yj-' + id,
+        source: 'youjizz',
+        title: title,
+        thumb: thumb,
+        hd: hd,
+        url: videoUrl,
+        duration: duration,
+        views: views,
+        preview: preview || undefined
+      });
+    }
+    return items;
+  },
+
+  search: function(query, page) {
+    var self = this;
+    var p = page || 1;
+    var q = encodeURIComponent(query);
+    // youjizz search route is /search/{q}-{page}.html (NOT /search/videos/… — that 404s → 0 results).
+    var url = 'https://www.youjizz.com/search/' + q + '-' + p + '.html';
+    // Status-tolerant: this search route can return a non-200 whose body still holds
+    // result cards (datacenter IP saw a 404); cherryFetch would throw and drop them.
+    return _fetchAny(url).then(function(html) {
+      var items = self._parseCards(html);
+      // Pagination: look for highest page link
+      var pgNums = [];
+      var pgRe = /\/search\/videos\/[^"]*-(\d+)\.html/g;
+      var m;
+      while ((m = pgRe.exec(html)) !== null) {
+        var n = parseInt(m[1], 10);
+        if (!isNaN(n)) pgNums.push(n);
+      }
+      // Prefer the real last-page link; fall back to batch fullness (~30/page).
+      var total = pgNums.length ? Math.max.apply(null, pgNums) : _derivePages(items.length, p, 20);
+      return { items: items, total_pages: total };
+    }).catch(function() { return { items: [], total_pages: 0 }; });
+  },
+
+  browse: function(category, page, sort) {
+    var self = this;
+    var p = page || 1;
+    if (category) {
+      // CATEGORY → /categories/{slug}-{page}.html (1-based page baked into filename; no sort).
+      var curl = _buildCatUrl('https://www.youjizz.com/categories/{slug}-{page}.html', category, p, 1, false);
+      return cherryFetch(curl).then(function(html) {
+        var items = self._parseCards(html);
+        return { items: items, total_pages: _derivePages(items.length, p, 20) };
+      }).catch(function() { return { items: [], total_pages: 0 }; });
+    }
+    // NO category → GLOBAL sorted feed /{sort}/{page}.html (1-based), default most-popular (По популярности).
+    // (Replaces the old paginationless homepage browse, which also fixes its missing pagination.)
+    var url = 'https://www.youjizz.com/' + (sort || 'most-popular') + '/' + p + '.html';
+    return cherryFetch(url).then(function(html) {
+      var items = self._parseCards(html);
+      return { items: items, total_pages: _derivePages(items.length, p, 20) };
+    }).catch(function() { return { items: [], total_pages: 0 }; });
+  },
+
+  getRelated: function(video) {
+    var self = this;
+    if (!video || !video.url) return Promise.resolve([]);
+    return cherryFetch(video.url).then(function(html) {
+      return self._parseCards(html).filter(function(v) {
+        return v.url !== video.url;
+      }).slice(0, 20);
+    }).catch(function() { return []; });
+  },
+
+  getStream: function(video) {
+    return cherryFetch(video.url).then(function(html) {
+      var encMatch = html.match(/Encodings\s*=\s*(\[[\s\S]+?\]);/);
+      if (!encMatch) return extractStreams(html);
+
+      var encodings;
+      try { encodings = JSON.parse(encMatch[1]); } catch (e) { return extractStreams(html); }
+
+      if (!encodings || !encodings.length) return extractStreams(html);
+
+      // Encodings carries BOTH progressive MP4 (cdne-mobile…-h264.mp4) and HLS
+      // (abre-videos…/_hls/…/master.m3u8) entries under IDENTICAL quality labels
+      // (240p…1080p). Taking them indiscriminately let the later HLS entries clobber
+      // the MP4 ones in the quality map, so Lampa got handed an .m3u8 it can't play
+      // inline → external-player picker. Prefer the directly-playable MP4 set; the
+      // px() layer normalizes //protocol-relative and proxies it for inline playback.
+      var quality = {};
+      var firstUrl = '';
+
+      function isHls(u) { return /\.m3u8(\?|$)/i.test(u) || /\/_hls\//i.test(u); }
+
+      encodings.forEach(function(enc) {
+        // Each entry: { filename: 'url', quality: '720', ... }
+        var u = enc.filename || enc.url || enc.file || '';
+        if (!u || isHls(u)) return;            // skip HLS — keep direct MP4 only
+        // youjizz's cdne-mobile CDN PACES each progressive MP4 to ~1.5× its own bitrate,
+        // so 1080p (≈3.6 Mbps, served at only ~5.5 Mbps) starts/buffers slowly on a TV.
+        // On Android the player defaults to the highest quality → cap at ≤720p (≈1.35 Mbps,
+        // ~1.6× headroom = smooth). Browser keeps all qualities. If a video somehow has
+        // only >720p, the fallback block below still surfaces it.
+        if (_isAndroid() && parseInt(enc.quality, 10) > 720) return;
+        var label = enc.quality ? enc.quality + 'p' : (enc.label || enc.format || 'mp4');
+        if (!firstUrl) firstUrl = u;
+        quality[label] = u;
+      });
+
+      // Fallback: if a video somehow exposes ONLY HLS, surface it rather than nothing.
+      if (!firstUrl) {
+        encodings.forEach(function(enc) {
+          var u = enc.filename || enc.url || enc.file || '';
+          if (!u) return;
+          var label = enc.quality ? enc.quality + 'p' : (enc.label || enc.format || 'mp4');
+          if (!firstUrl) firstUrl = u;
+          quality[label] = u;
+        });
+      }
+
+      return { url: firstUrl, quality: quality };
+    }).catch(function() { return { url: '', quality: {} }; });
+  }
+});
+
+// ---- 15. PornOne ----
+SOURCES.push({
+    id: 'pornone',
+    name: 'PornOne',
+    host: 'pornone.com',
+    cfg: { categories: _cats('amateur:Amateur,anal:Anal,asian:Asian,ass:Ass,babes:Babes,bbc:Bbc,bbw:BBW,bdsm:Bdsm,big-boobs:Big Boobs,big-dick:Big Dick,blonde:Blonde,blowjob:Blowjob,brunette:Brunette,bukkake:Bukkake,busty:Busty,cougar:Cougar,creampie:Creampie,cuckold:Cuckold,cumshot:Cumshot,deepthroat:Deepthroat,ebony:Ebony,fetish:Fetish,gangbang:Gangbang,granny:Granny,hairy:Hairy,handjob:Handjob,hardcore:Hardcore,hentai:Hentai,homemade:Homemade,interracial:Interracial,japanese:Japanese,latin:Latin,lesbian:Lesbian,massage:Massage,mature:Mature,milf:MILF,mom:Mom,pawg:Pawg,petite:Petite,pov:POV,public:Public,redhead:Redhead,russian:Russian,squirting:Squirting,stepmom:Stepmom,teen:Teen,threesome:Threesome,toys:Toys,webcams:Webcams,young:Young'), sorts: _cats('newest:Свежее,views:По популярности,views/week:Популярное за неделю,views/month:Популярное за месяц,rating:По рейтингу') },
+
+    search: function (query, page) {
+        var p = page || 1;
+        // The site's own search form: /search/?q={q}&page={p}. The former WP REST
+        // (wp-json …?search=) now returns 0 posts and its ?s= fallback IGNORES the query
+        // (same generic list for anything). Stand-verified: 100% title match (35 cards),
+        // page 2 disjoint.
+        var url = 'https://pornone.com/search/?q=' + encodeURIComponent(query) + '&page=' + p;
+        return cherryFetch(url).then(function (html) {
+            var items = _pornoneCards(html);
+            // Page size differs by egress: 11 cards from the device IP, 35 via the proxy —
+            // use the default floor (≥6 ⇒ more pages) so device-IP paging doesn't stop at p1.
+            return { items: items, total_pages: _derivePages(items.length, p, 12) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    browse: function (category, page, sort) {
+        var self = this;
+        var p = page || 1;
+        if (category) {
+            // Category browses at ROOT /{slug}/{sort}/{page}/ (HTML); reuse _pornoneCards parser.
+            // Sort is a path segment after the slug. Default = newest (Свежее) — matches the
+            // site homepage's "New Porn Videos" ordering; /{slug}/newest/ curl-verified distinct.
+            var s = sort || 'newest';
+            var curl = _buildCatUrl('https://pornone.com/{slug}/' + s + '/{page}/', category, p, 1, true);
+            return cherryFetch(curl).then(function (html) {
+                var items = _pornoneCards(html);
+                return { items: items, total_pages: _pornonePages(html, p, items.length) };
+            }).catch(function () { return { items: [], total_pages: 0 }; });
+        }
+        // NO category → /newest/{p}/ : the paginating "New Porn Videos" feed (same order as
+        // the site homepage, but it actually scrolls). The homepage / and /page/{p}/ DON'T
+        // paginate (/page/2/ → 404), which previously capped the global feed at one page.
+        var url = 'https://pornone.com/newest/' + p + '/';
+        return cherryFetch(url).then(function (html) {
+            var items = _pornoneCards(html);
+            return { items: items, total_pages: _pornonePages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    getRelated: function (video) {
+        if (!video || !video.url) return Promise.resolve([]);
+        return cherryFetch(video.url).then(function (html) {
+            return _pornoneCards(html).filter(function (v) { return v.url !== video.url; }).slice(0, 20);
+        }).catch(function () { return []; });
+    },
+
+    getStream: function (video) {
+        return cherryFetch(video.url).then(function (html) {
+            var clean = html.replace(/\\\//g, '/').replace(/\\"/g, '"');
+            // The player's <source> tags carry the REAL stream:
+            //   <source src="https://sNNNN.pornone.com/vid2/.../{id}_WxH_Nk.mp4?lang=en" res="720">
+            // Anchor strictly on the pornone CDN host so we never pick up the
+            // gallery.vcmdiawe.com livecam ad clips (the "short video that closes fast" bug).
+            var srcRx = /<source\s+src="(https?:\/\/s\d+\.pornone\.com\/vid2\/[^"]+?\.mp4[^"]*)"[^>]*?(?:res|label)="(\d+)p?"/gi;
+            // Return RAW stream URLs — px() in playVideo is the single proxy-decision
+            // point (browser → proxied, Android → raw device-IP fetch so IP-bound
+            // KVS tokens match the natively-fetched page).
+            var quality = {};
+            var best = '', bestRes = -1, sm;
+            while ((sm = srcRx.exec(clean)) !== null) {
+                var url = sm[1], res = parseInt(sm[2], 10) || 0;
+                quality[res + 'p'] = url;
+                if (res > bestRes) { bestRes = res; best = url; }
+            }
+            if (best) {
+                return { url: best, quality: quality };
+            }
+            // Fallback: JSON-LD contentUrl (always the real pornone CDN, never the ad clip).
+            var ld = clean.match(/"contentUrl"\s*:\s*"(https?:\/\/s\d+\.pornone\.com\/vid2\/[^"]+?\.mp4[^"]*)"/i) ||
+                     clean.match(/(https?:\/\/s\d+\.pornone\.com\/vid2\/[^"'\s]+?\.mp4[^"'\s]*)/i);
+            if (ld) return { url: ld[1], quality: {} };
+            return { url: '', quality: {} };
+        }).catch(function () { return { url: '', quality: {} }; });
+    }
+});
+
+function _pornoneCards(html) {
+    var items = [];
+    // Real video cards are <a class="…videocard…"> anchors whose href is the canonical
+    // video URL  https://pornone.com/{cat}/{title-slug}/{id}/[?rr=NNN]  (34–35 per page).
+    // Anchor ON the videocard class — this skips nav/lang/pagination links AND the
+    // viewsIcon stat elements that the old slug-windowing parser turned into junk cards.
+    var cardRx = /<a\s+href="(https?:\/\/pornone\.com\/[^"]*?\/(\d{4,})\/[^"]*)"[^>]*class="[^"]*videocard[^"]*"/gi;
+    var seen = {};
+    var m;
+    while ((m = cardRx.exec(html)) !== null) {
+        var videoUrl = m[1].replace(/[?&]rr=\d+/, '');   // strip the rotation tracker param
+        var id = m[2];
+        if (!id || seen[id]) continue;
+        seen[id] = true;
+
+        // Card body runs to the closing </a>; cap the lookahead so cards can't bleed.
+        var end = html.indexOf('</a>', m.index);
+        var chunk = html.slice(m.index, end === -1 ? m.index + 2500 : end + 4);
+
+        // Thumb: poster .jpg lives in data-src (lazy) or a populated src; either way it
+        // sits under /t/.../{b|d}NNN.jpg — match the FILE, not the data-path directory.
+        // data-path + first data-thumbs frame is the final fallback.
+        var thumb = _attr(chunk, /(?:data-src|src)="(https?:\/\/th-eu4\.pornone\.com\/t\/[^"]+\.jpe?g)"/i);
+        if (!thumb) {
+            var base = _attr(chunk, /data-path="(https?:\/\/th-eu4\.pornone\.com\/[^"]+?)"/i);
+            var frame = _attr(chunk, /data-thumbs="\[(\d+)/);
+            if (base && frame) thumb = base + 'b' + frame + '.jpg';
+        }
+
+        var title = _decodeHtml(
+            _attr(chunk, /<div[^>]*class="[^"]*videotitle[^"]*"[^>]*>([^<]+)<\/div>/i) ||
+            _attr(chunk, /th-eu4\.pornone\.com\/[^"]+"\s+alt="([^"]{6,})"/i)
+        );
+        if (!title) title = _titleFromUrl(videoUrl);
+
+        // Duration sits in the .durlabel span as MM:SS (HD svg precedes the digits).
+        var duration = parseDur(_attr(chunk, /class="[^"]*durlabel[^"]*"[\s\S]*?(\d{1,2}:\d{2}(?::\d{2})?)/i));
+        // Views follow the <i class="…viewsIcon"></i> marker.
+        var views    = parseViews(_attr(chunk, /viewsIcon[^>]*><\/i>\s*([\d.,KkMm]+)/));
+
+        items.push({ id: id, source: 'pornone', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
+    }
+    return items;
+}
+
+function _pornonePages(html, page, itemsLen) {
+    // WP pagination uses ?paged=N (search) or /page/N/ (browse)
+    var m = /paged=(\d+)["'][^>]*(?:last|>>)/i.exec(html) ||
+            /\/page\/(\d+)\/["'][^>]*(?:last|>>)/i.exec(html);
+    return m ? (parseInt(m[1], 10) || _derivePages(itemsLen, page, 20)) : _derivePages(itemsLen, page, 20);
+}
+
+// ---- 1. Porntrex ----
+SOURCES.push({
+    id: 'porntrex',
+    name: 'Porntrex',
+    host: 'porntrex.com',
+    cfg: { categories: _cats('milf:Milf,teen:Teen,mature:Mature,amateur:Amateur,anal:Anal,big-tits:Big Tits,big-ass:Big Ass,blowjob:Blowjob,lesbian:Lesbian,hardcore:Hardcore,pov:POV,blonde:Blonde,brunette:Brunette,busty:Busty,hairy:Hairy,handjob:Handjob,cumshots:Cumshots,doggystyle:Doggystyle,small-tits:Small tits,petite:Petite,fetish:Fetish,bondage:Bondage,college:College,russian:Russian,hentai:Hentai,asian:Asian,japanese:Japanese,indian:Indian,latina:Latina,ebony:Ebony,black:Black,interracial:Interracial,german:German,czech:Czech,arab:Arab,homemade:Homemade,solo:Solo,masturbation:Masturbation,toys:Toys,creampie:Creampie,deepthroat:Deepthroat,gangbang:Gangbang,threesome:Threesome,orgy:Orgy,public:Public,outdoor:Outdoor,massage:Massage,casting:Casting,compilation:Compilation,squirt:Squirt,fisting:Fisting,footjob:Footjob,cuckold:Cuckold,gloryhole:Gloryhole,bukkake:Bukkake,pussy-licking:Pussy licking,ass-licking:Ass licking,double-penetration:Double Penetration (DP),red-head:Red Head,school-girl:School Girl,bbw:BBW,skinny:Skinny,lingerie:Lingerie,uniform:Uniform,office:Office,old-and-young:Old and Young,riding:Riding,fingering:Fingering,strap-on:Strap-on,celebrities:Celebrities,virtual-reality:Virtual Reality (VR)'), sorts: _cats('most-popular:По популярности,most-popular/weekly:Популярное за неделю,most-popular/monthly:Популярное за месяц,top-rated:По рейтингу,longest:Длинные,most-commented:По комментариям') },
+
+    search: function (query, page) {
+        var p = page || 1;
+        // Path pagination — the site ignores ?s=…&page=N (page2 = page1). /search/{q}/{p}/.
+        var url = 'https://www.porntrex.com/search/' + encodeURIComponent(query) + (p > 1 ? '/' + p + '/' : '/');
+        return cherryFetch(url).then(function (html) {
+            var items = _porntrexCards(html);
+            return { items: items, total_pages: _porntrexPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    browse: function (category, page, sort) {
+        var p = page || 1;
+        // Sort is a path segment AFTER the slug, before page: /categories/{slug}/{sort}/{page}/
+        // Default sort = most-popular (По популярности).
+        var s = sort || 'most-popular';
+        var url = category
+            ? _buildCatUrl('https://www.porntrex.com/categories/{slug}/' + s + '/{page}/', category, p, 1, true)
+            : 'https://www.porntrex.com/latest-updates/' + (p > 1 ? p + '/' : '');
+        return cherryFetch(url).then(function (html) {
+            var items = _porntrexCards(html);
+            return { items: items, total_pages: _porntrexPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    getRelated: _relatedFrom(_porntrexCards),
+
+    // Models: /models/ index — cards <a href="/models/{slug}/" title="…"> with an
+    // <img class="thumb" data-src="//ptx.cdntrex.com/contents/models/…"> avatar.
+    // Grid paginates via AJAX (not URL-addressable) but a single fetch exposes the
+    // full roster, so `page` is ignored. Exclude letter-nav /models/{letter}/.
+    // Per-model /models/{slug}/{N}/ renders listing cards (reuse _porntrexCards).
+    getModels: function () {
+        return cherryFetch('https://www.porntrex.com/models/').then(function (html) {
+            return _parseModelIndex(html, {
+                hrefRx: /href="(https?:\/\/(?:www\.)?porntrex\.com\/models\/[a-z0-9][a-z0-9-]+\/)"/g,
+                exclude: function (u) { return /\/models\/[a-z0-9]\/$/i.test(u); },
+                nameRx: [/title="([^"]+)"/, /alt="([^"]+)"/, /class="info"[^>]*>([^<]+)</],
+                thumbRx: [/(?:data-original|data-src|src)="((?:https?:)?\/\/[^"]+\/contents\/models\/[^"?#]+\.jpe?g)/i, /(?:data-original|data-src|src)="((?:https?:)?\/\/[^"?#]+\.jpe?g)/i]
+            });
+        }).catch(function () { return []; });
+    },
+
+    browseByModel: function (modelUrl, page) {
+        var p = page || 1;
+        var u = modelUrl.replace(/\/+$/, '');
+        var url = p > 1 ? u + '/' + p + '/' : u + '/';
+        return cherryFetch(url).then(function (html) {
+            var items = _porntrexCards(html);
+            return { items: items, total_pages: _porntrexPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    getStream: function (video) {
+        return cherryFetch(video.url).then(function (html) {
+            // KVS get_file — collect all MP4 URLs. Capture the FULL absolute URL
+            // (scheme+host) when present so a CDN host (e.g. *.cdntrex.com) is NOT
+            // dropped; only fall back to the page host for host-relative matches.
+            var kvsRx = /((?:https?:)?\/\/[^\s"'<>]+\/)?get_file\/[^\s"'<>]+\.mp4[^\s"'<>]*/g;
+            var found = [];
+            var m;
+            while ((m = kvsRx.exec(html)) !== null) {
+                var candidate = m[0].replace(/['">\s]+$/, '');
+                // Reconstruct absolute URL only if the match lacks scheme/host.
+                // Keep the captured host (e.g. *.cdntrex.com); normalize protocol-relative.
+                var full = /^\/\//.test(candidate)
+                    ? 'https:' + candidate
+                    : (/^https?:\/\//i.test(candidate)
+                        ? candidate
+                        : 'https://www.porntrex.com/' + candidate.replace(/^\//, ''));
+                if (found.indexOf(full) === -1) found.push(full);
+            }
+            if (found.length) {
+                // Return RAW stream URLs — px() in playVideo is the single proxy-decision
+                // point (browser → proxied, Android → raw device-IP so IP-bound KVS
+                // get_file tokens match the natively-fetched page).
+                var r1 = _kvsPickBest(found);
+                return { url: r1.url, quality: r1.quality };
+            }
+
+            // Fallback: JS variable assignment
+            var varRx = /(video_url|video_alt_url)\s*[=:]\s*['"]([^'"]+)['"]/g;
+            var varUrls = [];
+            while ((m = varRx.exec(html)) !== null) {
+                if (varUrls.indexOf(m[2]) === -1) varUrls.push(m[2]);
+            }
+            if (varUrls.length) {
+                var r2 = _kvsPickBest(varUrls);
+                return { url: r2.url, quality: r2.quality };
+            }
+
+            return extractStreams(html);
+        }).catch(function () { return { url: '', quality: {} }; });
+    }
+});
+
+function _porntrexCards(html) {
+    var items = [];
+    var hrefRx = /href="(https?:\/\/www\.porntrex\.com\/video\/[^"]+)"/g;
+    var seen = {};
+    var m;
+    while ((m = hrefRx.exec(html)) !== null) {
+        var videoUrl = m[1];
+        var idMatch = /\/video\/(\d+)\//.exec(videoUrl);
+        var id = idMatch ? idMatch[1] : videoUrl;
+        if (seen[id]) continue;
+        seen[id] = true;
+
+        // Forward-only chunk. Window 2600: the screenshots-list rotator (~10 <li>)
+        // sits between the href and the <div class="durations">/<div class="viewsthumb">
+        // meta — the old 800 cap clipped both, so cards lost duration/views overlay.
+        var chunk = html.slice(m.index, m.index + 2600);
+
+        // PornTrex uses data-src="//ptx.cdntrex.com/...jpg?v=3" — strip query string, force https:
+        // http://ptx.cdntrex.com redirects to porntrex.com homepage; TV browsers resolve // as http://
+        var thumb = _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.jpe?g)/i) ||
+                    _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.(?:webp|png))/i);
+        if (thumb && thumb.charAt(0) === '/' && thumb.charAt(1) === '/') thumb = 'https:' + thumb;
+
+        // The real title lives in the thumbnail's <img alt="…"> (the <a> has no title=). A
+        // generic title="Add to Favourites" sits later in the chunk on the favourite button —
+        // so the old `title="…"`-first order grabbed "Add to Favourites" for every card. Prefer
+        // the img alt; fall back to title= only if it's not the favourites-button text.
+        var title = _decodeHtml(
+            _attr(chunk, /<img[^>]+\balt="([^"]+)"/) ||
+            _attr(chunk, /<span[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)<\/span>/) ||
+            _attr(chunk, /title="(?!Add to [Ff]av)([^"]+)"/)
+        );
+        if (!title) title = _titleFromUrl(videoUrl);
+
+        // KVS markup: <div class="durations"><i .../> 10:11</div> (icon <i> precedes
+        // the value → skip leading tags) and <div class="viewsthumb">1 views</div>.
+        var duration = parseDur(
+            _attr(chunk, /class="durations"[^>]*>(?:\s*<[^>]+>)*\s*([^<]+)</) ||
+            _attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>(?:\s*<[^>]+>)*\s*([^<]+)</)
+        );
+
+        var views = parseViews(
+            _attr(chunk, /class="viewsthumb"[^>]*>\s*([^<]+)</) ||
+            _attr(chunk, /class="[^"]*views?[^"]*"[^>]*>\s*([^<]+)</)
+        );
+
+        if (title || thumb) {
+            items.push({ id: id, source: 'porntrex', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
+        }
+    }
+    return items;
+}
+
+function _porntrexPages(html, page, itemsLen) {
+    var m = /last_page=(\d+)|\/page=(\d+)"[^>]*>[^<]*>>/i.exec(html) ||
+            /page=(\d+)"[^>]*(?:last|next|>>)/i.exec(html);
+    if (m) return parseInt(m[1] || m[2], 10) || _derivePages(itemsLen, page, 24);
+    // Regex miss: derive from batch fullness (~24 cards/page) instead of a hardcoded cap.
+    return _derivePages(itemsLen, page, 24);
+}
+
+  // «Похожие» helper: build a getRelated(video) from an adapter's EXISTING
+  // standalone card parser. Almost every site renders a "Related videos" block
+  // on the video page using the same card markup as its listing, so running the
+  // listing parser on the video-page HTML yields the site's own recommendations.
+  // Drops the current video (by url) and caps at 20. Reuses the SAME page fetch
+  // getStream uses but never touches stream extraction; degrades to [] on error.
+  // Related cards from ONE section of the video page — the site's own «Похожие» block — so the
+  // header/sidebar lists (new, popular, «смотрите также») never leak in. tizam's whole-page
+  // parse returned 65% of the channel's main feed as «Похожие»; hqporner/ebun had no related at
+  // all (stand 2026-10-07). markerRx = section start; it ends at endRx (or 60 KB). No section →
+  // [] so the grid falls back to its title-keyword search instead of showing an unrelated list.
+  function _relatedSection(parser, markerRx, endRx) {
+    return function (video) {
+      if (!video || !video.url) return Promise.resolve([]);
+      return cherryFetch(video.url).then(function (html) {
+        var m = markerRx.exec(html);
+        if (!m) return [];
+        var rest = html.slice(m.index + m[0].length);
+        var e = endRx ? rest.search(endRx) : -1;
+        return parser(e > 0 ? rest.slice(0, e) : rest.slice(0, 60000))
+          .filter(function (v) { return v.url !== video.url; }).slice(0, 30);
+      }).catch(function () { return []; });
+    };
+  }
+
+  function _relatedFrom(parser) {
+    return function (video) {
+      if (!video || !video.url) return Promise.resolve([]);
+      return cherryFetch(video.url).then(function (html) {
+        return parser(html).filter(function (v) {
+          return v.url !== video.url;
+        }).slice(0, 20);
+      }).catch(function () { return []; });
+    };
+  }
+
+  // ============================================================
+  // KVS ENGINE — generic browse/search/card-parse for KVS sites
+  // ============================================================
+
+  // Prefer a real last-page number from the markup; when none is found, derive from
+  // batch fullness (KVS grids serve ~24-30 cards/page) instead of a constant cap.
+  function _kvsPages(html, pagesRxOrFn, page, itemsLen) {
+    var fallback = _derivePages(itemsLen || 0, page || 1, 20);
+    if (typeof pagesRxOrFn === 'function') {
+      return pagesRxOrFn(html, page) || fallback;
+    }
+    if (pagesRxOrFn instanceof RegExp) {
+      var m = pagesRxOrFn.exec(html);
+      if (m) return parseInt(m[1], 10) || fallback;
+      return fallback;
+    }
+    return fallback;
+  }
+
+  function _kvsParseCards(html, cfg) {
+    if (cfg.parseCards) {
+      return cfg.parseCards(html);
+    }
+    if (!cfg.hrefRxSrc) return [];
+
+    var clean = cfg.stripBase64 ? html.replace(/\bsrc="data:[^"]+"/g, 'src=""') : html;
+    // Optional per-site pre-slice: drop everything before the real listing container
+    // so header/menu dropdowns (identical on every page) aren't harvested as cards.
+    if (cfg.listScopeRx) {
+      var scopeM = cfg.listScopeRx.exec(clean);
+      if (scopeM) clean = clean.slice(scopeM.index);
+    }
+    var before = (cfg.chunkWindow && cfg.chunkWindow.before) || 0;
+    var after  = (cfg.chunkWindow && cfg.chunkWindow.after !== undefined) ? cfg.chunkWindow.after : 800;
+
+    var hrefRx = new RegExp(cfg.hrefRxSrc, 'g');
+    var seen   = {};
+    var items  = [];
+    var m;
+
+    while ((m = hrefRx.exec(clean)) !== null) {
+      var rawUrl   = m[1];
+      var videoUrl = cfg.normalizeUrl ? cfg.normalizeUrl(rawUrl, m) : rawUrl;
+      var id       = cfg.idFromUrl(videoUrl, m);
+
+      if (!id || seen[id]) continue;
+      seen[id] = true;
+
+      var chunk = clean.slice(Math.max(0, m.index - before), m.index + after);
+
+      var thumb = '';
+      var thumbRxList = cfg.thumbRx || [];
+      for (var ti = 0; ti < thumbRxList.length; ti++) {
+        thumb = _attr(chunk, thumbRxList[ti]);
+        if (thumb) break;
+      }
+      if (!thumb && cfg.thumbFallback) {
+        thumb = cfg.thumbFallback(id);
+      }
+
+      var titleRaw = '';
+      var titleRxList = cfg.titleRx || [];
+      for (var ri = 0; ri < titleRxList.length; ri++) {
+        titleRaw = _attr(chunk, titleRxList[ri]);
+        if (titleRaw) break;
+      }
+      var title = _decodeHtml(titleRaw);
+      if (!title) title = _titleFromUrl(videoUrl);
+
+      // Prefer the schema.org itemprop="duration" content="PT…S" attr (precise, locale-
+      // free) over the visible text — some KVS skins render the text localized
+      // (e.g. pornobolt "13 мин", which parseDur can't read). Fall back to the
+      // class="duration|time" text for skins that omit the itemprop.
+      // A per-site cfg.durationRx / cfg.viewsRx wins (skins without duration/views classes,
+      // e.g. huyamba's <div class="box">1:41:31</div> + icon-eye <span>92K</span>).
+      var durStr   = (cfg.durationRx && _attr(chunk, cfg.durationRx)) ||
+                     _attr(chunk, /itemprop="duration"[^>]*content="([^"]+)"/i) ||
+                     _attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</);
+      var duration = parseDur(durStr);
+
+      var viewsStr = (cfg.viewsRx && _attr(chunk, cfg.viewsRx)) ||
+                     _attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</);
+      var views    = parseViews(viewsStr);
+
+      // HD/4K badge — KVS listing cards expose a per-card quality marker.
+      var hd = '';
+      if (/2160|\b4k\b/i.test(chunk)) hd = '4K';
+      else if (/class="[^"]*\bhd\b[^"]*"|>\s*HD\s*<|is_hd|hd-(?:button|mark)/i.test(chunk)) hd = 'HD';
+
+      // Hover-preview mp4 — KVS cards expose it via one of several per-site attrs.
+      // A per-site cfg.previewRx wins; otherwise probe the known KVS variants in
+      // order: data-preview, vthumb, data-trailer, data-video, then an inline
+      // <video class="...trailer..." src="…mp4">. Absolute URL guaranteed by source
+      // markup (all confirmed full https:// in the verification curls).
+      var preview = '';
+      if (cfg.previewRx) {
+        preview = _attr(chunk, cfg.previewRx);
+      }
+      if (!preview) preview = _attr(chunk, /data-preview="([^"]+\.mp4[^"]*)"/i);
+      if (!preview) preview = _attr(chunk, /\bvthumb="([^"]+\.mp4[^"]*)"/i);
+      if (!preview) preview = _attr(chunk, /data-trailer="([^"]+\.mp4[^"]*)"/i);
+      if (!preview) preview = _attr(chunk, /data-video="([^"]+\.mp4[^"]*)"/i);
+      // Inline <video> trailer: attribute order varies (class before OR after src,
+      // e.g. hellporno emits src= then class="trailer_video"), so match the trailer
+      // mp4 URL directly — these are always named "…_trailer[_360p].mp4".
+      if (!preview) preview = _attr(chunk, /src="([^"]+_trailer[^"]*\.mp4[^"]*)"/i);
+      if (!preview) preview = _attr(chunk, /<video[^>]*class="[^"]*trailer[^"]*"[^>]*src="([^"]+\.mp4[^"]*)"/i);
+
+      if (title || thumb) {
+        items.push({ id: id, source: cfg.id, title: title, thumb: thumb,
+                     url: videoUrl, duration: duration, views: views, hd: hd || undefined,
+                     preview: preview || undefined });
+      }
+    }
+
+    return items;
+  }
+
+  // Build a category-browse URL from a {slug}/{page} template + flags.
+  // pageBase: page number for page 1 (0 or 1). page1Omit: drop the page segment on page 1.
+  // Handles all site formats: /categories/{slug}/{page}/, root /{slug}/{page}/,
+  // no-trailing-slash, 0-based pages, page-in-filename ({slug}-{page}.html), query (&page={page}).
+  function _buildCatUrl(fmt, slug, page, pageBase, page1Omit) {
+    var p = page || 1;
+    var out;
+    if (page1Omit && p === 1) {
+      out = fmt.replace(/[-/]?\{page\}/, '');     // drop "-{page}" or "/{page}" on page 1
+    } else {
+      var n = (pageBase === 0) ? (p - 1) : p;
+      out = fmt.replace(/\{page\}/, n);
+    }
+    out = out.replace(/\{slug\}/, slug);
+    out = out.replace(/([^:])\/\/+/g, '$1/');     // collapse double slashes (keep scheme ://)
+    return out;
+  }
+
+  // Compact category list: "slug:Label,slug:Label" → [{id,label}]. Label may contain spaces.
+  function _cats(s) {
+    return s.split(',').map(function (pair) {
+      var i = pair.indexOf(':');
+      return { id: pair.slice(0, i), label: pair.slice(i + 1) };
+    });
+  }
+
+  function _kvsEngine(cfg) {
+    if (cfg.id && !/^[a-z0-9_-]+$/i.test(cfg.id)) {
+      throw new Error('Cherry _kvsEngine: cfg.id must be alphanumeric/hyphen/underscore, got: ' + cfg.id);
+    }
+    return {
+      id:   cfg.id,
+      name: cfg.name,
+      host: cfg.host,
+      disabled: !!cfg.disabled,   // dead site: hidden from tiles/fan-out, still resolvable
+      // Expose categories/sorts so the right-edge action menu (openActionsMenu) shows them.
+      cfg: { categories: cfg.categories || [], sorts: cfg.sorts || [] },
+
+      search: function(query, page) {
+        return cherryFetch(cfg.searchUrl(query, page)).then(function(html) {
+          var items = _kvsParseCards(html, cfg);
+          var total = typeof cfg.searchTotalPages === 'number'
+            ? cfg.searchTotalPages
+            : _kvsPages(html, cfg.pagesRx, page, items.length);
+          return { items: items, total_pages: total };
+        }).catch(function() { return { items: [], total_pages: 0 }; });
+      },
+
+      browse: function(category, page, sort) {
+        var p = page || 1;
+        // Default to the first configured sort (Популярное) when the user hasn't
+        // chosen one. Verified: KVS accepts ?sort_by= on BOTH category and default
+        // pages (xozilla/analdin return cards either way).
+        var s  = sort || (cfg.sorts && cfg.sorts[0] && cfg.sorts[0].id) || '';
+        var sp = cfg.sortParam || 'sort_by';
+        var url;
+        if (cfg.sortMode === 'path' && category && cfg.categoryFmt) {
+          // PATH sort (crocotube/ebun): /categories/{slug}/{sort}/{page}/ — sort segment
+          // injected after the slug, before the page. categoryFmt MUST carry {slug}/{page}.
+          // The «Свежее» default (globalLatestSort) is NOT a valid category sort segment —
+          // a category's bare /categories/{slug}/{page}/ IS its latest order — so omit it.
+          if (cfg.catSortQuery) {
+            // Category pages that reject the /{sort}/ segment but honour ?sort_by= with the KVS
+            // vocabulary (porno666): map the root-path sort id → sort_by value.
+            url = _buildCatUrl(cfg.categoryFmt, category, p, cfg.catPageBase || 1, cfg.catPage1Omit !== false);
+            var qsv = cfg.catSortQuery[s];
+            if (qsv) url += (url.indexOf('?') >= 0 ? '&' : '?') + sp + '=' + qsv;
+          } else {
+            var fmt = (s && s !== cfg.globalLatestSort)
+              ? cfg.categoryFmt.replace('{slug}', '{slug}/' + s)
+              : cfg.categoryFmt;
+            url = _buildCatUrl(fmt, category, p, cfg.catPageBase || 1, cfg.catPage1Omit !== false);
+          }
+        } else if (category && cfg.categoryFmt) {
+          url = _buildCatUrl(cfg.categoryFmt, category, p, cfg.catPageBase || 1, cfg.catPage1Omit !== false);
+          // Append sort unless the URL already carries that param (avoids ?sort=mv dupes).
+          if (s && url.indexOf(sp + '=') === -1) {
+            url += (url.indexOf('?') >= 0 ? '&' : '?') + sp + '=' + s;
+          }
+        } else if (cfg.sortMode === 'path') {
+          // PATH sort, NO category (crocotube/ebun GLOBAL feed): the sort is a root
+          // path segment /{sort}/{page}/, NOT a query param. The «Свежее» default
+          // (cfg.globalLatestSort) is the bare latest feed → use browseUrl(p) as-is;
+          // any other sort builds https://host/{sort}/{page}/ (e.g. /most-popular/{p}/).
+          if (!s || s === cfg.globalLatestSort) {
+            url = cfg.browseUrl(p);
+          } else {
+            var origin = cfg.browseUrl(1).replace(/^(https?:\/\/[^/]+).*/, '$1');
+            url = p > 1 ? origin + '/' + s + '/' + p + '/' : origin + '/' + s + '/';
+          }
+        } else {
+          url = cfg.browseUrl(p);
+          if (s && url.indexOf(sp + '=') === -1) {
+            url += (url.indexOf('?') >= 0 ? '&' : '?') + sp + '=' + s;
+          }
+        }
+        return cherryFetch(url).then(function(html) {
+          var items = _kvsParseCards(html, cfg);
+          return {
+            items:       items,
+            total_pages: _kvsPages(html, cfg.pagesRx, p, items.length)
+          };
+        }).catch(function() { return { items: [], total_pages: 0 }; });
+      },
+
+      // «Похожие»: reuse this engine's own card parser on the video-page HTML.
+      // KVS video pages render a "Related videos" block in the SAME card markup
+      // as the listing, so the existing parser picks them up. Drop the current
+      // video (by url) and cap at 20. Never touches stream extraction.
+      getRelated: function (video) {
+        // cfg.pageUrl (optional) maps a stored card URL to the live mirror (huyamba: a favorite
+        // saved on a dead mirror host still gets its «Похожие»).
+        var url = video && video.url && (cfg.pageUrl ? cfg.pageUrl(video.url) : video.url);
+        if (!url) return Promise.resolve([]);
+        return cherryFetch(url).then(function (html) {
+          var items = _kvsParseCards(html, cfg);
+          return items.filter(function (v) { return v.url !== video.url && v.url !== url; }).slice(0, 20);
+        }).catch(function () { return []; });
+      },
+
+      // «Модели» — model INDEX scrape (only when the cfg declares one). Returns
+      // [{name,url,thumb}] for the models_index grid. Reuses _parseModelIndex.
+      getModels: cfg.modelIndex ? function (page) {
+        return cherryFetch(cfg.modelIndex.url(page || 1)).then(function (html) {
+          return _parseModelIndex(html, cfg.modelIndex);
+        }).catch(function () { return []; });
+      } : undefined,
+
+      // browseByModel — a model's videos, reusing THIS engine's card parser
+      // (KVS model pages render listing-identical cards). Never touches getStream.
+      browseByModel: cfg.modelIndex ? function (modelUrl, page) {
+        var p = page || 1;
+        // Trailing slash is REQUIRED: KVS model pages are canonical at /models/{slug}/{n}/ —
+        // the slash-less /models/{slug}/{n} 404s (verified xozilla/analdin). page1 omits the
+        // page segment → /models/{slug}/ (slash kept); page2+ → /models/{slug}/{n}/.
+        var url = cfg.modelIndex.videosUrl
+          ? cfg.modelIndex.videosUrl(modelUrl, p)
+          : _buildCatUrl(modelUrl.replace(/\/+$/, '') + '/{page}/', '', p, 1, true);
+        return cherryFetch(url).then(function (html) {
+          var items = _kvsParseCards(html, cfg);
+          return { items: items, total_pages: _kvsPages(html, cfg.pagesRx, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+      } : undefined,
+
+      getStream: cfg.getStream
+    };
+  }
+
+// ---- 2. Xozilla ----
+SOURCES.push(_kvsEngine({
+    id: 'xozilla',
+    name: 'Xozilla',
+    host: 'xozilla.com',
+    categoryFmt: 'https://www.xozilla.com/categories/{slug}/{page}/',
+    catPageBase: 1, catPage1Omit: true,
+    categories: _cats('amateur:Amateur,anal:Anal,asian:Asian,bbw:BBW,big-tits:Big Tits,blonde:Blonde,blowjob:Blowjob,creampie:Creampie,hairy:Hairy,hardcore:Hardcore,indian:Indian,interracial:Interracial,japanese:Japanese,lesbian:Lesbian,milf:MILF,pov:POV,stockings:Stockings,teen:Teen,threesome:Threesome,mature:Mature,granny-anal:Granny Anal,russian-anal:Russian Anal,russian-teens:Russian Teens 18+,teen-girls-18:Teen Girls 18+,muslim:Muslim,hijab:Hijab,top-rated:Top Rated,classic:Classic,milf-creampie:MILF Creampie'),
+    sorts: _cats('post_date:Свежее,video_viewed:По популярности,video_viewed_today:Популярное за день,video_viewed_week:Популярное за неделю,video_viewed_month:Популярное за месяц,rating_week:Рейтинг за неделю,rating:По рейтингу,duration:Длинные,most_commented:По комментариям'),
+    searchUrl: function(query, page) {
+        // KVS search is the /search/{q}/ PATH — the ?s= query param is ignored (returns the
+        // homepage feed → irrelevant results). Page N = ?from_videos=N (the KVS search block's
+        // own pager; the /{q}/{p}/ path came back empty through the adapter). Stand: p2 100% new.
+        var q = encodeURIComponent(query);
+        return page > 1 ? 'https://www.xozilla.com/search/' + q + '/?from_videos=' + page
+                        : 'https://www.xozilla.com/search/' + q + '/';
+    },
+    browseUrl: function(page) {
+        return page > 1
+            ? 'https://www.xozilla.com/latest-updates/' + page + '/'
+            : 'https://www.xozilla.com/latest-updates/';
+    },
+    hrefRxSrc: 'href="(https?://(?:www\\.)?xozilla\\.com/videos/[0-9]+/[^"]+)"',
+    idFromUrl: function(url) {
+        return url.replace(/^https?:\/\/[^/]+/, '').replace(/[^a-z0-9]/gi, '_');
+    },
+    // Models: /models/ index — clean KVS cards (href + title= + <img class="thumb">).
+    // Per-model /models/{slug}/{page}/ renders listing cards (auto via browseByModel).
+    modelIndex: {
+        url: function(p) { return p > 1 ? 'https://www.xozilla.com/models/' + p + '/' : 'https://www.xozilla.com/models/'; },
+        hrefRx: /href="(https?:\/\/(?:www\.)?xozilla\.com\/models\/[^"\/]+\/)"/g,
+        nameRx: [/title="([^"]+)"/, /alt="([^"]+)"/],
+        thumbRx: [/(?:data-src|src)="(https?:\/\/[^"]+\.jpe?g)"/i]
+    },
+    // after:1000 — the per-card duration <div class="duration"> sits at ~+786 from
+    // the href (right past the old 800 cap), so listing AND model cards were losing
+    // their duration overlay. Widened so duration is captured (thumb +409, preview
+    // vthumb right after href all still inside). Applies to browse + browseByModel.
+    chunkWindow: { before: 0, after: 1000 },
+    stripBase64: true,
+    thumbRx: [
+        /(?:data-original|data-src|src)="([^"?#]+\.jpe?g)/i,
+        /(?:data-original|data-src|src)="([^"?#]+\.(?:webp|png))/i
+    ],
+    titleRx: [
+        /<strong[^>]*class="[^"]*title[^"]*"[^>]*>\s*([^<]+)/,
+        /title="([^"]+)"/,
+        /alt="([^"]+)"/
+    ],
+    pagesRx: /p=(\d+)"[^>]*(?:last|>>|&raquo;)/i,
+    getStream: function(video) {
+        return cherryFetch(video.url).then(function(html) {
+            return _kvsFlashvarsQuality(html);
+        }).catch(function() { return { url: '', quality: {} }; });
+    }
+}));
+
+// ---- 3. 3Movs ----
+SOURCES.push({
+    id: '3movs',
+    name: '3Movs',
+    host: '3movs.com',
+    cfg: { categories: _cats('milf:MILF,teen:Teens 18+,18-year-old:18 Year Old,anal:Anal,blowjob:Blowjob,big-tits:Big Tits,big-natural-tits:Big Natural Tits,amateur:Amateur,mature:Mature,asian:Asian,japanese:Japanese,lesbian:Lesbian,pov:POV,hardcore:Hardcore,threesome:Threesome,interracial:Interracial,ebony:Ebony,big-cock:Big Cock,cumshot:Cumshot,public:Public,casting:Casting,mom:Mom,squirting:Squirting,gangbang:Gangbang,russian:Russian,german:German,big-ass:Big Ass,bdsm:BDSM,massage:Massage,toys:Toys,deepthroat:Deepthroat,double-penetration:Double Penetration,handjob:Handjob,outdoor:Outdoor,pornstar:Pornstar,small-tits:Small Tits,group:Group,czech:Czech,homemade:Homemade'), sorts: _cats('latest-updates:Свежее,most-viewed/all-time:По популярности,most-viewed/week:Популярное за неделю,most-viewed/month:Популярное за месяц,top-rated/all-time:По рейтингу,top-rated/week:Топ за неделю,top-rated/month:Топ за месяц,longest:Длинные') },
+
+    search: function (query, page) {
+        var p = page || 1;
+        // The site's own search form: /search_videos/?q={q}; KVS paginates the result block
+        // with from_videos={p} (the page's data-parameters say "from_videos+from_albums:N";
+        // &page= / &p= are ignored). The old /?s= IGNORED the query (generic list for
+        // anything). Stand-verified: 83-92% title match, page 2 differs (grid dedups the
+        // few relevance-tie repeats).
+        var url = 'https://www.3movs.com/search_videos/?q=' + encodeURIComponent(query) + (p > 1 ? '&from_videos=' + p : '');
+        return cherryFetch(url).then(function (html) {
+            var items = _3movsCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 24) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    browse: function (category, page, sort) {
+        var p = page || 1;
+        if (category) {
+            // 3movs serves a valid body with a 404 status on category page>1 —
+            // use status-tolerant _fetchAny so pagination isn't dropped.
+            // Sort is a path segment after the slug (e.g. most-viewed/all-time);
+            // default = most-viewed/all-time (По популярности).
+            var s = sort || 'most-viewed/all-time';
+            var curl = _buildCatUrl('https://3movs.com/categories/{slug}/' + s + '/{page}/', category, p, 1, true);
+            return _fetchAny(curl).then(function (html) {
+                var items = _3movsCards(html);
+                return { items: items, total_pages: _3movsPages(html, p, items.length) };
+            }).catch(function () { return { items: [], total_pages: 0 }; });
+        }
+        var url = p > 1
+            ? 'https://www.3movs.com/latest-updates/' + p + '/'
+            : 'https://www.3movs.com/latest-updates/';
+        return cherryFetch(url).then(function (html) {
+            var items = _3movsCards(html);
+            return { items: items, total_pages: _3movsPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    getRelated: _relatedFrom(_3movsCards),
+
+    // Models: /pornstars/ index (25/page, paginated /pornstars/{N}/). Cards are
+    // <a class="thumb album item model" title="…"> with a data-src avatar. Exclude
+    // the sort-control links (title/top-rated/most-viewed/videos*). Per-model
+    // /pornstars/{slug}/{N}/ renders listing cards (reuse _3movsCards).
+    getModels: function (page) {
+        var p = page || 1;
+        var url = p > 1 ? 'https://www.3movs.com/pornstars/' + p + '/'
+                        : 'https://www.3movs.com/pornstars/';
+        return cherryFetch(url).then(function (html) {
+            return _parseModelIndex(html, {
+                hrefRx: /href="(https?:\/\/(?:www\.)?3movs\.com\/pornstars\/[a-z][a-z0-9-]+\/)"/g,
+                exclude: function (u) {
+                    return /\/pornstars\/(?:title|top-rated|most-viewed|videos|videos-rating|videos-views)\/$/.test(u);
+                },
+                nameRx: [/title="([^"]+)"/, /alt="([^"]+)"/],
+                thumbRx: [/(?:data-src|data-webp|src)="(https?:\/\/[^"]+\.jpe?g)"/i]
+            });
+        }).catch(function () { return []; });
+    },
+
+    browseByModel: function (modelUrl, page) {
+        var p = page || 1;
+        var u = modelUrl.replace(/\/+$/, '');
+        var url = p > 1 ? u + '/' + p + '/' : u + '/';
+        return cherryFetch(url).then(function (html) {
+            var items = _3movsCards(html);
+            return { items: items, total_pages: _3movsPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    getStream: function (video) {
+        return cherryFetch(video.url).then(function (html) {
+            // labels «High Quality» / «Low Quality» (+ *_lq.mp4) — the shared reader ranks them
+            return _kvsFlashvarsQuality(html);
+        }).catch(function () { return { url: '', quality: {} }; });
+    }
+});
+
+function _3movsCards(html) {
+    var items = [];
+    // Only real video URLs — /videos/{digits}/{slug}. The old broad rx matched nav
+    // links like /videos/ (the index), /categories/ and /pornstars/, producing an
+    // empty leading card titled "video". Requiring the numeric id drops them.
+    var hrefRx = /href="(https?:\/\/(?:www\.)?3movs\.com\/videos\/\d+\/[^"?#]+)"/g;
+    var seen = {};
+    var m;
+    while ((m = hrefRx.exec(html)) !== null) {
+        var videoUrl = m[1];
+        var id = videoUrl.replace(/^https?:\/\/[^/]+\//, '').replace(/[^a-z0-9]/gi, '_');
+        if (!id || seen[id]) continue;
+        seen[id] = true;
+
+        // Start the chunk AT the href (back-window 0) so the title comes from the
+        // card's own <a class="wrap_image"…title="…">/<a class="title">, not the
+        // PREVIOUS card's "Watch Later" button (which sits before the href).
+        var chunk = html.slice(m.index, m.index + 600);
+
+        var thumb = _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i) ||
+                    _attr(chunk, /(?:data-src|src)="([^"]+\.(?:webp|png))"/i);
+
+        // Reject the watch-later / favourites button titles with a negative lookahead.
+        var title = _decodeHtml(
+            _attr(chunk, /title="(?!Watch Later|Add to [Ff]av)([^"]+)"/) ||
+            _attr(chunk, /alt="([^"]+)"/) ||
+            _attr(chunk, /<h\d[^>]*>([^<]+)<\/h\d>/)
+        );
+        if (!title) title = _titleFromUrl(videoUrl);
+
+        // Duration (<div class="time">6:36</div>) sits ~945 chars past the href —
+        // inside THIS card's <a class="wrap_image"> but beyond the 600-char title
+        // window. Use a wider forward window (bounded by the NEXT card href, min
+        // inter-card gap ~1600) so it stays card-anchored and never grabs a neighbour.
+        var durChunk = html.slice(m.index, m.index + 1500);
+        var duration = parseDur(_attr(durChunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
+        var views    = parseViews(_attr(durChunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
+
+        // Hover-preview mp4 — every 3movs card carries data-preview="…_preview.mp4/", but it
+        // sits past the 600-char title window (alongside the thumb), so read the wider durChunk.
+        var preview = _attr(durChunk, /data-preview="([^"]+\.mp4[^"]*)"/i);
+
+        if (title || thumb) {
+            items.push({ id: id, source: '3movs', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views, preview: preview || undefined });
+        }
+    }
+    return items;
+}
+
+function _3movsPages(html, page, itemsLen) {
+    var m = /p=(\d+)"[^>]*(?:last|>>|&raquo;)/i.exec(html);
+    return m ? (parseInt(m[1], 10) || _derivePages(itemsLen, page, 20)) : _derivePages(itemsLen, page, 20);
+}
+
+// ---- 4. Analdin ----
+SOURCES.push(_kvsEngine({
+    id: 'analdin',
+    name: 'Analdin',
+    host: 'analdin.com',
+    categoryFmt: 'https://www.analdin.com/categories/{slug}/{page}/',
+    catPageBase: 1, catPage1Omit: true,
+    categories: _cats('sex:Sex,blowjobs:Blowjobs,hot:Hot,pussy:Pussy,ass:Ass,sexy:Sexy,hardcore:Hardcore,babes:Babes,big-tits:Big Tits,tits:Tits,brunettes:Brunettes,teens:Teens 18+,big-ass:Big Ass,amateurs:Amateurs,blondes:Blondes,doggy-style:Doggy Style,anal:Anal,big-cock:Big Cock,cumshots:Cumshots,sluts:Sluts,pussy-licking:Pussy Licking,crazy:Crazy,pornstars:Pornstars,masturbation:Masturbation,young:Young,cowgirl:Cowgirl,oral:Oral,milfs:MILFs,pov:POV,hd:HD,small-tits:Small Tits,tattoos:Tattoos,lesbians:Lesbians,homemade:Homemade,interracial:Interracial,busty:Busty,natural-tits:Natural Tits,reverse-cowgirl:Reverse Cowgirl,facial:Facial,mature:Mature'),
+    sorts: _cats('post_date:Свежее,video_viewed:По популярности,video_viewed_today:Популярное за день,video_viewed_week:Популярное за неделю,video_viewed_month:Популярное за месяц,rating_week:Рейтинг за неделю,rating:По рейтингу,duration:Длинные'),
+    searchUrl: function(query, page) {
+        // KVS search = /search/{q}/ PATH (the ?s= param is ignored → homepage feed). Page N =
+        // ?from_videos=N — the /{q}/{p}/ path re-served page 1 (only 10% new). Stand: p2 100% new.
+        var q = encodeURIComponent(query);
+        return page > 1 ? 'https://www.analdin.com/search/' + q + '/?from_videos=' + page
+                        : 'https://www.analdin.com/search/' + q + '/';
+    },
+    browseUrl: function(page) {
+        return page > 1
+            ? 'https://analdin.com/latest-updates/' + page + '/'
+            : 'https://analdin.com/latest-updates/';
+    },
+    hrefRxSrc: 'href="(https?://(?:www\\.)?analdin\\.com/videos/[0-9]+/[^"]+)"',
+    idFromUrl: function(url) {
+        return url.replace(/^https?:\/\/[^/]+\//, '').replace(/[^a-z0-9]/gi, '_');
+    },
+    // Models: /models/ index — clean KVS cards (href + title= + <img class="thumb">).
+    // Per-model /models/{slug}/{page}/ renders listing cards (auto via browseByModel).
+    modelIndex: {
+        url: function(p) { return p > 1 ? 'https://analdin.com/models/' + p + '/' : 'https://analdin.com/models/'; },
+        hrefRx: /href="(https?:\/\/(?:www\.)?analdin\.com\/models\/[^"\/]+\/)"/g,
+        nameRx: [/title="([^"]+)"/, /alt="([^"]+)"/],
+        thumbRx: [/(?:data-src|src)="(https?:\/\/[^"]+\.jpe?g)"/i]
+    },
+    chunkWindow: { before: 0, after: 1400 },
+    stripBase64: true,
+    thumbRx: [
+        /\bthumb="([^"]+\.jpe?g)"/i,
+        /data-original="([^"]+\.jpe?g)"/i,
+        /(?:data-src|src)="([^"]+\.jpe?g)"/i,
+        /(?:data-src|src)="([^"]+\.(?:webp|png))"/i
+    ],
+    titleRx: [
+        /<strong[^>]*class="[^"]*title[^"]*"[^>]*>\s*([^<]+)/,
+        /alt="([^"]+)"/,
+        /title="([^"]+)"/
+    ],
+    pagesRx: /p=(\d+)"[^>]*(?:last|>>|&raquo;)/i,
+    getStream: function(video) {
+        return cherryFetch(video.url).then(function(html) {
+            return _kvsFlashvarsQuality(html);
+        }).catch(function() { return { url: '', quality: {} }; });
+    }
+}));
+
+// ---- 5. PornVe ----
+SOURCES.push({
+    id: 'pornve',
+    name: 'PornVe',
+    host: 'pornve.com',
+    cfg: { categories: _cats('blowjob:Blowjob,japanese:Japanese,big-tits:Big Tits,teens:Teens,asian:Asian,brunette:Brunette,hardcore:Hardcore,blonde:Blonde,milf:MILF,big-cock:Big Cock,cumshot:Cumshot,anal:Anal,big-ass:Big Ass,babes:Babes,amateur:Amateur,small-tits:Small Tits,petite:Petite,one-on-one:One on One,creampie:Creampie,threesome:Threesome,masturbation:Masturbation,lesbian:Lesbian,interracial:Interracial,facial:Facial,handjob:Handjob,pov:POV,lingerie:Lingerie,cowgirl:Cowgirl,pussy-licking:Pussy Licking,fingering:Fingering,toys:Toys,deepthroat:Deepthroat,latina:Latina,doggy:Doggy,tattoo:Tattoo,shaved-pussy:Shaved Pussy,webcam:Webcam,natural-tits:Natural Tits,fetish:Fetish,redhead:Redhead'), sorts: _cats('post_date:Свежее,video_viewed:По популярности,video_viewed_today:Популярное за день,video_viewed_week:Популярное за неделю,video_viewed_month:Популярное за месяц,rating_week:Рейтинг за неделю,rating_month:Рейтинг за месяц,rating:По рейтингу,duration:Длинные,most_commented:По комментариям') },
+
+    search: function (query, page) {
+        var q = encodeURIComponent(query).replace(/%20/g, '+');
+        // Single-page search (site): /search/{q}/ returns 20 cards; every pager form tried on the
+        // stand (/page{N}/, /{N}/, /page/{N}/, ?page=, ?p=) is either blocked or re-serves page 1.
+        var url = 'https://pornve.com/search/' + q + '/';
+        return cherryFetch(url).then(function (html) {
+            var items = _pornveCards(html);
+            return { items: items, total_pages: 1 };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    browse: function (category, page, sort) {
+        var p = page || 1;
+        var s = sort || (this.cfg.sorts[0] && this.cfg.sorts[0].id) || '';
+        var url = category
+            ? _buildCatUrl('https://pornve.com/categories/{slug}/{page}/', category, p, 1, true)
+            // Default feed paginates by PATH (/latest-updates/{N}/), NOT ?page=N
+            // (the query param is ignored → same 20 cards → no scroll). Path style
+            // serves fresh cards per page (curl-verified p1/p2/p3 all unique).
+            : (p > 1 ? 'https://pornve.com/latest-updates/' + p + '/'
+                     : 'https://pornve.com/latest-updates/');
+        if (s && url.indexOf('sort_by=') === -1) {
+            url += (url.indexOf('?') >= 0 ? '&' : '?') + 'sort_by=' + s;
+        }
+        return cherryFetch(url).then(function (html) {
+            var items = _pornveCards(html);
+            return { items: items, total_pages: _pornvePages(items.length, p) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    getRelated: _relatedFrom(_pornveCards),
+
+    // Models: /models/ index (20/page, paginated /models/{N}/). Cards are
+    // <a class="item" href="/models/{slug}/" title="…"> with an <img> avatar at
+    // cdn.pornve.com/contents/models/…. Per-model /models/{slug}/{N}/ renders
+    // listing cards (reuse _pornveCards).
+    getModels: function (page) {
+        var p = page || 1;
+        var url = p > 1 ? 'https://pornve.com/models/' + p + '/'
+                        : 'https://pornve.com/models/';
+        return cherryFetch(url).then(function (html) {
+            return _parseModelIndex(html, {
+                hrefRx: /href="(https?:\/\/pornve\.com\/models\/[a-z][a-z0-9-]+\/)"/g,
+                nameRx: [/title="([^"]+)"/, /alt="([^"]+)"/],
+                thumbRx: [/(?:data-src|src)="(https?:\/\/[^"]+\/contents\/models\/[^"]+\.jpe?g)"/i, /(?:data-src|src)="(https?:\/\/[^"]+\.jpe?g)"/i]
+            });
+        }).catch(function () { return []; });
+    },
+
+    browseByModel: function (modelUrl, page) {
+        var p = page || 1;
+        var u = modelUrl.replace(/\/+$/, '');
+        var url = p > 1 ? u + '/' + p + '/' : u + '/';
+        return cherryFetch(url).then(function (html) {
+            var items = _pornveCards(html);
+            return { items: items, total_pages: _pornvePages(items.length, p) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    getStream: function (video) {
+        return cherryFetch(video.url).then(function (html) {
+            var r = _kvsFlashvarsQuality(html);
+            // pornve encodes 1080p in AV1 while 480p/720p are H.264 (stand codec check 2026-09-05).
+            // Lampa's player takes the HIGHEST entry of the quality map regardless of `url`, so on
+            // Android (TV players mostly lack AV1 decode → black screen) the 1080p entry is dropped
+            // from the map — same pattern as youjizz's ≤720p cap. Browser keeps all qualities.
+            if (_isAndroid() && r.quality && r.quality['720p'] && r.quality['1080p']) {
+                delete r.quality['1080p'];
+                r.url = r.quality['720p'];
+            }
+            return r;
+        }).catch(function () { return { url: '', quality: {} }; });
+    }
+});
+
+function _pornveCards(html) {
+    var items = [];
+    var hrefRx = /href="(https?:\/\/pornve\.com\/video\/[^"]+)"/g;
+    var seen = {};
+    var m;
+    while ((m = hrefRx.exec(html)) !== null) {
+        var videoUrl = m[1];
+        var idMatch = /\/video\/(\d+)\//.exec(videoUrl);
+        var id = idMatch ? idMatch[1] : videoUrl;
+        if (seen[id]) continue;
+        seen[id] = true;
+
+        var chunk = html.slice(Math.max(0, m.index - 800), m.index + 600);
+
+        // SisiStyle thumb: cdn.pornve.com/contents/videos_screenshots/...
+        var thumb = _attr(chunk, /(?:data-src|src)="(https?:\/\/cdn\.pornve\.com\/contents\/videos_screenshots\/[^"]+)"/i) ||
+                    _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i);
+
+        var title = _decodeHtml(
+            _attr(chunk, /<(?:h\d|div)[^>]*class="[^"]*(?:title|name)[^"]*"[^>]*>([^<]+)<\//) ||
+            _attr(chunk, /title="([^"]+)"/) ||
+            _attr(chunk, /alt="([^"]+)"/)
+        );
+        if (!title) title = _titleFromUrl(videoUrl);
+
+        // Duration (<div class="time">11:10</div>) sits ~768 chars past the href —
+        // beyond the 600-char forward window. Use a wider forward-only window (min
+        // inter-card gap ~2700) so it stays this card's value. Match the duration
+        // class explicitly (the bare \d+:\d+ fallback is dropped: it could otherwise
+        // catch an unrelated timestamp in the wider span).
+        var durChunk = html.slice(m.index, m.index + 1200);
+        var duration = parseDur(_attr(durChunk, /class="[^"]*(?:duration|time)"[^>]*>([^<]+)</));
+
+        var views = parseViews(_attr(durChunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
+
+        // Hover-preview mp4 — every pornve card carries data-preview="…_preview.mp4/", but on the
+        // /latest-updates/ feed it sits ~+536..+609 from the href, right at the 600-char chunk edge
+        // (→ flaky 10-85% extraction). Read the wider durChunk (+1200) so it's captured reliably.
+        var preview = _attr(durChunk, /data-preview="([^"]+\.mp4[^"]*)"/i);
+
+        if (title || thumb) {
+            items.push({ id: id, source: 'pornve', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views, preview: preview || undefined });
+        }
+    }
+    return items;
+}
+
+// PornVe paginates via KVS (category /categories/{slug}/{N}/, latest ?page=N) with no
+// reliable last-page link in the markup, so the old page=/N/-last regex never matched
+// and returned a hardcoded 10, capping infinite scroll at ~10 pages (same class of bug
+// as familyporn). Derive a generous window from page fill instead (24 cards/page) so
+// scroll keeps requesting while the site still serves a full page.
+function _pornvePages(itemsLen, page) {
+    return _derivePages(itemsLen, page || 1, 24);
+}
+
+// ---- 6. FamilyPorn ----
+SOURCES.push({
+    id: 'familyporn',
+    name: 'FamilyPorn',
+    host: 'familyporn.tv',
+    cfg: { categories: _cats('cousin:Cousin,grandma-grandson:Grandma & Grandson,virgin:Virgin,stepbrother-stepsister:Stepbrother & Stepsister,stepdaughter-stepdad:Stepdad & Stepdaughter,brother-sister:Brother & Sister,grandpa-granddaughter:Grandpa & Granddaughter,stepmom-stepson:Stepmom & Stepson,dad-daughter:Dad & Daughter,mother-daughter:Mother & Daughter'), sorts: _cats('post_date:Свежее,video_viewed:По популярности,rating:По рейтингу,duration:Длинные,most_commented:По комментариям') },
+
+    search: function (query, page) {
+        var p = page || 1;
+        // KVS-style search block: page N = &from_videos=N (&page= re-served page 1). Stand: p2/p3 100% new.
+        var url = 'https://familyporn.tv/search/?q=' + encodeURIComponent(query) + (p > 1 ? '&from_videos=' + p : '');
+        return cherryFetch(url).then(function (html) {
+            var items = _familypornCards(html);
+            return { items: items, total_pages: _familypornPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    browse: function (category, page, sort) {
+        var p = page || 1;
+        var s = sort || (this.cfg.sorts[0] && this.cfg.sorts[0].id) || '';
+        var url = category
+            ? _buildCatUrl('https://familyporn.tv/categories/{slug}/{page}/', category, p, 1, true)
+            : 'https://familyporn.tv/latest-updates/' + p + '/';
+        if (s && url.indexOf('sort_by=') === -1) {
+            url += (url.indexOf('?') >= 0 ? '&' : '?') + 'sort_by=' + s;
+        }
+        return cherryFetch(url).then(function (html) {
+            var items = _familypornCards(html);
+            return { items: items, total_pages: _familypornPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    getRelated: _relatedFrom(_familypornCards),
+
+    // Models: single-page /models/ index lists the FULL A-Z roster (~1600) as
+    // <a class="link models-link" href="/models/{slug}/" title="…"> with NO avatar
+    // (name + "N video" only) → letter-tile fallback. One page, so ignore `page`.
+    // Per-model /models/{slug}/{N}/ renders listing cards (reuse _familypornCards).
+    getModels: function () {
+        return cherryFetch('https://familyporn.tv/models/').then(function (html) {
+            return _parseModelIndex(html, {
+                hrefRx: /href="(https?:\/\/familyporn\.tv\/models\/[a-z][a-z0-9-]+\/)"/g,
+                nameRx: [/title="([^"]+)"/, /class="name"[^>]*>([^<]+)</],
+                thumbRx: [/(?:data-original|data-src|src)="(https?:\/\/[^"]+\.(?:jpe?g|webp|png))"/i]
+            });
+        }).catch(function () { return []; });
+    },
+
+    browseByModel: function (modelUrl, page) {
+        var p = page || 1;
+        var u = modelUrl.replace(/\/+$/, '');
+        var url = p > 1 ? u + '/' + p + '/' : u + '/';
+        return cherryFetch(url).then(function (html) {
+            var items = _familypornCards(html);
+            return { items: items, total_pages: _familypornPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    getStream: function (video) {
+        return cherryFetch(video.url).then(function (html) {
+            return _kvsFlashvarsQuality(html);
+        }).catch(function () { return { url: '', quality: {} }; });
+    }
+});
+
+function _familypornCards(html) {
+    var items = [];
+    var hrefRx = /href="(https?:\/\/familyporn\.tv\/videos\/[^"]+)"/g;
+    var seen = {};
+    var m;
+    while ((m = hrefRx.exec(html)) !== null) {
+        var videoUrl = m[1];
+        // ID is derived from the slug after /videos/
+        var slugMatch = /\/videos\/([^/"?]+)/.exec(videoUrl);
+        var id = slugMatch ? slugMatch[1] : videoUrl;
+        if (seen[id]) continue;
+        seen[id] = true;
+
+        // Look only FORWARD from href — title is in title="" attr on same <a> tag
+        var chunk = html.slice(m.index, m.index + 800);
+
+        // SisiStyle thumb path (data-original = KVS lazy-load)
+        var thumb = _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\/contents\/videos_screenshots\/[^"?#]+)/i) ||
+                    _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.jpe?g)/i);
+
+        var title = _decodeHtml(
+            _attr(chunk, /title="([^"]+)"/) ||
+            _attr(chunk, /<strong[^>]*class="[^"]*title[^"]*"[^>]*>\s*([^<]+)/) ||
+            _attr(chunk, /alt="([^"]+)"/)
+        );
+        if (!title) title = _titleFromUrl(videoUrl);
+
+        var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
+        var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
+
+        // Hover-preview mp4 — KVS cards carry data-preview="…_preview.mp4/" (same as 3movs/pornve).
+        var preview = _attr(chunk, /data-preview="([^"]+\.mp4[^"]*)"/i);
+
+        if (title || thumb) {
+            items.push({ id: id, source: 'familyporn', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views, preview: preview || undefined });
+        }
+    }
+    return items;
+}
+
+// FamilyPorn paginates via KVS AJAX (data-parameters="…;from:N") — no page-numbered
+// URLs or a last-link in the markup, so the old page=/N/-last regex never matched and
+// returned a hardcoded 10, capping infinite scroll at ~10 pages. Derive a generous
+// window from the page fill instead (24 cards/page) so scroll keeps requesting while
+// the site still serves a full page.
+function _familypornPages(html, page, itemsLen) {
+    return _derivePages(itemsLen, page || 1, 24);
+}
+
+// ---- 7. Porndig ----
+SOURCES.push({
+    id: 'porndig',
+    name: 'Porndig',
+    host: 'porndig.com',
+    // Composite slug "{id}/{name}" (porndig channels need both). Browse: /channels/{id}/{name}/page/{n}.
+    cfg: { categories: _cats('33/anal:Anal,34/young:Young,35/cum-swallowing:Cum Swallowing,36/blonde:Blonde,38/asian:Asian,39/milf:MILF,40/lesbian:Lesbian,41/mature:Mature,42/orgy:Orgy,43/big-boobs:Big Boobs,45/black:Black,46/bbw:BBW,47/creampie:Creampie,48/masturbation:Masturbation,50/facial-ejaculation:Facial Ejaculation,51/hentai:Hentai,52/blowjob:Blowjob,53/interracial:Interracial,54/latina:Latina,55/bondage-bdsm:BDSM,57/fetish:Fetish,58/pov:POV,59/bukkake:Bukkake,60/redhead:Redhead,63/brunette:Brunette,64/double-penetration:Double Penetration,67/small-tits:Small Tits,68/squirters:Squirting,70/webcam:Webcam,74/massage:Massage,75/sexy-lingerie:Sexy Lingerie,799/cumshot:Cumshot,802/big-dick:Big Dick,816/stockings:Stockings,82/gangbang:GangBang,1043/threesome:Threesome,1117/european:European,1198/big-ass:Big Ass,1235/hardcore:Hardcore,1236/cuckold:Cuckold'), sorts: [] /* sort not URL-addressable (DLE/AJAX POST) */ },
+
+    search: function (query, page) {
+        var p = page || 1;
+        var q = encodeURIComponent(query);
+        // Page 1 = /search/{q}/ (36 cards). The pretty /page/N re-serves page 1; DLE's own
+        // pager (index.php?do=search&search_start=N&result_from=…) yields the next set (stand:
+        // 80% new) and may answer non-200 → status-tolerant fetch for pages 2+.
+        var url = p > 1
+            ? 'https://porndig.com/index.php?do=search&subaction=search&search_start=' + p + '&full_search=0&result_from=' + ((p - 1) * 36 + 1) + '&story=' + q
+            : 'https://porndig.com/search/' + q + '/';
+        return (p > 1 ? _fetchAny(url) : cherryFetch(url)).then(function (html) {
+            var items = _porndigCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 36) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    browse: function (category, page) {
+        var p = page || 1;
+        // category is a composite "{id}/{name}" channel slug.
+        // NO category → /video/ = the site-wide ALL-TOPIC feed (paginates /video/page/{n}/),
+        // ordered by POPULARITY (title "Most popular sex videos"). NOTE: porndig's homepage
+        // "last amateur videos" NEWEST block is a DLE async loader (load_async_container, no
+        // GET-able URL — /latest-updates/, /most-recent/, /new/ all 404, ?sort=date ignored),
+        // so a clean newest feed isn't reproducible; /video/ (popular all-topic) is the best
+        // deterministic default. (Old default was the single ANAL channel — worse.)
+        var url = category
+            ? 'https://porndig.com/channels/' + category + (p > 1 ? '/page/' + p : '')
+            : 'https://porndig.com/video/' + (p > 1 ? 'page/' + p + '/' : '');
+        return cherryFetch(url).then(function (html) {
+            var items = _porndigCards(html);
+            return { items: items, total_pages: _porndigPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    // «Похожие» IS paginated: the video page bootstraps related via a DLE AJAX
+    // loader (data-loader_first_url="/posts/load_related_posts/{page}/{id}") that
+    // returns {success,data:{content:"<escaped HTML grid>"}} — 35 distinct cards
+    // per page (curl-verified p1=236098, p2=254139… no overlap). Thread `page` into
+    // that endpoint and parse data.content with the listing parser so the related
+    // grid scrolls instead of stopping after the single bootstrapped block.
+    getRelated: function (video, page) {
+        if (!video || !video.id) return Promise.resolve([]);
+        var p = page || 1;
+        var url = 'https://porndig.com/posts/load_related_posts/' + p + '/' + video.id;
+        return cherryFetch(url).then(function (text) {
+            var content = '';
+            try { content = (JSON.parse(text).data || {}).content || ''; } catch (e) { content = text; }
+            return _porndigCards(content).filter(function (v) {
+                return v.url !== video.url;
+            });
+        }).catch(function () { return []; });
+    },
+
+    // Models: /pornstars/ index (30/page, paginated /pornstars/page/{N}/). Model
+    // links /pornstars/{id}/{slug}.html (relative); name in title=. Per-model page
+    // renders 30 listing cards (reuse _porndigCards). Pagination /page/{N}/.
+    getModels: function (page) {
+        var p = page || 1;
+        var url = p > 1
+            ? 'https://porndig.com/pornstars/page/' + p + '/'
+            : 'https://porndig.com/pornstars/';
+        return cherryFetch(url).then(function (html) {
+            return _parseModelIndex(html, {
+                hrefRx: /href="((?:https?:\/\/porndig\.com)?\/pornstars\/\d+\/[^"]+\.html)"/g,
+                normalizeUrl: function (raw) {
+                    return raw.charAt(0) === '/' ? 'https://porndig.com' + raw : raw;
+                },
+                nameRx: [/title="([^"]+)"/, /<h3>([^<]+)<\/h3>/],
+                thumbRx: [/(?:data-src|src)="(https?:\/\/[^"]+\.jpe?g[^"]*)"/i]
+            });
+        }).catch(function () { return []; });
+    },
+
+    browseByModel: function (modelUrl, page) {
+        var p = page || 1;
+        var u = modelUrl.replace(/\.html$/i, '');
+        var url = p > 1 ? u + '/page/' + p + '/' : modelUrl;
+        return cherryFetch(url).then(function (html) {
+            var items = _porndigCards(html);
+            return { items: items, total_pages: _porndigPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    getStream: function (video) {
+        return cherryFetch(video.url).then(function (html) {
+            var m = /src="(https?:\/\/videos\.porndig\.com\/[^"]+)"/i.exec(html);
+            if (m) {
+                return cherryFetch(m[1]).then(function (ihtml) {
+                    // Player uses srcSet:[{src,label}] JSON — keys are double-quoted, slashes escaped as \/
+                    var quality = {};
+                    var sRx = /"srcSet"\s*:\s*\[([\s\S]{0,3000}?)\]/g, sm;
+                    while ((sm = sRx.exec(ihtml)) !== null) {
+                        var eRx = /\{[^{}]{0,600}\}/g, em;
+                        while ((em = eRx.exec(sm[1])) !== null) {
+                            var ent = em[0];
+                            var fm = /"src"\s*:\s*"([^"]+\.mp4[^"]*)"/i.exec(ent);
+                            var lm = /"label"\s*:\s*"(\d+)/i.exec(ent);
+                            if (fm && lm) {
+                                var u = fm[1].replace(/\\\//g, '/');
+                                if (!quality[lm[1]]) quality[lm[1]] = u;
+                            }
+                        }
+                    }
+                    if (Object.keys(quality).length) return { url: bestQualityUrl(quality), quality: quality };
+                    return { url: '', quality: {} };
+                }).catch(function () { return { url: '', quality: {} }; });
+            }
+            return { url: '', quality: {} };
+        }).catch(function () { return { url: '', quality: {} }; });
+    }
+});
+
+function _porndigCards(html) {
+    var items = [];
+    var hrefRx = /href="((?:https?:\/\/porndig\.com)?\/videos\/(\d+)\/[^"]+\.html)"/g;
+    // Collect card start offsets FIRST so each card's chunk can extend to the NEXT
+    // card boundary. porndig renders the duration bubble ~2-3k chars past the href
+    // (well beyond a fixed window), so a card-bounded chunk is the only safe reach.
+    var cards = [];
+    var seen = {};
+    var m;
+    while ((m = hrefRx.exec(html)) !== null) {
+        if (seen[m[2]]) continue;
+        seen[m[2]] = true;
+        cards.push({ index: m.index, url: m[1], id: m[2] });
+    }
+    for (var c = 0; c < cards.length; c++) {
+        var videoUrl = cards[c].url.charAt(0) === '/' ? 'https://porndig.com' + cards[c].url : cards[c].url;
+        var id = cards[c].id;
+        var end = (c + 1 < cards.length) ? cards[c + 1].index : cards[c].index + 3500;
+        var chunk = html.slice(cards[c].index, Math.min(cards[c].index + 900, end));
+        var durChunk = html.slice(cards[c].index, end);
+
+        // image-cdn.porndig.com/thumbs/YYYY/MM/ID/...
+        var thumb = _attr(chunk, /(?:data-original|data-src|src)="(https?:\/\/image-cdn\.porndig\.com\/thumbs\/[^"?#]+)/i) ||
+                    _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.jpe?g)/i);
+
+        var title = _decodeHtml(
+            _attr(chunk, /<div[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)<\/div>/) ||
+            _attr(chunk, /title="([^"]+)"/) ||
+            _attr(chunk, /alt="([^"]+)"/)
+        );
+        if (!title) title = _titleFromUrl(videoUrl);
+
+        // Duration: <div class="bubble bubble_duration"><span>08:00</span></div> —
+        // the value is in an inner <span>, so step past the leading inner tags.
+        var duration = parseDur(_attr(durChunk, /class="[^"]*duration[^"]*"[^>]*>(?:\s*<[^>]+>)*\s*([\d:]+(?:\s*min)?)/i));
+        var views    = parseViews(_attr(durChunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
+        // No grid preview: porndig lazy-loads the hover clip via JS (the only inline
+        // …/previewclip/…mp4 attrs are in the sidebar/featured blocks, not grid cards).
+
+        if (title || thumb) {
+            items.push({ id: id, source: 'porndig', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
+        }
+    }
+    return items;
+}
+
+function _porndigPages(html, page, itemsLen) {
+    var m = /\/page\/(\d+)["'][^>]*(?:last|>>)/i.exec(html);
+    return m ? (parseInt(m[1], 10) || _derivePages(itemsLen, page, 20)) : _derivePages(itemsLen, page, 20);
+}
+
+// ---- Tizam ----
+SOURCES.push({
+  id: 'tizam',
+  name: 'Tizam',
+  host: 'tv4.tizam.org',
+  // Category pages take the same zero-indexed ?p= pagination as the default feed
+  // (curl-verified ?p=0..2 return distinct cards) — see browse() for the wiring.
+  cfg: { categories: _cats('all_sex:Фильмы xxx,s_russkim_perevodom:С Русским переводом,russkoe_porno:Русские порнофильмы,novinki:Новинки по выбору года,polnometrazhnye:Полнометражные с сюжетом,zrelye:Зрелые женщины,podrostki_18:Молодые девушки +18,anal_seks_bol_shie_popki:Анал и Большие попки,bol_shaya_grud:Большие сиськи,minet:Оральный секс,groupvideo:Групповой секс,incest:Семейное порно,svingery:Свингеры и Измена,dominirovanie:Доминирование,zhenskaya_masturbaciya:Соло девушки,pyshechki:Пышечки,aziatki:Азиатские порнофильмы,temnokozhie:Темнокожие,italyan_porn:Итальянские порнофильмы,nemeckie_pornofil_my:Немецкие порнофильмы,klassika:Классика и Ретро'), sorts: [] /* sort not URL-addressable (DLE/AJAX POST) */ },
+
+  _parseCards: function(html) {
+    var items = [];
+    var seen = {};
+    // Match only 3-segment video URLs: /category/subcategory/slug/
+    // [^/?#"]+ excludes ? # / " so ?p=N pagination links are never matched.
+    // Host-agnostic: tv4.tizam.org 301-redirects to li.tizam.org (mirror), so hrefs may be
+    // relative OR carry either host — match any *.tizam.org so a mirror change can't empty cards.
+    var hrefRx = /href="((?:https?:\/\/[a-z0-9.-]*tizam\.org)?\/fil_my_dlya_vzroslyh\/[^/?#"]+\/[^/?#"]+\/)"/g;
+    var m;
+    while ((m = hrefRx.exec(html)) !== null) {
+      var cardUrl = m[1].charAt(0) === '/' ? 'https://tv4.tizam.org' + m[1] : m[1];
+      var slugMatch = cardUrl.replace(/\/$/, '').match(/\/([^/]+)$/);
+      var id = slugMatch ? slugMatch[1] : cardUrl;
+      if (seen[id]) continue;
+      seen[id] = true;
+
+      // Look FORWARD from href: chunk covers the <a> and the <h3> title that follows it.
+      // Title element sits at ~+1200-1400, so 1200 cut it off (17/32 empty titles) —
+      // 1600 captures it (0/32 empty). _titleFromUrl(cardUrl) remains the fallback.
+      var chunk = html.slice(m.index, m.index + 1600);
+
+      var rawThumb = _attr(chunk, /src="([^"]+\/images\/cms\/thumbs\/[^"]+)"/) ||
+                     _attr(chunk, /src="([^"?#]+\.jpe?g)"/);
+      var thumb = rawThumb && rawThumb.charAt(0) === '/' ? 'https://tv4.tizam.org' + rawThumb : rawThumb;
+
+      // Title: prefer <span class="title"> (actual video name) or <h3>, then img alt.
+      // Some cards (e.g. /…_s_russkim_perevodom/{slug}/) carry no title element in the chunk —
+      // fall back to a humanized slug from the URL so the card never renders title-less.
+      var title = _decodeHtml(
+        _attr(chunk, /<span[^>]*class="[^"]*\btitle\b[^"]*"[^>]*>([^<]+)/) ||
+        _attr(chunk, /<h[23][^>]*>([^<]+)<\/h[23]>/) ||
+        _attr(chunk, /itemprop="name"[^>]*>([^<]+)/) ||
+        _attr(chunk, /alt="([^"]+)"/)
+      ) || _titleFromUrl(cardUrl);
+
+      if (!title && !thumb) continue;
+
+      // Duration: <li ... umi:field-name="prodolzhitelnost"><meta itemprop="duration"
+      // content="1:42:49">1:42:49</li> inside <ul class="item__meta">. Prefer the
+      // clean itemprop content attr; the bare H:MM:SS text is the fallback.
+      var duration = parseDur(
+        _attr(chunk, /itemprop="duration"[^>]*content="([^"]+)"/i) ||
+        _attr(chunk, /umi:field-name="prodolzhitelnost"[^>]*>(?:\s*<[^>]+>)*\s*([\d:]+)/i)
+      );
+
+      items.push({
+        id: 'tizam-' + id,
+        source: 'tizam',
+        title: title,
+        thumb: thumb,
+        url: cardUrl,
+        duration: duration,
+        views: 0
+      });
+    }
+    return items;
+  },
+
+  search: function(query, page) {
+    // Real GET search form: action="/search-results/" method="GET", input name="search_string".
+    // (Old /?s= generic-DLE scan returned junk slug-as-title links with no thumbs.)
+    // Search results render the same 3-segment video cards as browse → reuse _parseCards.
+    // No page param exists in the search form (single result set) → total_pages 1.
+    var self = this;
+    var url = 'https://tv4.tizam.org/search-results/?search_string=' + encodeURIComponent(query);
+    return cherryFetch(url).then(function(html) {
+      var items = self._parseCards(html);
+      return { items: items, total_pages: items.length ? 1 : 0 };
+    }).catch(function() { return { items: [], total_pages: 0 }; });
+  },
+
+  browse: function(category, page) {
+    var self = this;
+    var p = page || 1;
+    if (category) {
+      // Category pages take the SAME zero-indexed ?p= pagination as the default feed
+      // (page 1 → ?p=0). Curl-verified: ?p=0 == base, ?p=1/?p=2 return distinct cards
+      // (32/page, ~8 overlap p1↔p2). The prior "JS-only, single page" note was wrong —
+      // the static ?p= URL exists, so thread it + derive a generous window for scroll.
+      var curl = 'https://tv4.tizam.org/fil_my_dlya_vzroslyh/' + category + '/?p=' + (p - 1);
+      return cherryFetch(curl).then(function(html) {
+        var items = self._parseCards(html);
+        return { items: items, total_pages: _derivePages(items.length, p, 12) };
+      }).catch(function() { return { items: [], total_pages: 0 }; });
+    }
+    // NO category → the broad "all_sex" (Фильмы xxx) listing. The bare root /?p={n} only
+    // LOOKS paginated: it re-shows the same homepage rail on every page (leading cards
+    // identical ?p=0 vs ?p=1 → no fresh cards on scroll). all_sex paginates cleanly
+    // (?p=0 ≠ ?p=1), so it's the global feed that guarantees infinite scroll.
+    var url = 'https://tv4.tizam.org/fil_my_dlya_vzroslyh/all_sex/?p=' + (p - 1);
+    return cherryFetch(url).then(function(html) {
+      var items = self._parseCards(html);
+      return { items: items, total_pages: _derivePages(items.length, p, 12) };
+    }).catch(function() { return { items: [], total_pages: 0 }; });
+  },
+
+  // The page's «Похожие фильмы» carousel (div.row.same_video) — not the whole page.
+  getRelated: function(video) {
+    var self = this;
+    return _relatedSection(function (h) { return self._parseCards(h); },
+      /class="row same_video"/, /class="row (?!same_video)[^"]*"|<footer/)(video);
+  },
+
+  getStream: function(video) {
+    return cherryFetch(video.url).then(function(html) {
+      var res = extractStreams(html);
+      return res.url ? res : { url: '', quality: {} };
+    }).catch(function() { return { url: '', quality: {} }; });
+  }
+});
+
+// ---- 17. PerfektDamen ----
+SOURCES.push({
+    id: 'perfektdamen',
+    name: 'PerfektDamen',
+    host: 'perfektdamen.co',
+    // Its HLS (see getStream) is played by hls.js in the WebView: the CDN sends no CORS headers
+    // (manifestLoadError http0 on the stand) → the stream goes through the proxy, which adds
+    // CORS and rewrites the master/variant playlists (VPS: master 200 → variant 200 → seg 206).
+    androidProxyStream: true,
+    cfg: { categories: _cats('hd:HD,blowjob:Blowjob,big-tits:Big Tits,big-ass:Big Ass,big-cock:Big Cock,brunette:Brunette,doggystyle:Doggystyle,cowgirl:Cowgirl,oral:Oral,missionary:Missionary,hardcore:Hardcore,pornstar:Pornstar,blonde:Blonde,milf:MILF,amateur:Amateur,babe:Babe,masturbation:Masturbation,cumshot:Cumshot,natural-tits:Natural Tits,small-tits:Small Tits,pussy-licking:Pussy Licking,fingering:Fingering,handjob:Handjob,shaved:Shaved,anal:Anal,skinny:Skinny,pov:POV,asian:Asian,deep-throat:Deep Throat,toys:Toys,reverse-cowgirl:Reverse Cowgirl,japanese:Japanese,fetish:Fetish,lesbian:Lesbian,interracial:Interracial,petite:Petite,threesome:Threesome,solo:Solo,creampie:Creampie,lingerie:Lingerie,mature:Mature,stockings:Stockings,mom:Mom,redhead:Redhead,facial:Facial,latina:Latina,ebony:Ebony,bbw:BBW,homemade:Homemade,step-fantasy:Step Fantasy,bbc:BBC,busty:Busty'), sorts: _cats('post_date:Свежее,video_viewed:По популярности,rating:По рейтингу,duration:Длинные,most_commented:По комментариям') },
+
+    search: function (query, page) {
+        var p = page || 1;
+        // Page N = &from_videos=N (the site's own /search/{p}/?q= links re-serve page 1). Stand: p2 100% new.
+        var url = 'https://perfektdamen.co/search/?q=' + encodeURIComponent(query) + (p > 1 ? '&from_videos=' + p : '');
+        return cherryFetch(url).then(function (html) {
+            var items = _perfektCards(html);
+            return { items: items, total_pages: _perfektPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    browse: function (category, page, sort) {
+        var p = page || 1;
+        var s = sort || (this.cfg.sorts[0] && this.cfg.sorts[0].id) || '';
+        if (category) {
+            var curl = _buildCatUrl('https://www.perfektdamen.co/tags/{slug}/{page}/', category, p, 1, true);
+            if (s && curl.indexOf('sort_by=') === -1) {
+                curl += (curl.indexOf('?') >= 0 ? '&' : '?') + 'sort_by=' + s;
+            }
+            return cherryFetch(curl).then(function (html) {
+                var items = _perfektCards(html);
+                return { items: items, total_pages: _perfektPages(html, p, items.length) };
+            }).catch(function () { return { items: [], total_pages: 0 }; });
+        }
+        // NO category → /videos/ feed (paginated, 60 cards/page) sorted by sorts[0]
+        // (post_date «Свежее» by default) — matches the homepage's recent content.
+        // Was /popular/ (single-page best). /videos/{p}/?sort_by=post_date curl-verified.
+        var url = (p > 1
+            ? 'https://www.perfektdamen.co/videos/' + p + '/'
+            : 'https://www.perfektdamen.co/videos/');
+        if (s) url += (url.indexOf('?') >= 0 ? '&' : '?') + 'sort_by=' + s;
+        return cherryFetch(url).then(function (html) {
+            var items = _perfektCards(html);
+            return { items: items, total_pages: _perfektPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    getRelated: _relatedFrom(_perfektCards),
+
+    // Studios/channels: /channels/ index (60/page, real paysite brands w/ logos).
+    // Per-channel /channels/{slug}/{page}/ renders 60 listing cards (_perfektCards).
+    getStudios: function (page) {
+        var p = page || 1;
+        var url = p > 1 ? 'https://www.perfektdamen.co/channels/' + p + '/'
+                        : 'https://www.perfektdamen.co/channels/';
+        return cherryFetch(url).then(function (html) {
+            return _parseModelIndex(html, {
+                hrefRx: /href="((?:https?:\/\/(?:www\.)?perfektdamen\.co)?\/channels\/([a-z0-9][a-z0-9-]*)\/)"/g,
+                exclude: function (u) {
+                    // Drop nav (abc/favorites/videos/updated) + numeric pagination links.
+                    return /\/channels\/(?:abc|favorites|videos|updated|page|\d+)\/?$/.test(u);
+                },
+                normalizeUrl: function (raw) {
+                    return raw.charAt(0) === '/' ? 'https://www.perfektdamen.co' + raw : raw;
+                },
+                nameRx: [/alt="([^"]+)"/, /<p>\s*([^<]+)/],
+                thumbRx: [/<img[^>]+(?:data-original|data-src|src)="([^"?#]+\.(?:jpe?g|webp|png))/i]
+            });
+        }).catch(function () { return []; });
+    },
+
+    browseByStudio: function (studioUrl, page) {
+        var p = page || 1;
+        var u = studioUrl.replace(/\/+$/, '');
+        var url = p > 1 ? u + '/' + p + '/' : studioUrl;
+        return cherryFetch(url).then(function (html) {
+            var items = _perfektCards(html);
+            return { items: items, total_pages: _perfektPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    // Models: /pornstars/ index (paginated /pornstars/{N}/). Relative links
+    // /pornstars/{slug}/ with an <img data-original avatar. Exclude sort-nav
+    // (abc/favorites/videos/updated) + numeric pagination links. Per-model
+    // /pornstars/{slug}/{N}/ renders listing cards (reuse _perfektCards).
+    getModels: function (page) {
+        var p = page || 1;
+        var url = p > 1 ? 'https://www.perfektdamen.co/pornstars/' + p + '/'
+                        : 'https://www.perfektdamen.co/pornstars/';
+        return cherryFetch(url).then(function (html) {
+            return _parseModelIndex(html, {
+                hrefRx: /href="((?:https?:\/\/(?:www\.)?perfektdamen\.co)?\/pornstars\/([a-z0-9][a-z0-9-]*)\/)"/g,
+                exclude: function (u) {
+                    return /\/pornstars\/(?:abc|favorites|videos|updated|page|\d+)\/?$/.test(u);
+                },
+                normalizeUrl: function (raw) {
+                    return raw.charAt(0) === '/' ? 'https://www.perfektdamen.co' + raw : raw;
+                },
+                nameRx: [/title="([^"]+)"/, /alt="([^"]+)"/, /<p>\s*([^<]+)/],
+                thumbRx: [/<img[^>]+(?:data-original|data-src|src)="([^"?#]+\.(?:jpe?g|webp|png))/i]
+            });
+        }).catch(function () { return []; });
+    },
+
+    browseByModel: function (modelUrl, page) {
+        var p = page || 1;
+        var u = modelUrl.replace(/\/+$/, '');
+        var url = p > 1 ? u + '/' + p + '/' : modelUrl;
+        return cherryFetch(url).then(function (html) {
+            var items = _perfektCards(html);
+            return { items: items, total_pages: _perfektPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    // Every get_file entry (360p / 480p / 720p / «mp4» / Auto) answers the SAME HLS master
+    // (#EXTM3U with the real levels) from a «….mp4/» URL (stand 2026-10-07): an external player
+    // picks the format by extension and Lampa's inner player starts hls.js only for /\.m3u8/.
+    // Hand ONE master with a `#.m3u8` fragment — never sent to the server, but both playVideo
+    // (inner player for HLS) and Lampa (hls.js) recognise it. hls.js then picks the level.
+    getStream: function (video) {
+        return cherryFetch(video.url).then(function (html) {
+            var r = extractStreams(html);
+            var master = bestQualityUrl(r.quality || {}) || r.url;
+            return master ? { url: master + '#.m3u8', quality: {} } : r;
+        }).catch(function () { return { url: '', quality: {} }; });
+    }
+});
+
+function _perfektCards(html) {
+    var items = [];
+    var hrefRx = /href="((?:https?:\/\/(?:www\.)?perfektdamen\.co)?\/video\/(\d+)\/)"/g;
+    // Collect card start offsets FIRST so each card's duration chunk can extend to the
+    // NEXT card boundary: the <ul class="video-meta"> duration <span> renders ~2.3k
+    // chars past the href (beyond a fixed window), so a card-bounded chunk is required.
+    var cards = [];
+    var seen = {};
+    var m;
+    while ((m = hrefRx.exec(html)) !== null) {
+        if (seen[m[2]]) continue;
+        seen[m[2]] = true;
+        cards.push({ index: m.index, url: m[1], id: m[2] });
+    }
+    for (var c = 0; c < cards.length; c++) {
+        var videoUrl = cards[c].url.charAt(0) === '/' ? 'https://www.perfektdamen.co' + cards[c].url : cards[c].url;
+        var id = cards[c].id;
+        var end = (c + 1 < cards.length) ? cards[c + 1].index : cards[c].index + 3000;
+
+        // Forward-only: PerfektDamen uses data-original="//static.perfektdamen.co/...jpg"
+        var chunk = html.slice(cards[c].index, Math.min(cards[c].index + 1000, end));
+        var durChunk = html.slice(cards[c].index, end);
+
+        var thumb = _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.jpe?g)/i) ||
+                    _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.(?:webp|png))/i);
+
+        var title = _decodeHtml(
+            _attr(chunk, /title="([^"]+)"/) ||
+            _attr(chunk, /<(?:h\d|div)[^>]*class="[^"]*(?:title|name)[^"]*"[^>]*>([^<]+)<\//) ||
+            _attr(chunk, /alt="([^"]+)"/)
+        );
+        if (!title) title = _titleFromUrl(videoUrl);
+
+        // Duration: <ul class="video-meta"><li><i class="fa fa-clock-o"></i> <span>24:14</span>…
+        // No duration/time class — anchor to the clock icon, then the H:MM(:SS) <span>.
+        // class="...duration..." kept as a fallback for any future markup variant.
+        var duration = parseDur(
+            _attr(durChunk, /fa-clock-o[^>]*>(?:\s*<[^>]*>)*\s*<span[^>]*>\s*([\d:]+)/i) ||
+            _attr(durChunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</)
+        );
+        var views    = parseViews(_attr(durChunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
+
+        // Hover-preview clip: data-preview-custom="…/get_file/…/{id}_preview360p.mp4/" on the card.
+        // Read the card-bounded durChunk (the attr sits past the forward title window).
+        var preview = _attr(durChunk, /data-preview-custom="(https?:\/\/[^"]+\.mp4[^"]*)"/i);
+
+        if (title || thumb) {
+            items.push({ id: id, source: 'perfektdamen', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views, preview: preview || undefined });
+        }
+    }
+    return items;
+}
+
+function _perfektPages(html, page, itemsLen) {
+    var m = /\/search\/(\d+)\/["'][^>]*(?:last|>>)/i.exec(html);
+    return m ? (parseInt(m[1], 10) || _derivePages(itemsLen, page, 20)) : _derivePages(itemsLen, page, 20);
+}
+
+// ---- HellPorno ----
+SOURCES.push(_kvsEngine({
+  id: 'hellporno',
+  name: 'HellPorno',
+  host: 'hellporno.com',
+  categoryFmt: 'https://hellporno.com/{slug}/{page}/',
+  catPageBase: 1, catPage1Omit: true,
+  categories: _cats('mature:Mature,teen:Teen,japanese:Japanese,granny:Granny,anal:Anal,mom:Mom,solo-girl:Solo girl,group-sex:Group sex,missionary:Missionary,threesome:Threesome,masturbation:Masturbation,milf:MILF,bdsm:BDSM,russian:Russian,pissing:Pissing,gangbang:Gangbang,big-tits:Big tits,skinny:Skinny,ebony:Ebony,hairy:Hairy,asian:Asian,creampie:Creampie,interracial:Interracial,handjob:Handjob,casting:Casting,arab:Arab,teacher:Teacher,bbw:BBW,spread-legs:Spread legs,public:Public,massage:Massage,stockings:Stockings,solo:Solo,party:Party,big-ass:Big ass,old-and-young:Old and young,indian:Indian,amateur:Amateur,pov:POV,blowjob:Blowjob,office:Office,pantyhose:Pantyhose,pussy-licking:Pussy licking,doggy-style:Doggy style,cum-in-mouth:Cum in mouth,ffm:FFM,small-tits:Small tits,hd:HD,cumshot:Cumshot,double-penetration:Double penetration,outdoor:Outdoor,moaning:Moaning,babes:Babes,pornstar:Pornstar,femdom:Femdom,reality:Reality,reverse-cowgirl:Reverse cowgirl,hardcore:Hardcore,cuckold:Cuckold,riding:Riding,cartoon:Cartoon,nun:Nun,nurse:Nurse,catfight:Catfight,nylon:Nylon,catsuit:Catsuit,caught:Caught,objects:Objects,cbt:CBT,celebrity:Celebrity,oil:Oil,cfnm:CFNM,chain:Chain,old-man:Old man,chained:Chained,on-stage:On stage,chair:Chair,oral:Oral,cheating:Cheating,orgasm:Orgasm,cheerleader:Cheerleader,orgy:Orgy,chinese:Chinese,christmas:Christmas,pain:Pain,chubby-guy:Chubby guy,pakistani:Pakistani,cigar:Cigar,pale:Pale,cigarette:Cigarette,panties:Panties,classroom:Classroom,cleaning:Cleaning,park:Park,clit:Clit,parking:Parking,close-up:Close up,parody:Parody,clothed:Clothed,clothespins:Clothespins,club:Club,collar:Collar,peaches:Peaches,college:College,perfect-body:Perfect body,periwig:Periwig,comics:Comics,persian:Persian,compilation:Compilation,pervert:Pervert,condom:Condom,pickup:Pickup,corset:Corset,pierced-clit:Pierced clit,costume:Costume,pierced-cock:Pierced cock,coach:Coach,pierced-nipples:Pierced nipples,country:Country,pierced-tongue:Pierced tongue,voyeur:Voyeur'),
+  sorts: _cats('post_date:Свежее,video_viewed:По популярности,video_viewed_today:Популярное за день,video_viewed_week:Популярное за неделю,video_viewed_month:Популярное за месяц,rating_week:Рейтинг за неделю,rating:По рейтингу,duration:Длинные,most_commented:По комментариям'),
+  searchUrl: function(query, page) {
+    return 'https://hellporno.com/search/' + (page || 1) + '/?q=' + encodeURIComponent(query);
+  },
+  browseUrl: function(page) {
+    // The global "new videos" feed is anti-bot-locked to page 1 — both /{p}/ and /new/{p}/
+    // re-serve page 1 to our non-JS client (verified /new/100/ == /new/1/), while CATEGORY
+    // listings paginate fine. /hd/ ≈ the whole site (almost every video is HD) and paginates
+    // cleanly, so use it as the scrollable global feed → infinite scroll works. The engine
+    // appends sort_by=post_date (default) so it stays newest-first.
+    var p = page || 1;
+    return p > 1 ? 'https://hellporno.com/hd/' + p + '/' : 'https://hellporno.com/hd/';
+  },
+  pagesRx: function(html, p) {
+    var nums = [];
+    var m;
+    var brRe = /href="https?:\/\/hellporno\.com\/(\d+)\/"/g;
+    while ((m = brRe.exec(html)) !== null) {
+      var n = parseInt(m[1], 10);
+      // 2257 is the U.S.C. 2257 legal-code footer link (/2257/), present on EVERY
+      // page — never a real pager page. Excluding it stops total_pages=2257.
+      if (!isNaN(n) && n !== 2257) nums.push(n);
+    }
+    var srRe = /\/search\/(\d+)\//g;
+    while ((m = srRe.exec(html)) !== null) {
+      var n = parseInt(m[1], 10);
+      if (!isNaN(n) && n !== 2257) nums.push(n);
+    }
+    return nums.length ? Math.max.apply(null, nums) : (p + 5);
+  },
+  parseCards: function(html) {
+    var items = [];
+    var seen = {};
+    var blocks = html.split('<div class="video-thumb"');
+    for (var i = 1; i < blocks.length; i++) {
+      var block = blocks[i];
+      var hrefMatch = block.match(/href="(https?:\/\/hellporno\.com\/videos\/([^"]+))"/);
+      if (!hrefMatch) continue;
+      var videoUrl = hrefMatch[1];
+      var slug = hrefMatch[2].replace(/\/$/, '');
+      var id = slug;
+      if (seen[id]) continue;
+      seen[id] = true;
+
+      var thumbMatch = block.match(/poster="([^"]+\.jpg[^"]*)"/) ||
+                       block.match(/data-src="([^"]+)"/) ||
+                       block.match(/src="([^"]+img\d+-hp\.hellcdn[^"]+)"/) ||
+                       block.match(/src="([^"]+\.jpg[^"]*)"/);
+      var thumb = thumbMatch ? thumbMatch[1] : '';
+
+      var titleMatch = block.match(/<a[^>]*class="title"[^>]*>([^<]+)/) ||
+                       block.match(/<div[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\/div>/) ||
+                       block.match(/title="([^"]+)"/);
+      var title = titleMatch ? stripTags(titleMatch[1]) : slug.replace(/-/g, ' ');
+
+      var durMatch = block.match(/<span[^>]*class="[^"]*time[^"]*"[^>]*>([^<]+)/) ||
+                     block.match(/<span[^>]*class="[^"]*duration[^"]*"[^>]*>([^<]+)/) ||
+                     block.match(/([\d]+:[\d]{2})/);
+      var duration = durMatch ? parseDur(durMatch[1].trim()) : 0;
+
+      // Hover-preview mp4 — each card has <video … src="…_trailer_360p.mp4" class="trailer_video">.
+      // The class follows src in the live markup, so match the "_trailer_" filename directly.
+      var pvM = block.match(/src="([^"]+_trailer[^"]*\.mp4[^"]*)"/i) ||
+                block.match(/<video[^>]*class="[^"]*trailer[^"]*"[^>]*src="([^"]+\.mp4[^"]*)"/i);
+      var preview = pvM ? pvM[1] : '';
+
+      items.push({
+        id: 'hp-' + id,
+        source: 'hellporno',
+        title: title,
+        thumb: thumb,
+        url: videoUrl,
+        duration: duration,
+        views: 0,
+        preview: preview || undefined
+      });
+    }
+    return items;
+  },
+  getStream: function(video) {
+    return cherryFetch(video.url).then(function(html) {
+      var quality = {};
+      var url = '';
+      var m;
+
+      var chsM = html.match(/var\s+chs_object\s*=\s*(\{[\s\S]+?\});/);
+      if (chsM) {
+        try {
+          var chs = JSON.parse(chsM[1]);
+          var playerUrl = chs.urlPlayer || chs.url_player || '';
+          if (playerUrl && playerUrl.indexOf('http') === 0) {
+            if (/\.mp4/.test(playerUrl)) {
+              return { url: playerUrl, quality: {} };
+            }
+            return cherryFetch(playerUrl).then(function(ihtml) {
+              var iResult = extractStreams(ihtml);
+              return iResult.url ? iResult : extractStreams(html);
+            }).catch(function() { return extractStreams(html); });
+          }
+        } catch (e) {}
+      }
+
+      var srcRe = /<source\s([^>]+)>/gi;
+      while ((m = srcRe.exec(html)) !== null) {
+        var attrs = m[1];
+        if (!/type="video\/mp4"/i.test(attrs)) continue;
+        var srcM = /src="([^"]+)"/.exec(attrs);
+        if (!srcM) continue;
+        var labelM = /(?:res|label|title)="([^"]+)"/.exec(attrs);
+        var lbl = labelM ? labelM[1] : (_kvsPickBest([srcM[1]]).quality['default'] ? 'default' : 'mp4');
+        quality[lbl] = srcM[1];
+        if (!url) url = srcM[1];
+      }
+
+      if (!url && !Object.keys(quality).length) {
+        return extractStreams(html);
+      }
+
+      if (Object.keys(quality).length) {
+        var best = Object.keys(quality).reduce(function(a, b) {
+          return (parseInt(a, 10) || 0) >= (parseInt(b, 10) || 0) ? a : b;
+        });
+        url = quality[best];
+      }
+
+      return { url: url, quality: quality };
+    }).catch(function() { return { url: '', quality: {} }; });
+  }
+}));
+
+// ---- 16. Pornobolt ----
+// 2026-10-07: sex.pornobolt.in times out from every egress (device, VPS, CF: 522); no live mirror
+// among 20 candidate domains (pornobolt.xyz is an unrelated download site). Hidden like 24rolika —
+// favorites/history for its cards still resolve through sourceById.
+SOURCES.push(_kvsEngine({
+    id: 'pornobolt',
+    name: 'Pornobolt',
+    disabled: true,
+    host: 'sex.pornobolt.in',
+    categoryFmt: 'https://sex.pornobolt.in/{slug}/{page}',
+    catPageBase: 1, catPage1Omit: true, sortParam: 'sort',
+    categories: _cats('russkoe-porno:Русские,incest:Инцест,zrelye:Зрелые,pickup:Пикап,kasting:Кастинг,vzroslye-s-molodymi:Взрослые с молодыми,molodenkie:Молоденькие,lyubitelskoe:Любительское,gruppovuha:Групповуха,anal:Анал,aziatki:Азиатки,latinki:Латинки,mezhrassovyj-seks:Межрассовый секс,tolstye:Толстые,sperma:Сперма,igrushki:Игрушки,krasotki:Красотки,lesbiyanki:Лесбиянки,minet:Минет,blondinki:Блондинки,bryunetki:Брюнетки,ryzhie:Рыжие,fetish-i-bdsm:Фетиш и БДСМ,bolshie-siski:Большие сиськи,bolshoj-chlen:Большой член,masturbaciya:Мастурбация,volosatye:Волосатые,dvojnoe-proniknovenie:Двойное проникновение,na-ulice:На улице,zhestkij-seks:Жесткий секс,china:Китайское,starushki:Старушки,milf:Милфа,korean:Корейское,granny:Бабушки,mama-druga:Мама друга,doiki:Дойки,huge-cock:Огромный член,shkola:Школа,big-ass:Большая жопа'),
+    // 'date' = the site's bare homepage order (curl-verified: bare === ?sort=date,
+    // and ?sort=mv differs). Default «Свежее» so page-1 lands on the newest feed,
+    // not the old all-time-popular ?sort=mv. mv/mc kept after for opt-in.
+    sorts: _cats('date:Свежее,mv:По популярности,mc:По комментариям'),
+    // single-page search (site): /search/{q} takes no page param.
+    searchUrl: function(query) {
+        return 'https://sex.pornobolt.in/search/' + encodeURIComponent(query);
+    },
+    // BARE homepage (no ?sort=) = date order. The KVS engine appends ?sort={sorts[0].id}
+    // → ?sort=date by default (≡ bare), or the user-chosen mv/mc.
+    browseUrl: function(page) {
+        return page > 1
+            ? 'https://sex.pornobolt.in/' + page
+            : 'https://sex.pornobolt.in/';
+    },
+    searchTotalPages: 1,
+    hrefRxSrc: 'href="((?:https?://sex\\.pornobolt\\.in)?/video/([^/"]+)\\.html)"',
+    idFromUrl: function(url, m) { return m[2]; },
+    normalizeUrl: function(rawUrl) {
+        return rawUrl.charAt(0) === '/' ? 'https://sex.pornobolt.in' + rawUrl : rawUrl;
+    },
+    // Models: /aktrisy index (36 models, relative /models/{name} links, name in
+    // .dropdown-title, thumb in data-orig). Per-model /models/{name}/{page} cards.
+    modelIndex: {
+        url: function() { return 'https://sex.pornobolt.in/aktrisy'; },
+        hrefRx: /href="((?:https?:\/\/sex\.pornobolt\.in)?\/models\/[^"\/]+)"/g,
+        normalizeUrl: function(raw) {
+            return raw.charAt(0) === '/' ? 'https://sex.pornobolt.in' + raw : raw;
+        },
+        nameRx: [/class="dropdown-title">([^<]+)</],
+        // Featured cards lazy-load via data-orig; the rest expose the avatar as a
+        // plain src= — try both so every card in the index gets a thumb.
+        thumbRx: [/data-orig="(https?:\/\/[^"]+\.jpe?g)"/i, /(?:data-src|src)="(https?:\/\/[^"]+\.jpe?g)"/i],
+        videosUrl: function(modelUrl, p) {
+            var u = modelUrl.replace(/\/+$/, '');
+            return p > 1 ? u + '/' + p : u;
+        }
+    },
+    // after:900 (was 600) so the per-card duration block — <span class="vid-info
+    // duration" itemprop="duration" content="PT…S">…</span> sits ~590-660 chars past
+    // the href and was being truncated — is fully inside the chunk (min inter-card gap ~1174).
+    chunkWindow: { before: 800, after: 900 },
+    thumbRx: [
+        /(?:data-src|src)="(https?:\/\/pbcdn\.tv\/pornobolt-kartinki\/huge-[^"]+\.jpe?g)"/i
+    ],
+    thumbFallback: function(id) {
+        return 'https://pbcdn.tv/pornobolt-kartinki/huge-' + id + '.jpg';
+    },
+    titleRx: [
+        /<(?:h\d|div)[^>]*class="[^"]*(?:title|name)[^"]*"[^>]*>([^<]+)<\//,
+        /title="([^"]+)"/,
+        /alt="([^"]+)"/
+    ],
+    pagesRx: function(html) {
+        // Pager renders numbered links /{N}?sort=… (last visible page = real max),
+        // e.g. <li class="dots">…<li><a href="/771?sort=mv">771</a>. The old
+        // last/>>-adjacent regex missed them and returned a hardcoded 10. Collect all
+        // numbered ?sort= links and take the max; return 0 on miss so _kvsPages falls
+        // back to _derivePages(items.length, …) instead of capping at 10.
+        var re = /\/(\d+)\?sort=/gi;
+        var nums = [], m;
+        while ((m = re.exec(html)) !== null) {
+            var n = parseInt(m[1], 10);
+            if (!isNaN(n)) nums.push(n);
+        }
+        return nums.length ? Math.max.apply(null, nums) : 0;
+    },
+    getStream: function(video) {
+        return cherryFetch(video.url).then(function(html) {
+            var pjRx = /Playerjs\s*\(\s*\{[^}]*?file\s*:\s*["']([^"']+)["']/i;
+            var pm = pjRx.exec(html);
+            if (pm) {
+                var filePath = pm[1];
+                var fileUrl = filePath.charAt(0) === '/' ? 'https://sex.pornobolt.in' + filePath : filePath;
+                return { url: fileUrl, quality: {} };
+            }
+            var cdnRx = /['"]?(https?:\/\/pbcdn\.tv\/[^"'\s]+\.(?:mp4|m3u8))['"]/gi;
+            var found = [], m;
+            while ((m = cdnRx.exec(html)) !== null) {
+                if (found.indexOf(m[1]) === -1) found.push(m[1]);
+            }
+            if (found.length) return _kvsPickBest(found);
+            return extractStreams(html);
+        }).catch(function() { return { url: '', quality: {} }; });
+    }
+}));
+
+// ---- 8. CrocoTube ----
+SOURCES.push(_kvsEngine({
+    id: 'crocotube',
+    name: 'CrocoTube',
+    host: 'crocotube.com',
+    categoryFmt: 'https://crocotube.com/categories/{slug}/{page}/',
+    catPageBase: 1, catPage1Omit: true,
+    categories: _cats('amateur:Amateur,anal:Anal,arab:Arab,asian:Asian,ass:Ass,babes:Babes,bbw:BBW,big-ass:Big ass,big-black-cock:Big black cock,big-cock:Big dick,big-tits:Big tits,blonde:Blonde,blowjob:Blowjob,brunette:Brunette,creampie:Creampie,cumshot:Cumshot,deepthroat:Deepthroat,double-penetration:Double penetration,ebony:Ebony,fake-tits:Fake tits,gangbang:Gangbang,granny:Granny,group-sex:Group sex,hairy:Hairy,handjob:Handjob,hardcore:Hardcore,hd:HD,indian:Indian,interracial:Interracial,japanese:Japanese,latina:Latina,mature:Mature,milf:MILF,mom:Mom,natural-tits:Natural tits,perfect-body:Perfect body,pov:POV,public:Public,pussy:Pussy,redhead:Redhead,russian:Russian,small-tits:Small tits,stockings:Stockings,teen:Teen,threesome:Threesome,webcam:Webcam'),
+    sortMode: 'path',
+    // GLOBAL feed «Свежее» = the bare /{page}/ root (browseUrl already serves latest).
+    // globalLatestSort marks the sort id that maps to that bare root; any other sort
+    // (e.g. most-popular) builds the path-based global feed /{sort}/{page}/.
+    globalLatestSort: 'latest-updates',
+    sorts: _cats('latest-updates:Свежее,most-popular:По популярности,top-rated:По рейтингу,longest:Длинные'),
+    searchUrl: function(query, page) {
+        return page > 1
+            ? 'https://crocotube.com/search/' + page + '/?q=' + encodeURIComponent(query)
+            : 'https://crocotube.com/search/1/?q=' + encodeURIComponent(query);
+    },
+    browseUrl: function(page) {
+        return 'https://crocotube.com/' + (page || 1) + '/';
+    },
+    hrefRxSrc: 'href="(https?://crocotube\\.com/videos/[^"]+)"',
+    // Pre-slice to the real listing container so the header mega-menu dropdown
+    // (#menu-tab-free-videos "Last Added", identical on every page) isn't harvested
+    // as ~19 duplicate cards. Start parsing at the first ct-videos-list.
+    listScopeRx: /ct-videos-list/,
+    idFromUrl: function(url) {
+        return url.replace(/^https?:\/\/[^/]+\/videos\//, '').replace(/[^a-z0-9]/gi, '_');
+    },
+    // Models: /pornstars/ index (single-page, 5331 models inline). Per-model page
+    // /pornstars/{slug}/ renders listing cards (reuse _kvsParseCards via browseByModel).
+    modelIndex: {
+        url: function() { return 'https://crocotube.com/pornstars/'; },
+        hrefRx: /href="(https?:\/\/crocotube\.com\/pornstars\/[^"\/]+\/)"/g,
+        nameRx: [/<span>([^<]+)<\/span>/, /alt="([^"]+)"/],
+        thumbRx: [/(?:data-src|src)="(https?:\/\/[^"]+\.jpe?g)"/i],
+        videosUrl: function(modelUrl, p) {
+            var u = modelUrl.replace(/\/+$/, '');
+            return p > 1 ? u + '/' + p + '/' : u + '/';
+        }
+    },
+    chunkWindow: { before: 0, after: 1000 },
+    thumbRx: [
+        /(?:data-src|src)="(https?:\/\/img\d*-ct\.alphaxcdn\.com\/[^"]+)"/i,
+        /(?:data-src|src)="([^"]+\.jpe?g)"/i
+    ],
+    titleRx: [
+        /title="([^"]+)"/,
+        /alt="([^"]+)"/,
+        /<h\d[^>]*>([^<]+)<\/h\d>/
+    ],
+    pagesRx: function(html) {
+        var m = /\/search\/(\d+)\/?["'][^>]*(?:last|>>)/i.exec(html) ||
+                /\/(\d+)\/["'][^>]*(?:last|>>)/i.exec(html);
+        return m ? (parseInt(m[1], 10) || 10) : 10;
+    },
+    getStream: function(video) {
+        return cherryFetch(video.url).then(function(html) {
+            var cdnRx = /['"]?(https?:\/\/cdn[^"'\s]*alphaxcdn\.com\/[^"'\s]+\.(?:mp4|m3u8))['"]/gi;
+            var found = [], m;
+            while ((m = cdnRx.exec(html)) !== null) {
+                if (found.indexOf(m[1]) === -1) found.push(m[1]);
+            }
+            if (found.length) return _kvsPickBest(found);
+            return extractStreams(html);
+        }).catch(function() { return { url: '', quality: {} }; });
+    }
+}));
+
+// ---- 9. Huyamba — revived 2026-09-04 on the live mirror play.huyamba.mobi (fuq.huyamba.mobi
+// is 404, huyamba.mobi leaks raw PHP). Plain KVS: listing /videos/?by={sort}&from={p} (`page=`
+// is IGNORED — every page repeats page 1; only `from=` paginates), categories
+// /categories/{slug}/videos/?from={p}, search /search/{q}/?from_videos={p}, hover clip in
+// data-preview (webm). Stream = flashvars video_url/alt/alt2 = 480/720/1080; the v-acctoken
+// is NOT IP-bound (device-issued token fetched via the VPS → 206). Mobile UAs are 302'd into
+// the dead rt.huyamba.xyz, so the page is force-proxied on Android (see _ANDROID_FORCE_PROXY).
+// All six sorts verified to reorder the feed and to apply inside categories (&by=).
+// 2026-10-07: play.huyamba.mobi answers 404 everywhere; the same KVS skin lives on huyamba.tv
+// (identical markup, opens natively from the device). Old favorites/history cards still carry
+// play.huyamba.mobi URLs → _huyUrl rewrites them, so they keep playing. ----
+function _huyUrl(u) { return String(u || '').replace(/^https?:\/\/play\.huyamba\.mobi\//, 'https://huyamba.tv/'); }
+SOURCES.push(_kvsEngine({
+    id: 'huyamba',
+    name: 'Huyamba',
+    host: 'huyamba.tv',
+    categoryFmt: 'https://huyamba.tv/categories/{slug}/videos/?from={page}',
+    catPageBase: 1, catPage1Omit: false,
+    sortParam: 'by',
+    categories: _cats('russian-porn:Русское,porno-s-russkim-perevodom:С переводом,homemade-porn-videos:Домашнее,teen-porn-videos:Молодые,anal-porn-videos:Анал,blowjob-porn-videos:Минет,granny-porn-videos:Зрелые,group-porn-videos:Групповое,lesbians-porn-videos:Лесбиянки,asian-porn-videos:Азиатки,interracial-porn-videos:Межрассовое,big-dick-porn-videos:Большие члены,tolstushki-porn-videos:Толстушки,skinny-porn-videos:Худые,solo-porn:Соло,sperm-squirt-porn-videos:Сперма и сквирт,cuckold-porn:Куколд,bdsm-porn-videos:БДСМ,fisting-porn-videos:Фистинг,sex-toys-porn-videos:Игрушки,oral-porn-videos:Орал,public-porn-videos:На публике,hidden-cameras-porn-videos:Скрытая камера,full-length-porn-movies:Полнометражные,russian-porn-movies:Русские фильмы,classic-porn:Классика,celebrities-porn-videos:Знаменитости,xxx-porn-parody:Пародии,eroticheskie-filmy:Эротика,vr-porn-videos:VR,horror:Ужасы,sex-mashines-porn-videos:Секс-машины'),
+    sorts: _cats('video_viewed:По популярности,post_date:Свежее,video_viewed_week:Популярное за неделю,rating_week:Рейтинг за неделю,rating:По рейтингу,duration:Длинные'),
+    searchUrl: function (query, page) {
+        var q = encodeURIComponent(query);
+        return page > 1 ? 'https://huyamba.tv/search/' + q + '/?from_videos=' + page
+                        : 'https://huyamba.tv/search/' + q + '/';
+    },
+    browseUrl: function (page) { return 'https://huyamba.tv/videos/?from=' + (page || 1); },
+    hrefRxSrc: 'href="(https?://(?:play\\.huyamba\\.mobi|huyamba\\.tv)/video/(\\d+)/)"',
+    idFromUrl: function (url, m) { return 'huy-' + m[2]; },
+    normalizeUrl: function (raw) { return _huyUrl(raw); },
+    pageUrl: _huyUrl,
+    // Card = <a class="card" href=… title=…><img data-original=… data-preview=…><div class="sticky">
+    // <div class="box">1:41:31</div>…<div class="title">…</div><ul><li><svg #icon-eye/><span>92K</span>
+    chunkWindow: { before: 0, after: 1400 },
+    stripBase64: true,
+    thumbRx: [/data-original="([^"?#]+\.jpe?g)/i, /data-webp="([^"?#]+)"/i],
+    titleRx: [/^href="[^"]+"\s+title="([^"]+)"/, /<div class="title">([^<]+)</],
+    previewRx: /data-preview="([^"]+\.webm[^"]*)"/i,
+    durationRx: /<div class="box">\s*([\d:]+)\s*</,
+    viewsRx: /#icon-eye"><\/use>\s*<\/svg>\s*<span>([^<]+)</,
+    // KVS ajax pager: data-parameters="sort_by:…;from:N" — the largest N is the last page.
+    pagesRx: function (html) {
+        var rx = /data-parameters="[^"]*from:(\d+)"/g, m, max = 0;
+        while ((m = rx.exec(html)) !== null) max = Math.max(max, parseInt(m[1], 10) || 0);
+        return max;
+    },
+    getStream: function (video) {
+        return cherryFetch(_huyUrl(video.url)).then(_kvsFlashvarsQuality)
+            .catch(function () { return { url: '', quality: {} }; });
+    }
+}));
+
+// KVS flashvars → {url, quality}: video_url / video_alt_url / video_alt_url2 are the
+// 480p / 720p / 1080p files (labels verified against *_text on huyamba). Falls back to
+// the generic extractStreams when a skin has no flashvars.
+function _kvsFlashvarsQuality(html) {
+    // The one KVS (kt_player) flashvars reader. A skin's own *_text label wins: a size ("360p", "HD 720")
+    // is used as is; words rank without inventing a size — 3movs says «High Quality» / «Low Quality» and its
+    // video_alt_url is the LOW file (*_lq.mp4), which the old hard-wired slot map called «720p» and played
+    // as the best (640x360 on the TV, 2026-10-11). No label → the classic slot map 480p / 720p / 1080p.
+    var slots = { video_url: '480p', video_alt_url: '720p', video_alt_url2: '1080p' }, texts = {};
+    var tRe = /(video_url|video_alt_url\d*)_text\s*[=:]\s*['"]([^'"]+)['"]/g, tm;
+    while ((tm = tRe.exec(html)) !== null) texts[tm[1]] = tm[2];
+    var varM = /(video_url|video_alt_url\d*)\s*[=:]\s*['"](https?:[^'"]+)['"]/g;
+    var files = [], fm;
+    while ((fm = varM.exec(html)) !== null) {
+        var t = texts[fm[1]] || '', size = (t.match(/(\d{3,4})\s*p?/) || [])[1];
+        var low = /_lq\.mp4/i.test(fm[2]) || /low|\blq\b|\bsd\b/i.test(t);
+        var label = size ? size + 'p' : (t || slots[fm[1]] || fm[1]);
+        var rank = size ? parseInt(size, 10) : (t ? (low ? 1 : 2) : (parseInt(slots[fm[1]], 10) || 0));
+        files.push({ label: label, url: fm[2], rank: rank });
+    }
+    if (!files.length) return extractStreams(html);
+    // Best first: insertion order is the fallback ranking for labels without a size.
+    files.sort(function (a, b) { return b.rank - a.rank; });
+    var quality = {};
+    files.forEach(function (f) { if (!quality[f.label]) quality[f.label] = f.url; });
+    return { url: files[0].url, quality: quality };
+}
+
+// ---- 9b. Ebalovo (added v0.13.22) ----
+// RU classic (also in Lampac/xsena). The brand domain www.ebalovo.porn 301s to the current
+// mirror (wec.epalovo.com today) and every proxy/native fetch follows it, so URLs are built on
+// the brand domain — a mirror move needs no code change; card links come back absolute on the
+// mirror. Cards: <a href="…/video/{slug}/" data-eb="MM:SS;…"><img alt src=img.ebacdn.com…>
+// <div class="item-title">. Sorts are path roots (/xxx-top/, /porno-online/, / = newest); inside
+// a category the popular/best orders are a "-rating" slug suffix (/porno/{slug}-rating/{p}/).
+// Search /search/{q}/{p}/ takes RU or EN. Stream = flashvars video_url/video_alt_url (480/720p)
+// on video_file/…?v-acctoken (302 → *.ebacdn.com) — NOT IP-bound, no Referer check, but
+// UA-BOUND: a token minted for a desktop UA 404s when fetched with the Android WebView UA, and
+// the mobile mirror (mod.*, where the brand domain sends mobile UAs) mints tokens that 404
+// outright. Hence on Android the page goes through the proxy (desktop UA) and the stream too
+// (`androidProxyStream`); card/model URLs are normalised to the brand domain so every fetch hits
+// the force-proxied host. No hover clips on the site. No pager markup → pages derive from fullness.
+var _EB_BASE = 'https://www.ebalovo.porn';
+var _EB_CARDS = {
+    id: 'ebalovo',
+    hrefRxSrc: 'href="(https?://[a-z0-9.-]+/video/([a-z0-9_-]+)/)"',
+    // Mirror host → brand domain: mirror-proof favorites/history, and one host to force-proxy.
+    normalizeUrl: function (raw) { return raw.replace(/^https?:\/\/[^/]+/, _EB_BASE); },
+    idFromUrl: function (url, m) { return 'eb-' + m[2]; },
+    chunkWindow: { before: 0, after: 900 },
+    thumbRx: [/src="(https?:\/\/img\.ebacdn\.com\/[^"]+\.jpe?g)"/i],
+    titleRx: [/<div class="item-title">\s*([^<]+?)\.?\s*<\/div>/, /alt="([^"]+)"/],
+    durationRx: /data-eb="(\d+:[\d:]+);/
+};
+function _ebCards(html) { return _kvsParseCards(html, _EB_CARDS); }
+
+function _ebUrl(category, page, sort) {
+    var p = page || 1, s = sort || 'xxx-top', pg = p > 1 ? p + '/' : '';
+    if (category) return _EB_BASE + '/porno/' + category + (s === 'latest' ? '' : '-rating') + '/' + pg;
+    return _EB_BASE + (s === 'latest' ? '/' : '/' + s + '/') + pg;
+}
+
+SOURCES.push({
+    id: 'ebalovo',
+    name: 'Ebalovo',
+    host: 'www.ebalovo.porn',
+    // Stream tokens are UA-bound (desktop only) on a rotating mirror host → px() proxies the
+    // stream on Android (see playVideo). The page is force-proxied via _ANDROID_FORCE_PROXY.
+    androidProxyStream: true,
+    cfg: { categories: _cats('a1-russian:Русское порно,a1-russian-amateur:Русское домашнее порно,a1-amateur:Домашнее порно,milfs:Зрелые,teen:Молодые,anal-videos:Анал,blowjob:Минет,big-tits:Большие сиськи,ass:Красивые попки,big-cock:Большой член,a1-stepmom:Мамки,group-porno:Групповой секс,a1-threesome:ЖМЖ,a1-2man-woman:МЖМ,gangbang:Ганг банг,lesbi-porno:Лесби,castings:Кастинг,pickups:Порно пикап,massage:Массаж,b1-masturbation:Мастурбация,b1-solo:Соло,a1-orgasm:Оргазм,cunni:Куни,handjob:Дрочка,hairy:Волосатые,stockings:В чулках,asian-porno:Азиатки,black:Негры,czech-porn:Чешское порно,bdsm-porn:БДСМ,rough-sex:Жёсткий секс,a1-sex-toys:Секс игрушки,pov:pov,webcam:Вебкамера,beautiful:Красивый секс,closeup:Крупным планом,a1-brunette:Брюнетки,a1-babe:Красивые,a1-natural-tits:Натуральные сиськи,a1-europe:Евро,a1-erotic:Эротика,big:Толстые,fun:Жесть'),
+           sorts: _cats('xxx-top:По популярности,latest:Свежее,porno-online:Лучшее') },
+
+    search: function (query, page) {
+        var p = page || 1;
+        var url = _EB_BASE + '/search/' + encodeURIComponent(query) + '/' + (p > 1 ? p + '/' : '');
+        return cherryFetch(url).then(function (html) {
+            var items = _ebCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 24) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    browse: function (category, page, sortId) {
+        var p = page || 1;
+        return cherryFetch(_ebUrl(category, p, sortId)).then(function (html) {
+            var items = _ebCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 24) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    // «Похожие»: the video page renders a related block in the listing card markup.
+    getRelated: _relatedFrom(_ebCards),
+
+    getStream: function (video) {
+        return cherryFetch(video.url).then(_kvsFlashvarsQuality)
+            .catch(function () { return { url: '', quality: {} }; });
+    },
+
+    // Models: /female-models/{p}/ index (30/page) — <a href="…/models/{slug}/" title=RU-name>
+    // <img data-srcset=avatar alt=Name>; a model's videos are listing-identical cards at /models/{slug}/{p}/.
+    getModels: function (page) {
+        var p = page || 1;
+        return cherryFetch(_EB_BASE + '/female-models/' + (p > 1 ? p + '/' : '')).then(function (html) {
+            return _parseModelIndex(html, {
+                window: 700,
+                hrefRx: /href="(https?:\/\/[a-z0-9.-]+\/models\/[a-z0-9_-]+\/)"/g,
+                normalizeUrl: _EB_CARDS.normalizeUrl,
+                nameRx: [/alt="([^"]+)"/, /title="([^"]+)"/],
+                thumbRx: [/data-srcset="(https?:\/\/[^"\s]+)"/, /data-src="(https?:\/\/[^"]+)"/]
+            });
+        }).catch(function () { return []; });
+    },
+
+    browseByModel: function (modelUrl, page) {
+        var p = page || 1;
+        var url = modelUrl.replace(/\/+$/, '') + '/' + (p > 1 ? p + '/' : '');
+        return cherryFetch(url).then(function (html) {
+            var items = _ebCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 24) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    }
+});
+
+// ---- 9c. Porno666 (added v0.13.23) ----
+// RU KVS site on the brand host porno666.link (mirrors wwwp.porno666.news / x.porno666.fo also
+// exist — card + model links are normalised to the brand host). It is the farm behind ebun's
+// 666-emded.com embeds, with the same stream policy: get_file tokens are IP-bound AND the CDN
+// (nl2.videofile.me) 403s any foreign Referer → on Android the page and the stream (same host)
+// go through the proxy (CF; stand: CF-minted token streams via CF → 206). Feed sorts are root
+// paths (/most-popular/, /top-rated/, /latest-updates/); category pages reject the /{sort}/
+// segment but honour ?sort_by= (KVS vocabulary) → catSortQuery. Flashvars label their files
+// 360/480/720 (video_url_text …) — _kvsFlashvarsQuality reads those labels.
+SOURCES.push(_kvsEngine({
+    id: 'porno666',
+    name: 'Porno666',
+    host: 'porno666.link',
+    sortMode: 'path', globalLatestSort: 'latest-updates',
+    categoryFmt: 'https://porno666.link/categories/{slug}/{page}/',
+    catPageBase: 1, catPage1Omit: true,
+    catSortQuery: { 'most-popular': 'video_viewed', 'top-rated': 'rating', 'latest-updates': 'post_date' },
+    categories: _cats('masturbaciya:Мастурбация,orgazmy:Оргазмы,massaj:Массаж,negry:Негры,porno-vk:Порно ВК,mamki:Мамки,chulki-i-kolgotki:Чулки и колготки,bolshie-chleny:Большие члены,blondinki:Блондинки,bolshie-siski:Большие сиськи,analnyy-seks:Анал,domashnee-i-chastnoe:Домашнее порно,zrelye:Зрелые,tolstye:Толстые,ryjie:Рыжие,molodye:Молодые,ne-postanovochnoe:Не постановочное,russkoe:Русское порно,studenty:Студенты,jeny:Жены,spyashchie:Спящие,hudye:Худые,jopy:Жопы,bryunetki:Брюнетки,rakom:Раком,seks-vtroem:Секс втроем,igrushki:Игрушки,svingery:Свингеры,strapon:Страпон,minet:Минет,sperma:Сперма,izmena:Измена,volosatye:Волосатые,pikap:Пикап,gruppovoe:Групповое,porno-film:Порно фильмы,jestkoe:Жесткое,aziatki:Азиатки,kasting:Кастинг,pyanye:Пьяные,yaponskoe:Японское,bdsm:БДСМ'),
+    sorts: _cats('most-popular:По популярности,latest-updates:Свежее,top-rated:По рейтингу'),
+    searchUrl: function (query, page) {
+        var q = encodeURIComponent(query);
+        return page > 1 ? 'https://porno666.link/search/' + q + '/' + page + '/' : 'https://porno666.link/search/' + q + '/';
+    },
+    browseUrl: function (page) {
+        return page > 1 ? 'https://porno666.link/latest-updates/' + page + '/' : 'https://porno666.link/latest-updates/';
+    },
+    hrefRxSrc: 'href="(https?://[a-z0-9.-]*porno666[a-z0-9.-]*/video/(\\d+)/)"',
+    normalizeUrl: function (raw) { return raw.replace(/^https?:\/\/[^/]+/, 'https://porno666.link'); },
+    idFromUrl: function (url, m) { return 'p666-' + m[2]; },
+    // Card: <a href=…/video/{id}/ title=…><img data-original=… data-preview=…mp4><div class="duration">
+    // <div class="views"><strong class="title">
+    chunkWindow: { before: 0, after: 900 },
+    stripBase64: true,
+    thumbRx: [/data-original="([^"?#]+\.jpe?g)/i, /src="(https?:\/\/[^"?#]+\.jpe?g)/i],
+    titleRx: [/<strong class="title">\s*([^<]+?)\s*<\/strong>/, /^href="[^"]+" title="([^"]+)"/],
+    modelIndex: {
+        url: function (p) { return p > 1 ? 'https://porno666.link/models/' + p + '/' : 'https://porno666.link/models/'; },
+        hrefRx: /href="(https?:\/\/[a-z0-9.-]*porno666[a-z0-9.-]*\/models\/[a-z0-9-]+\/)"/g,
+        normalizeUrl: function (raw) { return raw.replace(/^https?:\/\/[^/]+/, 'https://porno666.link'); },
+        nameRx: [/title="([^"]+)"/, /alt="([^"]+)"/],
+        thumbRx: [/src="(https?:\/\/[^"]+\.jpe?g)"/i]
+    },
+    // The video page no longer carries the player (2026-10-07: no flashvars on any route — the
+    // generic fallback then picked a sidebar card's *_preview2.mp4, i.e. a clip of ANOTHER video).
+    // The same-domain embed page /embed/{id} still has the full flashvars (360p…), 6 KB.
+    getStream: function (video) {
+        var id = (String(video.url || '').match(/\/video\/(\d+)/) || [])[1];
+        var embed = id ? 'https://porno666.link/embed/' + id : video.url;
+        return cherryFetch(embed).then(_kvsFlashvarsQuality)
+            .catch(function () { return { url: '', quality: {} }; });
+    }
+}));
+
+// ---- 9d. Lenkino (added v0.13.23) ----
+// Same "len" family as ebalovo: the brand domain www.lenkino.adult 301s to the current mirror
+// (wes.lenkino.adult today; mobile UAs are sent to mob.lenkino.love, whose stream tokens 404),
+// so URLs are built on the brand domain and card/model links are normalised back to it.
+// Cards: <a href="…/{id}" class="len_pucl"><img src=img.lencdn.com… alt=…><div class="itm-dur">
+// <div class="itm-tit">. Feeds: / (newest, page/{p}), /top-porno (page/{p}); categories /{slug}
+// (page/{p}, no sorts); search /search/{q}/page/{p}; pornstars /pornstars (page/{p}) →
+// /pornstar/{slug} (page/{p}). Stream = flashvars video_url/video_alt_url (480/720p) on
+// video_file/… — not IP-bound, but UA-BOUND (404 with the WebView UA) and a foreign Referer is
+// answered with a decoy ad clip → page force-proxied on Android + `androidProxyStream`.
+var _LK_BASE = 'https://www.lenkino.adult';
+var _LK_CARDS = {
+    id: 'lenkino',
+    // Video links are the only host-root numeric paths (/{id}); pager links carry /page/.
+    hrefRxSrc: 'href="(https?://[a-z0-9.-]+/(\\d+))"',
+    normalizeUrl: function (raw) { return raw.replace(/^https?:\/\/[^/]+/, _LK_BASE); },
+    idFromUrl: function (url, m) { return 'lk-' + m[2]; },
+    chunkWindow: { before: 0, after: 900 },
+    thumbRx: [/src="(https?:\/\/img\.lencdn\.com\/[^"]+\.jpe?g)"/i],
+    titleRx: [/<div class="itm-tit">\s*([^<]+?)\s*<\/div>/, /alt="([^"]+)"/],
+    durationRx: /class="itm-dur[^"]*">\s*([\d:]+)/
+};
+// Drop thumb-less matches: the footer's RTA link (/2257) is the only host-root numeric path that is not a card.
+function _lkCards(html) { return _kvsParseCards(html, _LK_CARDS).filter(function (v) { return !!v.thumb; }); }
+
+function _lkUrl(category, page, sort) {
+    var p = page || 1, pg = p > 1 ? '/page/' + p : '';
+    if (category) return _LK_BASE + '/' + category + pg;
+    return _LK_BASE + ((sort || 'top') === 'top' ? '/top-porno' : '') + (pg || (sort === 'latest' ? '/' : ''));
+}
+
+SOURCES.push({
+    id: 'lenkino',
+    name: 'Lenkino',
+    host: 'www.lenkino.adult',
+    androidProxyStream: true,
+    cfg: { categories: _cats('a1-russian:Русское порно,milf-porn:Порно зрелых,stepmom:Мачеха,anal-porno:Анал,big-tits:Большие сиськи,lesbi:Лесби,group-videos:Групповуха,pov:pov,porno-bdsm:БДСМ,webcam:Вебкамера,gangbang:Ганг банг,threesome:ЖМЖ,beautiful:Красивый секс,erotic:Эротика,amateur-porno:Домашнее порно,casting:Кастинг,cunnilingus:Куни,massage:Массаж,masturbation:Мастурбация,blowjob:Минет,solo:Соло,rough-sex:Хардкор,2man-woman:МЖМ,czech-porno:Чешское порно,russian-amateur:Русское домашнее порно,teen:Молодые,old-and-young:Старые с молодыми,students:Студенты,asian:Азиатки,exgfs:Секс с бывшей,mistress:Госпожа,latina:С латинками,nurse:Медсестра,bride:С невестой,secretary:Секретарша,babysitter:Няня,cheerleader:Черлидерша,schoolgirl:Студентка,slave:Секс-рабыня,maid:Горничная,teacher-milf:Учительница,indianka:Индианка'),
+           sorts: _cats('top:По популярности,latest:Свежее') },
+
+    search: function (query, page) {
+        var p = page || 1;
+        var url = _LK_BASE + '/search/' + encodeURIComponent(query) + (p > 1 ? '/page/' + p : '');
+        return cherryFetch(url).then(function (html) {
+            var items = _lkCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 36) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    browse: function (category, page, sortId) {
+        var p = page || 1;
+        return cherryFetch(_lkUrl(category, p, sortId)).then(function (html) {
+            var items = _lkCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 36) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    getRelated: _relatedFrom(_lkCards),
+
+    getStream: function (video) {
+        return cherryFetch(video.url).then(_kvsFlashvarsQuality)
+            .catch(function () { return { url: '', quality: {} }; });
+    },
+
+    getModels: function (page) {
+        var p = page || 1;
+        return cherryFetch(_LK_BASE + '/pornstars' + (p > 1 ? '/page/' + p : '')).then(function (html) {
+            return _parseModelIndex(html, {
+                window: 700,
+                hrefRx: /href="(https?:\/\/[a-z0-9.-]+\/pornstar\/[a-z0-9_-]+)"/g,
+                normalizeUrl: _LK_CARDS.normalizeUrl,
+                nameRx: [/alt="([^"]+)"/, /<div class="itm-tit">\s*([^<]+?)\s*</],
+                thumbRx: [/src="(https?:\/\/img\.lencdn\.com\/[^"]+\.jpe?g)"/i]
+            });
+        }).catch(function () { return []; });
+    },
+
+    browseByModel: function (modelUrl, page) {
+        var p = page || 1;
+        var url = modelUrl.replace(/\/+$/, '') + (p > 1 ? '/page/' + p : '');
+        return cherryFetch(url).then(function (html) {
+            var items = _lkCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 36) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    }
+});
+
+// ---- 9e. Pornobriz (added v0.13.23) ----
+// RU site with its own engine and plain relative markup: <div class="thumb_main"><a href="/video/{slug}/"
+// rel="bookmark"><video data-preview=…mp4><img data-original="/content/screen/…jpg" alt=…>
+// <div class="t-hd">FULL HD</div><div class="duration"><div class="th-title">. Sorts are roots
+// (/new/, /top/, /best/ + page{p}/), categories /{slug}/page{p}/, search /search/{q}/ (single
+// page), models /stars/page{p}/ → /models/{slug}/page{p}/. Stream = <source src=… size=1080|720|
+// 480|240> on the page host (302 → idcdn/cdngu CDNs) — no IP/UA/Referer binding (a listed
+// quality can be missing on the CDN → 404, the player falls back); mobile UAs get the
+// m.pornobriz.cloud mirror with the same markup. See the androidProxyStream note below.
+var _PB_BASE = 'https://pornobriz.com';
+function _pbAbs(u) { return u && u.charAt(0) === '/' ? _PB_BASE + u : u; }
+var _PB_CARDS = {
+    id: 'pornobriz',
+    hrefRxSrc: 'href="(/video/([a-z0-9_-]+)/)" rel="bookmark"',
+    normalizeUrl: _pbAbs,
+    idFromUrl: function (url, m) { return 'pb-' + m[2]; },
+    chunkWindow: { before: 0, after: 900 },
+    stripBase64: true,
+    thumbRx: [/data-original="(\/content\/screen\/[^"]+\.jpe?g)"/i],
+    titleRx: [/<div class="th-title">\s*([^<]+?)\s*<\/div>/, /alt="([^"]+)"/],
+    previewRx: /data-preview="([^"]+\.mp4)"/
+};
+function _pbCards(html) {
+    return _kvsParseCards(html, _PB_CARDS).map(function (v) { v.thumb = _pbAbs(v.thumb); return v; });
+}
+
+function _pbUrl(category, page, sort) {
+    var p = page || 1, pg = p > 1 ? 'page' + p + '/' : '';
+    return _PB_BASE + '/' + (category || sort || 'top') + '/' + pg;
+}
+
+SOURCES.push({
+    id: 'pornobriz',
+    name: 'Pornobriz',
+    host: 'pornobriz.com',
+    // The page is fine natively, but the WebView's media stack rejects the CDN's direct
+    // response (MEDIA_ELEMENT_ERROR "Format error" on both the mirror and the final
+    // s12.idcdn.top URL, while curl gets a clean 206 video/mp4) — through the proxy the
+    // same file plays (stand: inner player currentTime 17 s). px() proxies the stream.
+    androidProxyStream: true,
+    cfg: { categories: _cats('asian:Азиатки,anal:Анальный секс,bdsm:БДСМ,blonde:Блондинки,big_ass:Большая жопа,big_tits:Большие сиськи,big_dick:Большой член,shaved:Бритая киска,brunette:Брюнетки,clothes:В одежде,hairy:Волосатые киски,swallow:Глотают сперму,deepthroat:Глубокая глотка,group:Групповой секс,double_penetration:Двойное проникновение,long_hair:Длинноволосые девушки,wanking:Дрочат,hardcore:Жесткий секс,ffm:ЖМЖ порно,toys:Игрушки,kazakh:Казашки,cumshot:Камшот,cum_in_mouth:Кончают в рот,perfect_ass:Красивая задница,lingerie:Красивое белье,beautiful:Красивые девушки,beautiful_tits:Красивые сиськи,close_up:Крупным планом,pussy_licking:Кунилингус,lesbian:Лесбиянки,amateur:Любительское порно,petite:Маленькие девушки,small_tits:Маленькие сиськи,milf:Мамочки,masturbation:Мастурбация,interracial:Межрасовое,mfm:МЖМ порно,cute:Милашки,blowjob:Минет,seks-molodye:Молодые,outdoor:На природе,public:На публике,riding:Наездницы,ebony:Негритянки,orgasm:Оргазм,pov:От первого лица,peeing:Писают,kissing:Поцелуи,gagging:Рвотные позывы,reality:Реальный секс,rimming:Римминг,romantic:Романтическое,russian:Русское порно,redhead:Рыжие,japanese:С японками,threesome:Секс втроем,doggystyle:Секс раком,babe:Симпатичные,squirting:Сквиртинг,solo_girl:Соло девушек,creampie:Сперма в жопе,cum_on_tits:Сперма на груди,facial:Сперма на лице,strap-on:Страпон,striptease:Стриптиз,black-haired:Темноволосые,fetish:Фетиш,fingering:Фингеринг,fisting:Фистинг,skinny:Худые девушки'),
+           sorts: _cats('top:По популярности,new:Свежее,best:Лучшее') },
+
+    // The site's search is a single page (no pager) — 30 best matches.
+    search: function (query) {
+        var url = _PB_BASE + '/search/' + encodeURIComponent(query) + '/';
+        return cherryFetch(url).then(function (html) {
+            return { items: _pbCards(html), total_pages: 1 };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    browse: function (category, page, sortId) {
+        var p = page || 1;
+        return cherryFetch(_pbUrl(category, p, sortId)).then(function (html) {
+            var items = _pbCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 42) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    getRelated: _relatedFrom(_pbCards),
+
+    getStream: function (video) {
+        return cherryFetch(video.url).then(function (html) {
+            var rx = /<source src="([^"]+\.mp4)"[^>]*size="(\d+)"/g, m, quality = {};
+            while ((m = rx.exec(html)) !== null) quality[m[2] + 'p'] = m[1];
+            var best = bestQualityUrl(quality);
+            return best ? { url: best, quality: quality } : extractStreams(html);
+        }).catch(function () { return { url: '', quality: {} }; });
+    },
+
+    getModels: function (page) {
+        var p = page || 1;
+        return cherryFetch(_PB_BASE + '/stars/' + (p > 1 ? 'page' + p + '/' : '')).then(function (html) {
+            return _parseModelIndex(html, {
+                window: 500,
+                hrefRx: /href="(\/models\/[^"\/]+\/)" rel="bookmark"/g,
+                normalizeUrl: _pbAbs,
+                nameRx: [/title="([^"]+)"/, /alt="([^"]+)"/],
+                thumbRx: [/data-original="(\/models\/(?!no_screen)[^"]+\.jpe?g)"/i]
+            }).map(function (mdl) { mdl.thumb = _pbAbs(mdl.thumb); return mdl; });
+        }).catch(function () { return []; });
+    },
+
+    browseByModel: function (modelUrl, page) {
+        var p = page || 1;
+        var url = modelUrl.replace(/\/+$/, '') + '/' + (p > 1 ? 'page' + p + '/' : '');
+        return cherryFetch(url).then(function (html) {
+            var items = _pbCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 42) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    }
+});
+
+// VePorn removed — veporn.net returns 504 (site dead)
+
+// ---- 11. Ebun ----
+SOURCES.push({
+    id: 'ebun',
+    name: 'Ebun',
+    host: 'www1.ebun.tv',
+    cfg: { categories: _cats('russkoe:Русское,molodye:Молодые,zrelye:Зрелые,mamki:Мамки,anal:Анал,minet:Минет,domashnee:Домашнее,krasivye-devushki:Красивые девушки,bryunetki:Брюнетки,blondinki:Блондинки,bolshie-siski:Большие сиськи,bolshie-chleny:Большие члены,jopy:Жопы,hudye:Худые,chulki-i-kolgotki:Чулки и колготки,ot-pervogo-lica:От первого лица,seks-vtroem:Секс втроем,gruppovoe:Групповое,kasting:Кастинг,kasting-vudmana:Кастинг Вудмана,studenty:Студенты,izmena:Измена,jeny:Жены,jmj:ЖМЖ,mjm:МЖМ,negry:Негры,mejrassovoe:Межрассовое,aziatki:Азиатки,latinki:Латинки,eblya:Ебля,rakom:Раком,krempay:Кремпай,sperma:Сперма,glubokaya-glotka:Глубокая глотка,skvirting:Сквиртинг,bdsm:БДСМ,fetish:Фетиш,masturbaciya:Мастурбация,pikap:Пикап,za-dengi:За деньги'), sorts: _cats('most-popular:По популярности,new:Свежее,top-rated:По рейтингу') },
+
+    search: function (query, page) {
+        var p = page || 1;
+        // KVS path search /search/{q}/{p}/ — the old /search/?s= was IGNORED (returned the
+        // same generic list for any query). Stand-verified: 83% title match, page 2 disjoint.
+        var url = 'https://www1.ebun.tv/search/' + encodeURIComponent(query) + '/' + (p > 1 ? p + '/' : '');
+        return cherryFetch(url).then(function (html) {
+            var items = _ebunCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 24) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    browse: function (category, page, sort) {
+        var p = page || 1;
+        // Sort is a KVS path segment after the slug: /categories/{slug}/{sort}/{page}/
+        // Default = most-popular (По популярности).
+        var s = sort || 'most-popular';
+        // NO-category branch uses path pagination — the site ignores ?page=N.
+        var url = category
+            ? _buildCatUrl('https://www1.ebun.tv/categories/{slug}/' + s + '/{page}/', category, p, 1, true)
+            : (p > 1 ? 'https://www1.ebun.tv/latest-updates/' + p + '/' : 'https://www1.ebun.tv/latest-updates/');
+        return cherryFetch(url).then(function (html) {
+            var items = _ebunCards(html);
+            return { items: items, total_pages: _ebunPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    // Models: /models/ index lists real model links /models/{slug}/ (excluding
+    // single-letter section nav and /{xx}-model/total-videos/ country filters).
+    // Per-model /models/{slug}/ renders listing cards (reuse _ebunCards). Model
+    // pages appear single-page (/{slug}/2/ → 404), so total_pages derives small.
+    getModels: function () {
+        return cherryFetch('https://www1.ebun.tv/models/').then(function (html) {
+            return _parseModelIndex(html, {
+                hrefRx: /href="(https?:\/\/www1\.ebun\.tv\/models\/[^"]+\/)"/g,
+                exclude: function (url) {
+                    return /\/models\/[A-Za-z0-9]\/$/.test(url) || /\/total-videos\//.test(url);
+                },
+                nameRx: [/title="([^"]+)"/],
+                thumbRx: [/(?:data-src|src)="(https?:\/\/[^"]+\.(?:jpe?g|webp|png))"/i]
+            });
+        }).catch(function () { return []; });
+    },
+
+    browseByModel: function (modelUrl, page) {
+        var p = page || 1;
+        var u = modelUrl.replace(/\/+$/, '');
+        var url = p > 1 ? u + '/' + p + '/' : u + '/';
+        return cherryFetch(url).then(function (html) {
+            var items = _ebunCards(html);
+            return { items: items, total_pages: _ebunPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    // KVS related list (#list_videos_related_videos, «Похожие порно видео»).
+    getRelated: _relatedSection(function (h) { return _ebunCards(h); },
+        /id="list_videos_related_videos"/, /<footer|id="list_videos_(?!related)/),
+
+    getStream: function (video) {
+        // ebun labels the FULL file with a bare 'mp4' key (no res → bestQualityUrl
+        // ranks it 0) and a smaller file as '360p' → bestQualityUrl wrongly picks 360.
+        // When the bare full file is present the map keeps ONLY it (playVideo plays the map's
+        // best entry); otherwise the map is passed through unchanged.
+        function ebunMap(quality) {
+            var keys = Object.keys(quality || {});
+            for (var i = 0; i < keys.length; i++) {
+                if (!/\d{3,4}/.test(keys[i])) { var full = {}; full[keys[i]] = quality[keys[i]]; return full; } // bare/unlabeled = full file
+            }
+            return quality || {};
+        }
+        return cherryFetch(video.url).then(function (html) {
+            var iframeM = /src="(https?:\/\/666-emded\.com\/embed\/[^"]+)"/i.exec(html);
+            if (iframeM) {
+                return cherryFetch(iframeM[1]).then(function (ihtml) {
+                    var result = extractStreams(ihtml);
+                    if (result.url || Object.keys(result.quality).length) {
+                        var qm = ebunMap(result.quality);
+                        return { url: bestQualityUrl(qm) || result.url, quality: qm };
+                    }
+                    return { url: '', quality: {} };
+                }).catch(function () { return { url: '', quality: {} }; });
+            }
+            var res = extractStreams(html);
+            var qm2 = ebunMap(res.quality);
+            return { url: bestQualityUrl(qm2) || res.url, quality: qm2 };
+        }).catch(function () { return { url: '', quality: {} }; });
+    }
+});
+
+function _ebunCards(html) {
+    var items = [];
+    // ebun moved its video cards to a new domain (x.ebun.top) while the listing page stays
+    // on www1.ebun.tv — match any ebun host so card links keep resolving across mirror changes.
+    var hrefRx = /href="(https?:\/\/[a-z0-9.-]*ebun[a-z0-9.-]*\/videos\/(\d+)\/)"/g;
+    var seen = {};
+    var m;
+    while ((m = hrefRx.exec(html)) !== null) {
+        var videoUrl = m[1];
+        var id = m[2];
+        if (seen[id]) continue;
+        seen[id] = true;
+
+        // Look only FORWARD from href. Window 1100: the duration/views meta block
+        // (<div class="meta-time">) sits at ~+950 from the href — the old 900 cap
+        // clipped it, so listing AND model cards lost their duration overlay.
+        var chunk = html.slice(m.index, m.index + 1100);
+
+        var thumb = _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i) ||
+                    _attr(chunk, /(?:data-src|src)="([^"]+\.(?:webp|png))"/i);
+
+        var title = _decodeHtml(
+            _attr(chunk, /<div[^>]*class="[^"]*item-title[^"]*"[^>]*>([^<]+)<\/div>/) ||
+            _attr(chunk, /alt="([^"]+)"/) ||
+            _attr(chunk, /title="([^"]+)"/)
+        );
+        if (!title) title = _titleFromUrl(videoUrl);
+
+        // Duration/views render as <div class="meta-time"><span.../>28:50</div> —
+        // an inner <span> icon precedes the value, so skip leading tags before the
+        // captured text (the bare >([^<]+)< form matched the empty span instead).
+        var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>(?:\s*<[^>]+>)*\s*([^<]+)</));
+        var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>(?:\s*<[^>]+>)*\s*([^<]+)</));
+
+        if (title || thumb) {
+            items.push({ id: id, source: 'ebun', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
+        }
+    }
+    return items;
+}
+
+function _ebunPages(html, page, itemsLen) {
+    var m = /[?&]page=(\d+)["'][^>]*(?:last|>>)/i.exec(html);
+    if (m) return parseInt(m[1], 10) || _derivePages(itemsLen, page, 30);
+    // Regex miss: derive from batch fullness (~30 cards/page) instead of a hardcoded cap.
+    return _derivePages(itemsLen, page, 30);
+}
+
+// ---- 12. LenPorno ----
+SOURCES.push({
+    id: 'lenporno',
+    name: 'LenPorno',
+    host: 'www.lenporno.net',
+    cfg: { sorts: _cats('2:По популярности,3:По рейтингу'), categories: _cats('russkoye:Русское,molodyye:Молодые,zrelyye:Зрелые,mamki:Мамки,analnoye:Анальное,minet:Минет,domashneye:Домашнее,krasotki:Красотки,bryunetki:Брюнетки,blondinki:Блондинки,bolshiye-dojki:Большие дойки,bolshiye-popki:Большие попки,bolshiye-chleny:Большие члены,khudyye:Худые,v-chulkakh:В чулках,ot-pervogo-litsa:От первого лица,gruppovoye:Групповое,kasting:Кастинг,studenty:Студенты,izmena:Измена,gheny:Жены,mzhm:МЖМ,blacked:Негры,aziatskoye:Азиатское,yaponskoye:Японское,mulatki:Мулатки,rakom:Раком,sperma:Сперма,bdsm:БДСМ,masturbatsiya:Мастурбация,lesbiyanki:Лесбиянки,massazh:Массаж,volosatyye:Волосатые,dvoynoye-proniknoveniye:Двойное проникновение,dominirovaniye:Доминирование,orgazmy:Оргазмы,zhestkoye:Жесткое,na-prirode:На природе,na-publike:На публике,pikap:Пикап') },
+
+    search: function (query, page) {
+        // The site's search form is POST /search/ with field `text`; it also honours GET
+        // /search/?text={q}&page={p} (24 cards/page). The former /search/{q}/?page= silently
+        // served the HOMEPAGE feed (same list for any query). Stand-verified: 92% title match,
+        // pages 1/2/3 disjoint, a second query yields a different set.
+        var p = page || 1;
+        var url = 'https://www.lenporno.net/search/?text=' + encodeURIComponent(query) + (p > 1 ? '&page=' + p : '');
+        return cherryFetch(url).then(function (html) {
+            var items = _lenpornoCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 24) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    browse: function (category, page, sort) {
+        var p = page || 1;
+        // Default to popular (?sort=2) when no sort chosen; bare URL = Новые.
+        var s = sort || (this.cfg.sorts[0] && this.cfg.sorts[0].id) || '';
+        if (category) {
+            var curl = _buildCatUrl('https://www.lenporno.net/{slug}/{page}/', category, p, 1, true);
+            if (s && curl.indexOf('sort=') === -1) {
+                curl += (curl.indexOf('?') >= 0 ? '&' : '?') + 'sort=' + s;
+            }
+            return cherryFetch(curl).then(function (html) {
+                var items = _lenpornoCards(html);
+                return { items: items, total_pages: _lenpornoPages(html, p, items.length) };
+            }).catch(function () { return { items: [], total_pages: 0 }; });
+        }
+        // NO category → /hdvideo/ = the site homepage (newest/«свежое»; bare root 301s
+        // here). Was /the-best/ (best/popular). lenporno is in _ANDROID_FORCE_PROXY so the
+        // proxy follows the mirror redirect on-device; /hdvideo/ paginates via ?page=N.
+        var url = p > 1
+            ? 'https://www.lenporno.net/hdvideo/?page=' + p
+            : 'https://www.lenporno.net/hdvideo/';
+        return cherryFetch(url).then(function (html) {
+            var items = _lenpornoCards(html);
+            return { items: items, total_pages: _lenpornoPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    getRelated: _relatedFrom(_lenpornoCards),
+
+    getStream: function (video) {
+        return cherryFetch(video.url).then(function (html) {
+            // PlayerJS multi-quality format: [label1]url1.mp4,[label2]url2.mp4
+            // or unlabeled first: url1.mp4,[label2]url2.mp4
+            var fileM = /(?:file|src)\s*[:=]\s*['"]([^'"]*cdnv365[^'"]+\.mp4[^'"]*)['"]/i.exec(html) ||
+                        /Playerjs\s*\([^)]*file\s*:\s*['"]([^'"]+\.mp4[^'"]*)['"]/i.exec(html);
+            if (fileM) {
+                var pjStr = fileM[1];
+                var quality = {};
+                var best = '';
+                // Allow whitespace between the [label] and the URL — lenporno emits
+                // "[240p] https://...mp4,[480p] https://...mp4"; without \s* the label
+                // failed to bind, every url fell to the unlabeled branch, and best
+                // stayed the FIRST (240p). With it, the quality map fills → max wins.
+                var pjRe = /(?:\[([^\]]+)\]\s*)?(https?:\/\/[^,\[\]<>\s"']+\.mp4)/gi;
+                var m;
+                while ((m = pjRe.exec(pjStr)) !== null) {
+                    var lbl = m[1] ? m[1].trim() : null;
+                    if (lbl && /^\d{3,4}p?$/i.test(lbl)) {
+                        quality[lbl] = m[2];
+                        if (!best) best = m[2];
+                    } else {
+                        if (!best) best = m[2];
+                    }
+                }
+                if (best) return { url: bestQualityUrl(quality) || best, quality: quality };
+            }
+            return extractStreams(html);
+        }).catch(function () { return { url: '', quality: {} }; });
+    }
+});
+
+function _lenpornoCards(html) {
+    // Each card = <div id="preview"> … <a href="/video/{slug}"><img src alt="{title}"> duration
+    // views </a> … preview_link (same slug). The card's data sits AFTER its link, so read a
+    // FORWARD window that ends at the next card's link. The old window reached 800 chars BACK
+    // and took the first title/thumb found — on the video page that was the previous card's
+    // (or the «Похожее видео» heading), so every «Похожие» card showed its neighbour's title
+    // and poster but opened the next video (stand 2026-10-07: relInt 0/0/0) — «не то видео».
+    var items = [], seen = {}, hits = [], m;
+    var hrefRx = /href="(https?:\/\/(?:xxx\.lenporno\.xyz|www\.lenporno\.net)\/video\/([^/"?]+))"/g;
+    while ((m = hrefRx.exec(html)) !== null) hits.push({ i: m.index, url: m[1], slug: m[2] });
+    for (var k = 0; k < hits.length; k++) {
+        var h = hits[k];
+        if (!h.slug || seen[h.slug]) continue;
+        seen[h.slug] = true;
+        var end = html.length;
+        for (var n = k + 1; n < hits.length; n++) if (hits[n].slug !== h.slug) { end = hits[n].i; break; }
+        var chunk = html.slice(h.i, Math.min(end, h.i + 2500));
+
+        var thumb = _attr(chunk, /(?:data-src|src)="([^"]+\.jpe?g)"/i) ||
+                    _attr(chunk, /(?:data-src|src)="([^"]+\.(?:webp|png))"/i);
+        var title = _decodeHtml(
+            _attr(chunk, /alt="([^"]+)"/) ||
+            _attr(chunk, /class="preview_link"[^>]*>\s*([^<]+?)\s*<\//) ||
+            _attr(chunk, /title="([^"]+)"/)
+        );
+        if (!title) title = _titleFromUrl(h.url);
+
+        var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
+        var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
+
+        if (title || thumb) {
+            items.push({ id: h.slug, source: 'lenporno', title: title, thumb: thumb, url: h.url, duration: duration, views: views });
+        }
+    }
+    return items;
+}
+
+function _lenpornoPages(html, page, itemsLen) {
+    var m = /[?&]page=(\d+)["'][^>]*(?:last|>>|&raquo;)/i.exec(html);
+    return m ? (parseInt(m[1], 10) || _derivePages(itemsLen, page, 20)) : _derivePages(itemsLen, page, 20);
+}
+
+// ---- 13. 24Rolika / Huyalkino ----
+SOURCES.push({
+    id: '24rolika',
+    name: '24Rolika',
+    host: 'w2.huyalkino.com',
+    // 2026-09-04: w2.huyalkino.com answers 200 with an EMPTY body on every path (EE/VPS/CF/
+    // device) and the whois "current address" love.24rolika.ru has no DNS. Hidden from the
+    // tiles / «Все видео» / health probes (see _activeSources); the adapter stays registered
+    // so old favorites still resolve. Flip to false when the site is back.
+    disabled: true,
+    cfg: { categories: _cats('russia:Русское порно,russian:С переводом,gopa:Анал,retro:Ретро,asian-girl:Азиатки,bdsm:БДСМ,big-cock:Большие члены,big-tits:Большие сиськи,group:Групповуха,lesbi:Лесбиянки,teen:Молодые девушки,solo:Женская мастурбация,beautiful:Красивый секс,black:Межрасовое,homemade:Домашнее,incest:Инцест,orgasms:Оргазмы,movie:Порно фильмы,ok:Одноклассники,youtube-porno:Ютуб'), sorts: [] /* sort not URL-addressable (DLE/AJAX POST) */ },
+
+    search: function (query, page) {
+        // single-page search (site): DLE search does not paginate natively (no page param).
+        var url = 'https://w2.huyalkino.com/index.php?do=search&subaction=search&story=' + encodeURIComponent(query);
+        return cherryFetch(url).then(function (html) {
+            return { items: _rolikaCards(html), total_pages: 1 };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    browse: function (category, page) {
+        var p = page || 1;
+        // DLE category: page1 = /{slug}/ (NOT /{slug}/page/ — the bare /page/ segment
+        // is a malformed URL; _buildCatUrl's page1Omit leaves an orphan /page/). page>1
+        // = /{slug}/page/{N}/. No-category home is /{}/ then /page/{N}/.
+        var url = category
+            ? (p > 1 ? 'https://w2.huyalkino.com/' + category + '/page/' + p + '/'
+                     : 'https://w2.huyalkino.com/' + category + '/')
+            : (p > 1 ? 'https://w2.huyalkino.com/page/' + p + '/' : 'https://w2.huyalkino.com/');
+        return cherryFetch(url).then(function (html) {
+            var items = _rolikaCards(html);
+            return { items: items, total_pages: _rolikaPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    getRelated: _relatedFrom(_rolikaCards),
+
+    // Studios: the /movie/ taxonomy is a side-menu of /movie/{slug}/ sections
+    // (paysite brands like Brazzers/Blacked + country/type feeds). Text links, no
+    // logos → letter-tile fallback. Single index page (no pagination needed).
+    getStudios: function (page) {
+        if ((page || 1) > 1) return Promise.resolve([]);
+        return cherryFetch('https://w2.huyalkino.com/movie/').then(function (html) {
+            return _parseModelIndex(html, {
+                hrefRx: /href="((?:https?:\/\/w2\.huyalkino\.com)?\/movie\/([a-z0-9][a-z0-9-]*)\/)"/g,
+                exclude: function (u) { return /\/movie\/page\//.test(u); },
+                normalizeUrl: function (raw) {
+                    return raw.charAt(0) === '/' ? 'https://w2.huyalkino.com' + raw : raw;
+                },
+                nameRx: [/>([^<]+)<\/a>/],
+                thumbRx: []
+            });
+        }).catch(function () { return []; });
+    },
+
+    // A studio's videos — /movie/{slug}/page/{N}/ (two-segment cards, widened rx).
+    browseByStudio: function (studioUrl, page) {
+        var p = page || 1;
+        var u = studioUrl.replace(/\/+$/, '');
+        var url = p > 1 ? u + '/page/' + p + '/' : studioUrl;
+        return cherryFetch(url).then(function (html) {
+            var items = _rolikaCards(html);
+            return { items: items, total_pages: _rolikaPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    getStream: function (video) {
+        return cherryFetch(video.url).then(function (html) {
+            var m;
+            // Return RAW stream URLs — px() in playVideo is the single proxy-decision
+            // point (browser → proxied, Android → raw device-IP fetch).
+            // Playerjs (DLE plugin): new Playerjs({file:"url"})
+            m = /Playerjs\s*\(\s*\{[^{}]*['"]?file['"]?\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))['"]/i.exec(html);
+            if (m) return { url: m[1], quality: {} };
+            // JWPlayer fallback
+            m = /jwplayer\s*\([^)]*\)\s*\.setup\s*\(\s*\{[\s\S]{0,500}?['"]?file['"]?\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))['"]/i.exec(html);
+            if (m) return { url: m[1], quality: {} };
+            return extractStreams(html);
+        }).catch(function () { return { url: '', quality: {} }; });
+    }
+});
+
+function _rolikaCards(html) {
+    var items = [];
+    // One- OR two-segment card URLs: normal categories use /{cat}/{id}-slug.html,
+    // /movie/{studio}/ studio pages use /movie/{studio}/{id}-slug.html. The {1,2}
+    // segment repetition matches both (verified card-count parity on 1-seg pages).
+    var hrefRx = /href="((?:https?:\/\/w2\.huyalkino\.com)?(?:\/[a-z0-9][a-z0-9\-]*){1,2}\/\d+[^"]+\.html)"/g;
+    var seen = {};
+    var m;
+    while ((m = hrefRx.exec(html)) !== null) {
+        var videoUrl = m[1].charAt(0) === '/' ? 'https://w2.huyalkino.com' + m[1] : m[1];
+        // DLE URL: /{category}/{id}-{slug}.html
+        var idMatch = /\/(\d+)-[^/]+\.html/.exec(videoUrl);
+        var id = idMatch ? idMatch[1] : videoUrl;
+        if (seen[id]) continue;
+        seen[id] = true;
+
+        // Look FORWARD from href — DLE cards: img inside the <a>, title in <a class="th-title"> after
+        var chunk = html.slice(m.index, m.index + 900);
+
+        // DLE/KVS thumb: relative /uploads/posts/... URLs (may have no extension or .webp)
+        var thumb = _attr(chunk, /(?:data-original|data-src|src)="([^"?#]*\/uploads\/posts\/\d{4}-\d{2}\/[^"?#]+)/i) ||
+                    _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.(?:jpe?g|webp))/i);
+        if (thumb && thumb.charAt(0) === '/') thumb = 'https://w2.huyalkino.com' + thumb;
+
+        var title = _decodeHtml(
+            _attr(chunk, /<a[^>]*class="[^"]*th-title[^"]*"[^>]*>([^<]+)<\/a>/) ||
+            _attr(chunk, /<h2[^>]*>([^<]+)<\/h2>/) ||
+            _attr(chunk, /title="([^"]+)"/) ||
+            _attr(chunk, /alt="([^"]+)"/)
+        );
+        if (!title) title = _titleFromUrl(videoUrl);
+
+        // Duration: <div class="th-time icon-l"><span class="fa fa-clock-o"></span>39:20</div>
+        // — the time follows an inner <span> icon, so step past any leading inner tags.
+        var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time|th-time)[^"]*"[^>]*>(?:\s*<[^>]+>)*\s*([\d:]+(?:\s*min)?)/i));
+        var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
+
+        if (title || thumb) {
+            items.push({ id: id, source: '24rolika', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views });
+        }
+    }
+    return items;
+}
+
+function _rolikaPages(html, page, itemsLen) {
+    var m = /\/page\/(\d+)\/["'][^>]*(?:last|>>)/i.exec(html);
+    return m ? (parseInt(m[1], 10) || _derivePages(itemsLen, page, 20)) : _derivePages(itemsLen, page, 20);
+}
+
+// ---- 14. JopaOnline ----
+SOURCES.push({
+    id: 'jopaonline',
+    name: 'JopaOnline',
+    host: 'jopaonline.mobi',
+    cfg: { categories: _cats('mamki:Мамки,russkoe:Русское,zhestkoe:Жесткое,zrelye:Зрелые,izmena:Измена,krasotki:Красотки,domashnee:Домашнее,big-cock:Большие члены,gruppovoe:Групповое,anal:Анал,asian:Азиатки,studenty:Студенты,blonde:Блондинки,bolshie-siski:Большие сиськи,bryunetki:Брюнетки,dvoynoe-proniknovenie:Двойное проникновение,hudenkie:Худые,krasiviy-seks:Красивый секс,lesbiyanki:Лесбиянки,masturbation:Мастурбация,mejrassovyy:Межрасовое,minet:Минет,molodye:Молодые,mulatki:Мулатки,pickap:Пикап,rakom:Раком,redhead:Рыжие,s-negrami:Негры,stockings:Чулки,v-vannoi:В ванной,zhopy:Жопы'), sorts: _cats('popular:По популярности,toprated:По рейтингу') },
+
+    search: function (query, page) {
+        var p = page || 1;
+        // Path search /search/{q}/{p}/ (the site's own form action) — the old DLE
+        // ?do=search returned a generic 16-card block for ANY query (the "cards on a 404
+        // page" were never results). Stand-verified: 92-96% title match, real pagination
+        // (page 2 disjoint). Status-tolerant fetch kept in case the site answers non-200.
+        var url = 'https://jopaonline.mobi/search/' + encodeURIComponent(query) + '/' + p + '/';
+        return _fetchAny(url).then(function (html) {
+            var items = _jopaCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 24) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    browse: function (category, page, sort) {
+        var p = page || 1;
+        // category → /categories/{slug}/{sort}/{n} (DLE path, no trailing slash); else home /{n}.
+        // Sort is a path segment after the slug; default = popular (По популярности).
+        var s = sort || 'popular';
+        var url = category
+            ? _buildCatUrl('https://jopaonline.mobi/categories/{slug}/' + s + '/{page}', category, p, 1, true)
+            : (p > 1 ? 'https://jopaonline.mobi/' + p : 'https://jopaonline.mobi/');
+        return cherryFetch(url).then(function (html) {
+            var items = _jopaCards(html);
+            return { items: items, total_pages: _jopaPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    getRelated: _relatedFrom(_jopaCards),
+
+    // Models: /models index (24 real models/page; excludes numeric pagination
+    // links and /models/sort-by-* sort links). Per-model /models/{slug}/{page}
+    // renders listing cards (reuse _jopaCards). Index name markup is garbled
+    // Cyrillic → derive name from slug via _humanizeName (default in helper).
+    getModels: function (page) {
+        var p = page || 1;
+        var url = p > 1 ? 'https://jopaonline.mobi/models/' + p : 'https://jopaonline.mobi/models';
+        return cherryFetch(url).then(function (html) {
+            return _parseModelIndex(html, {
+                hrefRx: /href="(https?:\/\/jopaonline\.mobi\/models\/[a-z0-9-]+)"/g,
+                exclude: function (u) {
+                    return /\/models\/\d+$/.test(u) || /\/models\/sort-by-/.test(u);
+                },
+                thumbRx: [/(?:data-src|src|class="lazylodsrc"[^>]*src)="(https?:\/\/[^"]+\.(?:jpe?g|webp|png))"/i]
+            });
+        }).catch(function () { return []; });
+    },
+
+    browseByModel: function (modelUrl, page) {
+        var p = page || 1;
+        var u = modelUrl.replace(/\/+$/, '');
+        var url = p > 1 ? u + '/' + p : u;
+        return cherryFetch(url).then(function (html) {
+            var items = _jopaCards(html);
+            return { items: items, total_pages: _jopaPages(html, p, items.length) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+
+    getStream: function (video) {
+        return cherryFetch(video.url).then(function (html) {
+            // Playerjs multi-quality: new Playerjs({file:'[360p]url,[720p]url,...'})
+            var pjRx = /new\s+Playerjs\s*\(\s*\{[^}]*?file\s*:\s*['"]([^'"]+)['"]/i;
+            var pm = pjRx.exec(html);
+            if (pm) {
+                var fileStr = pm[1];
+                var quality = {}, best = '';
+                var qRx = /\[([^\]]+)\](https?:\/\/[^,\s'"[\]]+)/g;
+                var qm;
+                while ((qm = qRx.exec(fileStr)) !== null) {
+                    quality[qm[1]] = qm[2];
+                    best = qm[2];
+                }
+                if (best) return { url: best, quality: quality };
+                if (/^https?:/.test(fileStr)) return { url: fileStr, quality: {} };
+            }
+            // DLE JWPlayer pattern
+            var jwRx = /jwplayer\s*\(\s*['"]?\w+['"]?\s*\)\s*\.setup\s*\(\s*\{[\s\S]*?['"]?file['"]?\s*:\s*['"]([^'"]+\.(?:mp4|m3u8))['"]/;
+            var m = jwRx.exec(html);
+            if (m) return { url: m[1], quality: {} };
+            return extractStreams(html);
+        }).catch(function () { return { url: '', quality: {} }; });
+    }
+});
+
+function _jopaCards(html) {
+    var items = [];
+    var hrefRx = /href="(https?:\/\/jopaonline\.mobi\/porno-video\/(\d+))"/g;
+    var seen = {};
+    var m;
+    while ((m = hrefRx.exec(html)) !== null) {
+        var videoUrl = m[1];
+        var id = m[2];
+        if (seen[id]) continue;
+        seen[id] = true;
+
+        var chunk = html.slice(m.index, m.index + 900);
+
+        var thumb = _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\/uploads\/posts\/\d{4}-\d{2}\/[^"?#]+)/i) ||
+                    _attr(chunk, /(?:data-original|data-src|src)="([^"?#]+\.jpe?g)/i);
+
+        var title = _decodeHtml(
+            _attr(chunk, /title="([^"]+)"/) ||
+            _attr(chunk, /alt="([^"]+)"/) ||
+            _attr(chunk, /<h2[^>]*>\s*([^<]+)/) ||
+            _attr(chunk, /<h\d[^>]*>\s*([^<]+)/)
+        );
+        if (!title) title = _titleFromUrl(videoUrl);
+
+        var duration = parseDur(_attr(chunk, /class="[^"]*(?:duration|time)[^"]*"[^>]*>([^<]+)</));
+        var views    = parseViews(_attr(chunk, /class="[^"]*views?[^"]*"[^>]*>([^<]+)</));
+
+        // Hover-preview mp4: each card's <img data-preview="…/prev_{id}.mp4"> (CDN
+        // absolute URL on yourstream.pro) — consistent with 3movs/pornve preview.
+        var preview = _attr(chunk, /data-preview="([^"]+\.mp4[^"]*)"/i);
+
+        if (title || thumb) {
+            items.push({ id: id, source: 'jopaonline', title: title, thumb: thumb, url: videoUrl, duration: duration, views: views, preview: preview || undefined });
+        }
+    }
+    return items;
+}
+
+function _jopaPages(html, page, itemsLen) {
+    var m = /href="https?:\/\/jopaonline\.mobi\/(\d+)"[^>]*(?:last|>>)/i.exec(html) ||
+            /["']\/(\d+)["'][^>]*(?:last|>>)/i.exec(html);
+    return m ? (parseInt(m[1], 10) || _derivePages(itemsLen, page, 20)) : _derivePages(itemsLen, page, 20);
+}
+
+})();
