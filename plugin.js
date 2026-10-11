@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.36';
+  var CHERRY_VERSION = '0.13.37';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -99,7 +99,6 @@
 
   /** @param {string} url @param {string=} referer @returns {string} */
   function buildProxyUrl(url, referer, forceCF) {
-    var key = getProxyKey();
     var base = PROXY_URL;
     // forceCF: failover path — ignore secondary routing, go straight to the CF worker.
     if (!forceCF) {
@@ -123,6 +122,12 @@
         } catch (e) {}
       }
     }
+    return _proxyVia(base, url, referer);
+  }
+
+  /** @param {string} base proxy origin @param {string} url @param {string=} referer @returns {string} */
+  function _proxyVia(base, url, referer) {
+    var key = getProxyKey();
     var p = base + '/proxy?url=' + encodeURIComponent(url);
     if (key)     p += '&key=' + encodeURIComponent(key);
     if (referer) p += '&referer=' + encodeURIComponent(referer);
@@ -310,9 +315,13 @@
   /** @param {string} url @param {string=} referer @returns {Promise<string>} */
   function cherryFetch(url, referer) {
     var key = url + '|' + (referer || ''), hit = _htmlCache[key];
-    if (hit && Date.now() - hit.t < HTML_CACHE_MS) return hit.p;
-    var p = _cherryFetchNow(url, referer);
-    _htmlCache[key] = { t: Date.now(), p: p };
+    if (hit && Date.now() - hit.t < HTML_CACHE_MS) {
+      if (hit.fb) _noteFallback(url, referer);   // a cached fallback page still binds its video to the proxy
+      return hit.p;
+    }
+    var entry = { t: Date.now() };
+    var p = entry.p = _cherryFetchNow(url, referer, entry);
+    _htmlCache[key] = entry;
     _htmlOrder = _htmlOrder.filter(function (k) { return k !== key; });
     _htmlOrder.push(key);
     while (_htmlOrder.length > HTML_CACHE_MAX) delete _htmlCache[_htmlOrder.shift()];
@@ -320,12 +329,41 @@
     return p.catch(_countFail);
   }
 
-  function _cherryFetchNow(url, referer) {
+  // ---- Route follow-up (Android) ----
+  // A native page fetch that fails (device IP blocked, 4 s timeout on a slow line) is served through the proxy
+  // instead. The stream must then leave from that proxy too: KVS/CDN tokens are bound to the IP that fetched the
+  // page, and a raw stream from the device IP gets 403 — «иногда не открывается». Each fallback is recorded with
+  // its site and proxy origin; playVideo routes the stream of the SAME site through that origin.
+  var _fallbacks = [], _fallbackSeq = 0;
+  function _siteOf(u) {
+    try { return new URL(u).hostname.split('.').slice(-2).join('.'); } catch (e) { return ''; }
+  }
+  function _noteFallback(url, referer) {
+    var base = buildProxyUrl(url, referer).split('/proxy?')[0];
+    _fallbacks.push({ seq: ++_fallbackSeq, site: _siteOf(url), base: base });
+    if (_fallbacks.length > 20) _fallbacks.shift();
+    return base;
+  }
+  /** Proxy origin of the latest fallback after `seq0` for the site of any of `urls`, else null. */
+  function _fallbackBase(seq0, urls) {
+    var sites = urls.map(_siteOf).filter(Boolean);
+    for (var i = _fallbacks.length - 1; i >= 0 && _fallbacks[i].seq > seq0; i--) {
+      if (sites.indexOf(_fallbacks[i].site) >= 0) return _fallbacks[i].base;
+    }
+    return null;
+  }
+  // ---- end route follow-up ----
+
+  function _cherryFetchNow(url, referer, entry) {
     if (_isAndroid()) {
       // Sites that block the device home IP → fetch the page via the proxy (clean IP)
       // instead of native, so it co-locates with the (also proxied) stream.
       if (_forceProxyAndroid(url)) return _proxyText(url, referer);
-      return _nativeFetch(url).catch(function() { return _proxyText(url, referer); });
+      return _nativeFetch(url).catch(function () {
+        var base = _noteFallback(url, referer);
+        if (entry) entry.fb = base;
+        return _proxyText(url, referer);
+      });
     }
     return _proxyText(url, referer);
   }
@@ -348,7 +386,10 @@
    */
   function _fetchAny(url, referer) {
     if (_isAndroid()) {
-      return _nativeFetch(url).catch(function () { return _proxyTextAny(url, referer); }).catch(_countFail);
+      return _nativeFetch(url).catch(function () {
+        _noteFallback(url, referer);
+        return _proxyTextAny(url, referer);
+      }).catch(_countFail);
     }
     return _proxyTextAny(url, referer).catch(_countFail);
   }
@@ -1054,7 +1095,7 @@
   }
 
   function playVideo(video, source) {
-    var gen = ++_playGen;
+    var gen = ++_playGen, seq0 = _fallbackSeq;
     Lampa.Noty.show(Lampa.Lang.translate('cherry_loading'));
 
     _streamWithRetry(video, source).then(function (stream) {
@@ -1068,6 +1109,8 @@
       // v0.13.25 preferred `stream.url` here, and adapters whose url was merely the FIRST file
       // parsed then played 240p/360p (youjizz, jopaonline, perfektdamen — stand 2026-10-07).
       var url = bestQualityUrl(quality) || stream.url;
+      // This video's page came through the proxy instead of natively → its stream leaves from the same proxy.
+      var fbBase = _isAndroid() && url ? _fallbackBase(seq0, [video.url, url]) : null;
 
       if (!url) {
         Lampa.Noty.show(Lampa.Lang.translate('cherry_error'), { style: 'warn' });
@@ -1094,7 +1137,10 @@
         // An adapter may also declare `androidProxyStream: true` when its stream tokens are
         // UA-bound (desktop UA only) on a rotating mirror host that no host map can name
         // (ebalovo): the proxy fetches with a desktop UA, so the token stays valid.
-        if (_isAndroid()) return (_forceProxyAndroid(u) || source.androidProxyStream) ? buildProxyUrl(u) : u;
+        if (_isAndroid()) {
+          if (fbBase) return _proxyVia(fbBase, u);
+          return (_forceProxyAndroid(u) || source.androidProxyStream) ? buildProxyUrl(u) : u;
+        }
         return buildProxyUrl(u);
       }
       var proxiedQuality = {};
