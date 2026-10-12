@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.46';
+  var CHERRY_VERSION = '0.13.47';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -33,6 +33,9 @@
   var PROXY_URL_2_HOSTS = {
     // xnxx: CF Worker IPs blocked at ASN level; Deno works
     'xnxx.com': 1, 'www.xnxx.com': 1,
+    // xvideos: the page is native first; its proxy fallback went to CF, whose Accept-Language is Russian → xvideos served
+    // machine-translated titles (CF 1637 Cyrillic words vs VPS 0, 2026-10-12). The VPS asks for English. HLS stays raw.
+    'xvideos2.com': 1, 'www.xvideos2.com': 1, 'xvideos.com': 1, 'www.xvideos.com': 1,
     // youjizz: rate-limits CF datacenter IPs (page + all *.youjizz.com CDN via regex below)
     'www.youjizz.com': 1, 'youjizz.com': 1,
     // hqporner: CF datacenter IPs are intermittently blocked (catalog drops to 0).
