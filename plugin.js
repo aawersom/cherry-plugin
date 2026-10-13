@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.48';
+  var CHERRY_VERSION = '0.13.49';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -212,6 +212,14 @@
     // proxied EXPLICITLY in pornhub.getStream() with referer=www.pornhub.com so the page + m3u8 +
     // segments all exit from the SAME proxy IP (ipa=1 token) while the catalog stays device-IP.
   };
+  // Stream hosts that throttle ordinary IPs while the CF edge reads them at full speed. tizam (video1…5.tizam.cc)
+  // gives the TV 0.8–1.1 Mbit/s after a short burst (its line does 14.8), the VPS ~4, the CF worker 21.5 sustained
+  // (2026-10-13) — 2-hour films at 0.7 Mbit/s stalled. The files carry no IP-bound token, so CF is a preference, not a
+  // requirement: CF not answering (daily quota spent, worker down) → the direct URL, as before (playVideo _cfCheck).
+  function _cfFaster(url) {
+    try { return /(^|\.)tizam\.cc$/.test(new URL(url).hostname); } catch (e) { return false; }
+  }
+  var _cfDownUntil = 0;   // CF failed a stream probe: skip it (no 4-second wait per play) for the next 10 min
   function _forceProxyAndroid(url) {
     try {
       var h = new URL(url).hostname;
@@ -286,10 +294,10 @@
 
   // Can this URL deliver bytes? GET with a 2-byte Range (a CDN that refuses the token answers 4xx
   // before any body), bounded like every request; the body is dropped, never read.
-  function _probeOk(u) {
+  function _probeOk(u, ms) {
     return new Promise(function (resolve) {
       var ctl = (typeof AbortController === 'function') ? new AbortController() : null;
-      var timer = setTimeout(function () { try { if (ctl) ctl.abort(); } catch (e) {} resolve(false); }, FETCH_TIMEOUT_MS);
+      var timer = setTimeout(function () { try { if (ctl) ctl.abort(); } catch (e) {} resolve(false); }, ms || FETCH_TIMEOUT_MS);
       fetch(u, { headers: { Range: 'bytes=0-1' }, signal: ctl ? ctl.signal : undefined }).then(function (r) {
         clearTimeout(timer);
         try { if (ctl) ctl.abort(); } catch (e) {}
@@ -1171,7 +1179,7 @@
       }
 
       // Proxy non-blob stream URLs so that tokens bound to the proxy IP stay valid.
-      function px(u) {
+      function px(u, noCf) {
         if (!u) return u;
         // Normalize protocol-relative URLs (e.g. YouJizz returns //cdne-mobile.youjizz.com/...)
         // BEFORE any early return — the native Android player can't resolve a bare
@@ -1192,6 +1200,7 @@
         // (ebalovo): the proxy fetches with a desktop UA, so the token stays valid.
         if (_isAndroid()) {
           if (fbBase) return _proxyVia(fbBase, u);
+          if (!noCf && _cfFaster(u)) return buildProxyUrl(u, null, true);
           return (_forceProxyAndroid(u) || source.androidProxyStream) ? buildProxyUrl(u) : u;
         }
         return buildProxyUrl(u);
@@ -1219,8 +1228,18 @@
       // (an external app without HLS support → chooser), so MX never opened on pornhub/xvideos/xnxx/xhamster;
       // MX plays all of them (TV 2026-10-11).
       var _inner = _isAndroid() && Lampa.Storage.get('player', 'inner') === 'inner';
-      var _master = _finalUrl;
-      return _hlsLadder(_finalUrl).then(function (lad) {
+      // A CF-preferred stream (_cfFaster) plays direct when CF does not answer the 2-byte probe in 4 s or answers
+      // with an error (free-tier quota spent → 429, worker down).
+      function _cfCheck() {
+        if (!_isAndroid() || _finalUrl.indexOf(PROXY_URL) !== 0 || !_cfFaster(url)) return Promise.resolve();
+        return (Date.now() < _cfDownUntil ? Promise.resolve(false) : _probeOk(_finalUrl, 4000)).then(function (ok) {
+          if (ok) return;
+          _cfDownUntil = Date.now() + 600000;
+          _finalUrl = px(url, true);
+          Object.keys(quality).forEach(function (k) { proxiedQuality[k] = px(quality[k], true); });
+        });
+      }
+      return _cfCheck().then(function () { return _hlsLadder(_finalUrl); }).then(function (lad) {
         if (lad.map) {
           // the HLS master becomes its variants: the best one plays, all of them (≤1080p) ARE the «Качество» menu
           // (side MP4 files of the same video, xvideos «High», would only add an unlabelled duplicate)
