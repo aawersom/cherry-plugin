@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.47';
+  var CHERRY_VERSION = '0.13.48';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -6958,6 +6958,10 @@ SOURCES.push({
       // Title element sits at ~+1200-1400, so 1200 cut it off (17/32 empty titles) —
       // 1600 captures it (0/32 empty). _titleFromUrl(cardUrl) remains the fallback.
       var chunk = html.slice(m.index, m.index + 1600);
+      // Premium-only films (pin «item__pin--premium») have no player for a guest — the page says «доступно только
+      // для премиум пользователей» and carries no <source>: the card always failed to open (2026-10-13, 4 of 28).
+      // Only this card's own markup is checked (the chunk may run into the next card).
+      if (/item__pin--premium/.test(chunk.split(/list-category-video-item|<div class="col-/)[0])) continue;
 
       var rawThumb = _attr(chunk, /src="([^"]+\/images\/cms\/thumbs\/[^"]+)"/) ||
                      _attr(chunk, /src="([^"?#]+\.jpe?g)"/);
