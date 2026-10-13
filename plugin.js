@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.51';
+  var CHERRY_VERSION = '0.13.52';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -3327,7 +3327,11 @@ function _similarRank(seedTitle, seedUrl, items) {
  * count here, not just the content words: «Good Girls Take Dick As Breakfast» has a single content word.
  */
 function _titleWords(t) {
-  return _uniqWords(_normText(String(t || '').replace(/['’]s\b/gi, '')).split(' ').filter(Boolean));
+  // a bracketed tail is the uploader's label, not the video: «… First Ever DP [4K Porn]» = «… First Ever DP (Lindsay Lee,
+  // Donny Sins & Milan Ponjevic)» (three sites, one scene — TV 2026-10-13)
+  var core = String(t || '').replace(/\[[^\]]*\]|\([^)]*\)/g, ' ');
+  if (!_normText(core)) core = String(t || '');
+  return _uniqWords(_normText(core.replace(/['’]s\b/gi, '')).split(' ').filter(Boolean));
 }
 function _jaccard(a, b) {
   if (!a.length || !b.length) return 0;
