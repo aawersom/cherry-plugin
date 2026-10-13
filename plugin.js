@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.49';
+  var CHERRY_VERSION = '0.13.50';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -1632,14 +1632,15 @@
         _ok(items, total);
       };
 
-      // «Похожие» — infinite scroll (REQ: scroll everywhere). The site's own related
-      // block (getRelated) is a FIXED list that ignores `page`, so on its own it can't
-      // scroll. So the grid continues into the channel's OWN feed, which paginates
-      // EVERYWHERE after v0.13.3 (the reliable "more like this site" continuation):
-      //   page 1   → getRelated(video)   — the site's recommended block (most relevant)
-      //   page 2+  → src.browse('', cp)   — the channel feed (newest), keeps scrolling
-      // Title-similarity is the SEPARATE «Похожие названия» item, so we don't duplicate
-      // search here. The grid dedups across pages by card id, so repeats are dropped.
+      // «Похожие» — infinite scroll (REQ: scroll everywhere), one channel:
+      //   page 1   → the site's related block (getRelated, a FIXED list) + the site searched for the seed, ranked together
+      //   page N   → the site search, page N (the newest feed only when the search finds nothing)
+      // «Похожие названия» is the all-channel counterpart (the fan-out below). The grid dedups by card id.
+      // one card per video across the grid's pages (_oneCardPerVideo); page 1 starts over — a grid re-created on
+      // «back» loads page 1 again and must not find its own cards «already shown»
+      if (page === 1 || !object._oneCard) object._oneCard = {};
+      var _ocv = object._oneCard;
+
       if (object.related_video) {
         var relSrc = sourceById(object.related_video_source || object.source_id);
         if (!relSrc) { resolve([], 1); return; }
@@ -1664,13 +1665,11 @@
         var _relDone = function (items) {
           items = (items || []).filter(_relFresh);
           items.forEach(function (v) { if (v && !v.source) v.source = relSrc.id; });
-          resolve(_applyClientSort(items.map(toCard)), items.length ? (page + 50) : page);
+          var more = items.length;
+          resolve(_applyClientSort(_oneCardPerVideo(items, relVideo.title, _ocv).map(toCard)), more ? (page + 50) : page);
         };
-        // Page-2+ continuation. The site's getRelated block is page 1 only (ignores
-        // `page`), so pages 2+ used to fall back to the newest browse feed — which is
-        // NOT similar to the seed at all. Instead run a TITLE-KEYWORD search on the same
-        // source: topically similar AND paginates (keeps «Похожие» both relevant and
-        // infinite). Falls back to the newest feed only if search is missing/empty.
+        // The continuation: the same site searched for the seed (_similarQuery) — similar AND paginated; the newest
+        // feed only when the search is missing or empty.
         var _relFeed = function (cp) {
           var searchP = (relSrc.search && relQ)
             ? relSrc.search(relQ, cp).then(function (r) { return (r && r.items) || []; }).catch(function () { return []; })
@@ -1684,17 +1683,25 @@
               .catch(function () { resolve([], page); });
           });
         };
+        // Page 1 = the site's own «Похожие» block AND the same site searched for the seed (_similarQuery), ranked
+        // together. On many sites the block is near-random (analdin, xnxx, eporner, tizam: a blind judge found half of
+        // the first 20 cards unrelated, 2026-10-13); the search brings the performer / series / act. The cards that
+        // share the seed's words come first, then the block's other cards, then the search's. Page N continues the
+        // search at its page N.
         if (page === 1) {
-          var gp = relSrc.getRelated ? relSrc.getRelated(relVideo, 1) : Promise.resolve([]);
-          Promise.resolve(gp).then(function (rel) {
-            rel = (rel || []).filter(_relFresh);
-            if (!rel.length) { object._relNoP1 = true; _relFeed(1); return; }  // no site-related → feed from page 1
-            rel.forEach(function (v) { if (v && !v.source) v.source = relSrc.id; });
-            resolve(_similarFirst(relVideo.title || '', relVideo.url, rel).map(toCard), page + 50);   // always offer the feed continuation
-          }).catch(function () { object._relNoP1 = true; _relFeed(1); });
+          var gp = relSrc.getRelated ? Promise.resolve(relSrc.getRelated(relVideo, 1)).catch(function () { return []; }) : Promise.resolve([]);
+          var sp = (relSrc.search && relQ)
+            ? relSrc.search(relQ, 1).then(function (r) { return (r && r.items) || []; }, function () { return []; })
+            : Promise.resolve([]);
+          Promise.all([gp, sp]).then(function (res) {
+            var both = (res[0] || []).filter(_relFresh).concat((res[1] || []).filter(_relFresh));
+            if (!both.length) { _relFeed(1); return; }   // neither: the newest feed
+            both.forEach(function (v) { if (v && !v.source) v.source = relSrc.id; });
+            resolve(_oneCardPerVideo(_similarFirst(relVideo.title || '', relVideo.url, both), relVideo.title, _ocv).map(toCard), page + 50);   // always offer the continuation
+          });
           return;
         }
-        _relFeed(object._relNoP1 ? page : (page - 1));  // align cp to whether page 1 was related
+        _relFeed(page);
         return;
       }
 
@@ -1768,6 +1775,7 @@
           batches.forEach(function (r) { flat = flat.concat(_pick(r)); });
           if (_similar) flat = _similarRank(_seed.title, _seed.url, flat);
           else if (groups.length) flat = _rankByRelevance(flat, object.query);
+          flat = _oneCardPerVideo(flat, _similar ? _seed.title : '', _ocv);
           flat = flat.filter(function (v) {
             if (!v.title) return true;
             var key = _normText(v.title).slice(0, 40) + '|' + (Math.round((v.duration || 0) / 15) * 15);
@@ -1903,7 +1911,7 @@
         var m = mapResult(result);
         // Search: relevance-rank per page (site search is often date-, not relevance-sorted).
         // Applied BEFORE the explicit client sort so a chosen sort (longest/A-Z) still wins.
-        if (object.query) m.items = _rankByRelevance(m.items, object.query);
+        if (object.query) m.items = _oneCardPerVideo(_rankByRelevance(m.items, object.query), '', _ocv);
         _applyClientSort(m.items);   // guaranteed client sort (longest/shortest/A-Z) per page
         resolve(m.items, m.total_pages);
       }).catch(function (err) {
@@ -3198,20 +3206,39 @@ function _searchKeywords(title, limit) {
 // query (first 4 words, ALL required) found 1–21 videos, half of them the seed again; ranking by 4 words put other
 // «Daniels» above «dani daniels». Now: every content word of the title (fillers and porn-generic words dropped)
 // in title order; a candidate is scored by the words AND word pairs it shares with the seed (a shared pair —
-// «dani daniels», «oil foot» — is the strongest signal); the site is asked for the title's leading content words
-// or a performer name («… With Moka Mora», «ft Sophia Leone»).
+// «dani daniels», «oil foot» — is the strongest signal; a word rare in the candidate pool outweighs a common one);
+// the site is asked for a performer name, else a distinctive word plus a topic word (_similarQuery).
 var _SIMILAR_FILLER = (function () {
   var set = {}, list = ('fuck fucks fucked fucking gets get got getting hard big huge cock dick pussy ass tits boobs sexy horny ' +
     'gives give takes take loves love wants want first time very real really best great little bit one two three ever ' +
     'hottest hot video videos sex porn full scene part new free hd into onto over after while when were have just then ' +
+    'too good rare content exclusive exclusives weekly dot com www official premium their them ' +
     'трахает трахнул ебет выебал большой большая большие красивая сочная горячая').split(/\s+/);
   for (var i = 0; i < list.length; i++) set[list[i]] = true;
   return set;
 })();
+// Two-letter act tags survive the length floor («first time DP» had no other content word).
+var _SHORT_TAGS = { dp: 1 };
 function _similarWords(title) {
-  return _normText(String(title || '').replace(/'s\b/gi, '')).split(' ').filter(function (w) {
-    return w.length > 2 && !STOP_WORDS[w] && !_SIMILAR_FILLER[w] && !/^\d+$/.test(w);
-  });
+  return _normText(String(title || '').replace(/['’]s\b/gi, ''))
+    .replace(/\bstep (sister|sis|brother|bro|mom|mother|dad|father|son|daughter)\b/g, 'step$1')   // «Step-sister» = «stepsister»
+    .split(' ').filter(function (w) {
+      return (w.length > 2 || _SHORT_TAGS[w]) && !STOP_WORDS[w] && !_SIMILAR_FILLER[w] && !/^\d+$/.test(w);
+    });
+}
+// Act / theme words — the EN side of the RU→EN map and the synonym table: what a title is ABOUT, as opposed to the words
+// that make it this video (names, series). Built on first use (both tables are defined further down).
+var _TAGS = null;
+function _isTag(w) {
+  if (!_TAGS) {
+    _TAGS = { dp: 1 };
+    var add = function (list) {
+      list.forEach(function (p) { p.split(' ').forEach(function (x) { if (x.length > 2 && !STOP_WORDS[x] && !_SIMILAR_FILLER[x]) _TAGS[x] = 1; }); });
+    };
+    for (var k in _RU_EN) add(_RU_EN[k]);
+    for (var s in _SEARCH_SYN) add(_SEARCH_SYN[s]);
+  }
+  return !!_TAGS[w];
 }
 /** Content words in title order, de-duplicated, at most `limit` (8). */
 function _similarKeywords(title, limit) {
@@ -3219,40 +3246,115 @@ function _similarKeywords(title, limit) {
   _similarWords(title).forEach(function (w) { if (out.indexOf(w) === -1 && out.length < (limit || 8)) out.push(w); });
   return out;
 }
-/** A performer name the title spells out: «… With Moka Mora», «ft. Sophia Leone», «Dani Daniels - …». */
+/**
+ * A performer name the title spells out: two Name-shaped words that are no topic, filler or stop word — «Sexy asian Emiri
+ * Momota is banged…», «Lina Migurtt's POV…», «… With Moka Mora». In a Title Case title every word is capitalised, so
+ * there only a pair framed by separators («- Anastasia Knight -», «with …», the title's start or end) counts — the old
+ * «With X Y» pattern took «Hot Step» from «…With Hot Step Sister - Anastasia Knight - …».
+ */
 function _similarName(title) {
-  var t = String(title || '');
-  var m = /\b(?:[Ww]ith|[Ff]t\.?|[Ff]eat\.?|[Ff]eaturing|[Ss]tarring)\s+([A-ZА-ЯЁ][a-zа-яё]+\s+[A-ZА-ЯЁ][a-zа-яё]+)/.exec(t) ||
-          /^([A-ZА-ЯЁ][a-zа-яё]+\s+[A-ZА-ЯЁ][a-zа-яё]+)\s+[-–|:]/.exec(t) ||
-          /[-–|:]\s+([A-ZА-ЯЁ][a-zа-яё]+\s+[A-ZА-ЯЁ][a-zа-яё]+)\s*$/.exec(t);
-  return m ? m[1] : '';
-}
-// What to ask a site's own search for: a spelled-out name, else the title's two leading content words.
-function _similarQuery(title) {
-  return _similarName(title) || _similarKeywords(title).slice(0, 2).join(' ');
-}
-/** How similar a candidate title is to the seed: shared content words + 3 per shared word pair. */
-function _similarScore(seedWords, title) {
-  var w = _similarWords(title), score = 0;
-  seedWords.forEach(function (x) { if (w.indexOf(x) !== -1) score++; });
-  for (var i = 0; i < seedWords.length - 1; i++) {
-    var pair = seedWords[i] + ' ' + seedWords[i + 1];
-    for (var j = 0; j < w.length - 1; j++) if (w[j] + ' ' + w[j + 1] === pair) { score += 3; break; }
+  var toks = String(title || '').split(/\s+/), words = [], sep = true, i;
+  for (i = 0; i < toks.length; i++) {
+    var raw = toks[i];
+    if (!raw) continue;
+    if (/^[-–|:&,+]+$/.test(raw) || /^(with|ft\.?|feat\.?|featuring|starring|and|by|vs\.?)$/i.test(raw)) {
+      if (words.length) words[words.length - 1].after = true;
+      sep = true;
+      continue;
+    }
+    var w = raw.replace(/^[("'«\[]+/, '').replace(/['’]s$/i, '').replace(/[)"'»\],.:;!?|–-]+$/, '');
+    words.push({ w: w, before: sep, after: /[-–|:,;!?)\]]$|['’]s$/i.test(raw) });
+    sep = /[-–|:,;!?)\]]$/.test(raw);
   }
-  return score;
+  var letters = 0, caps = 0;
+  words.forEach(function (x) { if (/^[A-Za-zА-Яа-яЁё]/.test(x.w)) { letters++; if (/^[A-ZА-ЯЁ]/.test(x.w)) caps++; } });
+  var titleCase = letters >= 3 && caps / letters >= 0.6;
+  var shaped = /^[A-ZА-ЯЁ][a-zа-яё]+$/;
+  function plain(x) { var l = x.toLowerCase(); return l.length < 3 || STOP_WORDS[l] || _SIMILAR_FILLER[l] || _isTag(l); }
+  for (i = 0; i + 1 < words.length; i++) {
+    var a = words[i], b = words[i + 1];
+    if (a.after || !shaped.test(a.w) || !shaped.test(b.w) || plain(a.w) || plain(b.w)) continue;
+    if (titleCase && !(a.before || b.after || i + 2 === words.length)) continue;
+    return a.w + ' ' + b.w;
+  }
+  return '';
 }
-/** Candidates ranked by similarity; kept with ≥2 shared words or a shared pair (score ≥ 2); never the seed. */
+// What to ask a site's own search for: a spelled-out name; else one word that makes the title this video plus one
+// topic word («cursed hentai» for «The cursed prince … hentai femdom»); else the two leading content words.
+function _similarQuery(title) {
+  var name = _similarName(title);
+  if (name) return name;
+  var kw = _similarKeywords(title), word = '', tag = '';
+  kw.forEach(function (w) { if (_isTag(w)) { if (!tag) tag = w; } else if (!word) word = w; });
+  return (word && tag) ? word + ' ' + tag : kw.slice(0, 2).join(' ');
+}
+function _uniqWords(list) {
+  var out = [];
+  for (var i = 0; i < list.length; i++) if (out.indexOf(list[i]) === -1) out.push(list[i]);
+  return out;
+}
+/**
+ * Candidates ranked by similarity to the seed; never the seed. A shared word counts by how telling it is in THIS pool —
+ * rare among the candidates (a name, a series) far above one most of them carry (the words the site was searched for,
+ * «asian» in an «asian» search) — plus 2 per shared word pair. Kept: two shared words or a shared pair (one, for a
+ * one-word seed such as «first time DP»).
+ */
 function _similarRank(seedTitle, seedUrl, items) {
-  var sw = _similarKeywords(seedTitle, 12), seedN = _normText(seedTitle);
-  return (items || []).map(function (v, i) { return { v: v, s: _similarScore(sw, v.title), i: i }; })
-    .filter(function (x) { return x.s >= 2 && x.v.url !== seedUrl && _normText(x.v.title) !== seedN; })
+  var sw = _similarKeywords(seedTitle, 12), seedN = _normText(seedTitle), list = items || [];
+  var words = list.map(function (v) { return _similarWords(v.title); }), df = {}, n = list.length;
+  words.forEach(function (w) { _uniqWords(w).forEach(function (x) { df[x] = (df[x] || 0) + 1; }); });
+  var need = Math.min(2, sw.length);
+  return list.map(function (v, i) {
+    var w = words[i], shared = 0, s = 0, pair = false;
+    sw.forEach(function (x) { if (w.indexOf(x) !== -1) { shared++; s += Math.log((n + 1) / (df[x] + 1)) + 0.5; } });
+    for (var a = 0; a < sw.length - 1; a++) {
+      var p = sw[a] + ' ' + sw[a + 1];
+      for (var j = 0; j < w.length - 1; j++) if (w[j] + ' ' + w[j + 1] === p) { s += 2; pair = true; break; }
+    }
+    return { v: v, s: s, ok: need && (shared >= need || pair), i: i };
+  })
+    .filter(function (x) { return x.ok && x.v.url !== seedUrl && _normText(x.v.title) !== seedN; })
     .sort(function (a, b) { return b.s - a.s || ((a.v._srcRank || 0) - (b.v._srcRank || 0)) || a.i - b.i; })
     .map(function (x) { return x.v; });
+}
+/**
+ * One card per video on a screen. The same upload on several sites (title words ≥75% alike) — and, for «Похожие»,
+ * a copy of the seed itself — took whole rows: «HER TITS CURE DEPRESSION» three times, the seed's reposts first. A repost
+ * of a card already listed (`memo.seen`, kept across a grid's pages and late batches) is dropped; a short bare title
+ * («Angela White», «Threesome») may be a different video, so it moves to the end of the page instead. ALL title words
+ * count here, not just the content words: «Good Girls Take Dick As Breakfast» has a single content word.
+ */
+function _titleWords(t) {
+  return _uniqWords(_normText(String(t || '').replace(/['’]s\b/gi, '')).split(' ').filter(Boolean));
+}
+function _jaccard(a, b) {
+  if (!a.length || !b.length) return 0;
+  var common = 0;
+  a.forEach(function (x) { if (b.indexOf(x) !== -1) common++; });
+  return common / (a.length + b.length - common);
+}
+function _oneCardPerVideo(items, seedTitle, memo) {
+  memo = memo || {};
+  var seen = memo.seen || (memo.seen = []), seedW = seedTitle ? _titleWords(seedTitle) : [];
+  var kept = [], later = [];
+  (items || []).forEach(function (v) {
+    var w = _titleWords(v.title);
+    if (seedW.length >= 3 && _jaccard(w, seedW) >= 0.75) return;
+    for (var i = 0; i < seen.length; i++) {
+      if (_jaccard(w, seen[i]) >= 0.75) { if (w.length < 3) later.push(v); return; }
+    }
+    seen.push(w);
+    kept.push(v);
+  });
+  return kept.concat(later);
 }
 /** The site's own «Похожие»: the most similar first, the rest in the site's order (nothing dropped but the seed). */
 function _similarFirst(seedTitle, seedUrl, items) {
   var top = _similarRank(seedTitle, seedUrl, items), seedN = _normText(seedTitle);
-  return top.concat((items || []).filter(function (v) { return top.indexOf(v) === -1 && v.url !== seedUrl && _normText(v.title) !== seedN; }));
+  var rest = (items || []).filter(function (v) { return top.indexOf(v) === -1 && v.url !== seedUrl && _normText(v.title) !== seedN; });
+  // a title without one content word («2 cl», «麻豆», «.... ...» — pornone's end-screen uploads) says nothing: last
+  var named = rest.filter(function (v) { return _similarWords(v.title).length; });
+  return top.concat(named, rest.filter(function (v) { return named.indexOf(v) === -1; }));
 }
 
 
@@ -3363,6 +3465,14 @@ function _decodeHtml(str) {
         .trim();
 }
 
+// Language subdomains translate a page: rt.pornhub.com (the API's card links) and ru.xhamster.com (every xhamster card
+// saved before v0.13.44) render the «Похожие» block in machine Russian («Сосать Трах Сперму - Любительское
+// ВосемьДвадцать»). The original host keeps the uploaders' titles.
+function _origPage(u) {
+  return String(u || '').replace(/^https?:\/\/[a-z]{2,3}\.pornhub\.com\//i, 'https://www.pornhub.com/')
+    .replace(/^https?:\/\/[a-z]{2}\.xhamster\.com\//i, 'https://xhamster.com/');
+}
+
 // ---- Search text normalization + light synonyms (global search relevance) -------------
 // Normalize for matching/dedup: lowercase, ё→е, non-alphanumeric → space, collapse.
 // Parse the JSON array literal that starts at html[start] === '[' (string-aware bracket scan,
@@ -3451,7 +3561,7 @@ var _RU_SOURCES = { tizam: 1, lenporno: 1, '24rolika': 1, ebun: 1, jopaonline: 1
         'татуировки': ['tattoo'], 'очки': ['glasses'], 'униформа': ['uniform'], 'медсестры': ['nurse'],
         'соседка': ['neighbor'], 'подруга': ['girlfriend', 'friend'], 'парень': ['boyfriend', 'guy'],
         'муж': ['husband'], 'рогоносец': ['cuckold'], 'куколд': ['cuckold'], 'свингеры': ['swingers'],
-        'двойное проникновение': ['double penetration'], 'глубокая глотка': ['deepthroat'], 'первого лица': ['pov'],
+        'двойное проникновение': ['double penetration', 'double penetrated', 'dp', 'dvp', 'dap'], 'глубокая глотка': ['deepthroat'], 'первого лица': ['pov'],
         'скрытая камера': ['hidden camera', 'voyeur'], 'русское порно': ['russian'], 'секс': ['sex']
     };
     for (var k in extra) if (!_RU_EN[k]) _RU_EN[k] = extra[k];
@@ -3549,7 +3659,7 @@ function _searchGroups(query) {
 // the exact multi-word phrase, and a title that LEADS with the query; mildly penalizes very
 // long titles (keyword-stuffed spam). Short tokens (≤3 chars) match on word boundary so
 // "ass" doesn't hit "bass"/"class". Higher = more relevant. Shared by global + single search.
-function _relScore(title, groups, phrase, firstWord) {
+function _relScore(title, groups, phrases) {
     var t = _normText(title);
     if (!t) return -100;
     var hit = 0;
@@ -3565,9 +3675,13 @@ function _relScore(title, groups, phrase, firstWord) {
         if (got) hit++;
     }
     var s = hit * 10 - (groups.length - hit) * 8;
-    if (phrase && phrase.indexOf(' ') !== -1 && t.indexOf(phrase) !== -1) s += 6;  // exact multi-word phrase
-    if (firstWord && t.lastIndexOf(firstWord, 0) === 0) s += 3;                     // title leads with query
-    s -= Math.min(t.length / 60, 2);                                               // mild anti-stuffing
+    // the exact multi-word phrase, as typed or as translated for an English title («большие сиськи» → «big tits»)
+    for (var p = 0; p < phrases.length; p++) {
+        if (phrases[p] && phrases[p].indexOf(' ') !== -1 && t.indexOf(phrases[p]) !== -1) { s += 6; break; }
+    }
+    // No bonus for a title that LEADS with the query and no length penalty (2026-10-13): both lifted bare re-uploads
+    // («Angela White» ×9, «Threesome» ×9, «Dp») over the rest, and a Russian lead word sank every English title for a
+    // Russian query. Equal matches keep the site's own order, interleaved across sources.
     return s;
 }
 
@@ -3577,11 +3691,10 @@ function _rankByRelevance(items, query) {
     if (!query || !items || items.length < 2) return items;
     var groups = _searchGroups(query);
     if (!groups.length) return items;
-    var phrase = _normText(query);
-    var firstWord = (groups[0] && groups[0][0]) ? _normText(groups[0][0]).split(' ')[0] : '';
+    var phrases = [_normText(query), _normText(_translateQuery(query))];
     return items
         .map(function (v, i) {
-            var s = _relScore(v.title, groups, phrase, firstWord);
+            var s = _relScore(v.title, groups, phrases);
             // Site-ranked results from tag-search sources: the site matched the query (tags), only
             // the title lacks the words. They rank BELOW every title that names the whole query
             // (worst full match ≈ groups*10 − 2) but above partial matches: ranked level with full
@@ -3883,7 +3996,7 @@ SOURCES.push({
       source: 'pornhub',
       title: v.title || '',
       thumb: thumb,
-      url: v.url ? (v.url.indexOf('http') === 0 ? v.url : 'https://www.pornhub.com' + v.url) : '',
+      url: v.url ? _origPage(v.url.indexOf('http') === 0 ? v.url : 'https://www.pornhub.com' + v.url) : '',
       duration: parseDur(v.duration),
       views: parseViews(String(v.views || 0))
     };
@@ -4129,9 +4242,10 @@ SOURCES.push({
     var self = this;
     var seedKey = (String(video.url || '').match(/viewkey=([a-z0-9]+)/i) || [])[1] || '';
     function parse(html) { return html ? self._parseRelated(html, seedKey) : []; }
-    return cherryFetch(video.url).then(parse, function () { return []; }).then(function (items) {
+    var page = _origPage(video.url);
+    return cherryFetch(page).then(parse, function () { return []; }).then(function (items) {
       if (items.length >= 4) return items;
-      return cherryFetch(buildProxyUrl(video.url, 'https://www.pornhub.com/')).then(parse, function () { return []; })
+      return cherryFetch(buildProxyUrl(page, 'https://www.pornhub.com/')).then(parse, function () { return []; })
         .then(function (viaVps) { return viaVps.length > items.length ? viaVps : items; });
     }).catch(function() { return []; });
   },
@@ -5048,7 +5162,7 @@ SOURCES.push({
     // «Похожие» = the player's own relatedVideos list on the video page (JSON).
     getRelated: function (video) {
         if (!video || !video.url) return Promise.resolve([]);
-        return cherryFetch(video.url).then(function (html) {
+        return cherryFetch(_origPage(video.url)).then(function (html) {
             var root = _xhInitials(html);
             var rel = root && root.xplayerPluginSettings && root.xplayerPluginSettings.relatedVideos;
             if (!rel || !rel.length) return [];
@@ -6043,7 +6157,11 @@ function _porntrexPages(html, page, itemsLen) {
         if (titleRaw) break;
       }
       var title = _decodeHtml(titleRaw);
-      // The visible caption may be cut («…stranded coed...»); the img alt / link title often carries it whole.
+      // The visible caption may be cut («…stranded coed...»); the img alt / link title often carries it whole. A caption
+      // that runs into the chunk's end was cut by the window itself (xozilla's related cards: long onclick/vthumb markup
+      // pushed <strong class="title"> past +1000 → «Potro De Bi», «Am»).
+      var atEdge = titleRaw && chunk.lastIndexOf(titleRaw) + titleRaw.length >= chunk.length;
+      if (atEdge) title += '…';
       if (/(\.\.\.|…)\s*$/.test(title)) {
         var whole = _decodeHtml(_attr(chunk, /\balt="([^"]+)"/) || _attr(chunk, /<a[^>]+\btitle="([^"]+)"/) || '');
         var cut = _normText(title.replace(/(\.\.\.|…)\s*$/, ''));
