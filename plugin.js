@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.50';
+  var CHERRY_VERSION = '0.13.51';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -3213,6 +3213,8 @@ var _SIMILAR_FILLER = (function () {
     'gives give takes take loves love wants want first time very real really best great little bit one two three ever ' +
     'hottest hot video videos sex porn full scene part new free hd into onto over after while when were have just then ' +
     'too good rare content exclusive exclusives weekly dot com www official premium their them ' +
+    // praise says nothing about the video: «Stunning Babe Lindsay Lee First Ever DP» was searched as «stunning dp» (TV 2026-10-13)
+    'stunning gorgeous lovely pretty cute amazing incredible beautiful ' +
     'трахает трахнул ебет выебал большой большая большие красивая сочная горячая').split(/\s+/);
   for (var i = 0; i < list.length; i++) set[list[i]] = true;
   return set;
