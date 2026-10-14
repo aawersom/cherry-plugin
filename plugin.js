@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.53';
+  var CHERRY_VERSION = '0.13.54';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -1536,10 +1536,21 @@
     // resolved `source` is SOURCES[0] (which HAS cfg.sorts), so without this guard the
     // menu showed BOTH «Сортировка» (server) AND «Сортировка» (client) — a duplicate.
     // Keep ALL sorting in one entry: server-sort for single source, client-sort for all-sources.
-    var _hasSorts  = !!(source && source.cfg && source.cfg.sorts && source.cfg.sorts.length
-                        && !object.all_sources && !object.all_videos && !object.models_index && !object.studios_index);
-    var _hasCats   = !!(source && source.cfg && source.cfg.categories && source.cfg.categories.length
-                        && !object.all_sources && !object.all_videos && !object.models_index && !object.studios_index);
+    // A channel screen: one site's feed / category / search. «Похожие», a model's or a studio's videos are NOT — the
+    // channel's sort / category would push its plain feed and drop you out of them (TV audit 2026-10-14).
+    var _channelGrid = !!source && !object.all_sources && !object.all_videos && !object.is_favorites && !object.is_history &&
+                       !object.related_video && !object.model_url && !object.studio_url && !object.models_index && !object.studios_index;
+    // The sorts THIS screen honours: a site may sort its plain feed or its categories by fewer keys than its search —
+    // cfg.feedSorts (xvideos' feed is only «best of the month» or «new»), cfg.catSorts ([] = no sort inside a category:
+    // hqporner, youjizz, lenporno). An entry that changes nothing is not offered.
+    function _sortList() {
+      var c = (source && source.cfg) || {}, all = c.sorts || [];
+      var only = object.query ? null : (currentCategory ? c.catSorts : c.feedSorts);
+      return only ? all.filter(function (s) { return only.indexOf(s.id) !== -1; }) : all;
+    }
+    var _hasSorts  = _channelGrid && _sortList().length > 1;
+    // a search ignores the category (the grid runs source.search for a query)
+    var _hasCats   = _channelGrid && !object.query && !!(source.cfg && source.cfg.categories && source.cfg.categories.length);
     // «Модели»: offered only when the adapter can list a model index, and only on a
     // normal browse grid (not inside model browse / search / favorites / all-sources).
     var _hasModels = !!(source && source.getModels &&
@@ -1997,9 +2008,11 @@
     // The ACTIVITY title (top bar) carries the active filter so it stays visible
     // after the menu closes (build()'s title alone isn't shown in the header).
     function _filteredTitle(sort, category) {
-      var base = _source ? _source.name : screenTitle;
-      var parts = [base];
-      if (_source && _source.cfg) {
+      // a channel screen: «Xvideos: мачеха · По рейтингу» (the query used to drop out after a sort); any other screen
+      // keeps its own title — «Все видео» and the global search showed «Pornhub» (the source_id they are opened with)
+      if (!_channelGrid) return screenTitle;
+      var parts = [_source.name + (object.query ? ': ' + object.query : '')];
+      if (_source.cfg) {
         if (category && _source.cfg.categories) parts.push(_findLabel(_source.cfg.categories, category));
         if (sort     && _source.cfg.sorts)      parts.push(_findLabel(_source.cfg.sorts, sort));
       }
@@ -2033,18 +2046,19 @@
     }
 
     // Index of the item whose id matches `id` (for Select.show active-state).
-    function _selectedIndex(items, id) {
-      for (var i = 0; i < items.length; i++) if (items[i].id === id) return i;
-      return -1;
+    // The active entry: Lampa.Select ticks an ITEM with selected:true and opens on it — a top-level «selected» index is
+    // ignored (TV 2026-10-14: the chosen sort / category was never marked).
+    function _marked(items, id) {
+      items.forEach(function (it) { if (it.id === id) it.selected = true; });
+      return items;
     }
 
     function _openSort() {
-      if (!_source || !_source.cfg || !_source.cfg.sorts) return;
-      var items = _source.cfg.sorts.map(function (s) { return { title: s.label, id: s.id }; });
+      var items = _sortList().map(function (s) { return { title: s.label, id: s.id }; });
+      if (!items.length) return;
       Lampa.Select.show({
         title: Lampa.Lang.translate('cherry_sort'),
-        items: items,
-        selected: _selectedIndex(items, currentSort),   // mark the active sort on reopen
+        items: _marked(items, currentSort),
         onSelect: function (item) {
           _pushFiltered(item.id, currentCategory);
         },
@@ -2058,8 +2072,7 @@
       items.unshift({ title: Lampa.Lang.translate('cherry_category_default'), id: '' });
       Lampa.Select.show({
         title: Lampa.Lang.translate('cherry_category'),
-        items: items,
-        selected: _selectedIndex(items, currentCategory),   // mark the active category on reopen
+        items: _marked(items, currentCategory),
         onSelect: function (item) {
           _pushFiltered(currentSort, item.id);
         },
@@ -2108,8 +2121,7 @@
       ];
       Lampa.Select.show({
         title: Lampa.Lang.translate('cherry_sort_guaranteed'),
-        items: items,
-        selected: _selectedIndex(items, object.client_sort || ''),
+        items: _marked(items, object.client_sort || ''),
         onSelect: function (item) {
           // Re-push the SAME grid (preserve source/category/query/all_sources/etc.) + client_sort,
           // so the guaranteed client sort works on browse, search and all_sources alike.
@@ -2142,7 +2154,7 @@
       Lampa.Select.show({
         // Title reflects the active filter (source · category · sort) so the menu
         // header shows the current state, matching the grid header.
-        title: _source ? _filteredTitle(currentSort, currentCategory) : 'Cherry',
+        title: _filteredTitle(currentSort, currentCategory),
         items: items,
         onSelect: function (item) {
           if      (item.action === 'search')     _openSearch();
@@ -4479,6 +4491,7 @@ SOURCES.push({
       { id: 'uploaddate~datef=week',             label: 'Свежее за неделю' },
       { id: 'uploaddate~datef=month',            label: 'Свежее за месяц' }
     ]),
+    feedSorts: ['views', 'uploaddate'],   // the plain feed: /best (rating = the same list) or /new (every facet lands there)
     categories: _cats('AI-239:AI,Amateur-65:Amateur,Anal-12:Anal,Arab-159:Arab,Asian_Woman-32:Asian,ASMR-229:ASMR,Ass-14:Ass,bbw-51:BBW,Bi_Sexual-62:Bi,Big_Ass-24:Big Ass,Big_Cock-34:Big Cock,Big_Tits-23:Big Tits,Black_Woman-30:Black,Blonde-20:Blonde,Blowjob-15:Blowjob,Brunette-25:Brunette,Cam_Porn-58:Cam Porn,Creampie-40:Creampie,Cuckold-237:Cuckold/Hotwife,Cumshot-18:Cumshot,Femdom-235:Femdom,Fisting-165:Fisting,Fucked_Up_Family-81:Fucked Up Family,Gangbang-69:Gangbang,Gapes-167:Gapes,Indian-89:Indian,Interracial-27:Interracial,Latina-16:Latina,Lesbian-26:Lesbian,Lingerie-83:Lingerie,Mature-38:Mature,Milf-19:Milf,Oiled-22:Oiled,Redhead-31:Redhead,Solo_and_Masturbation-33:Solo,Squirting-56:Squirting,Stockings-28:Stockings,Teen-13:Teen')
   },
 
@@ -4583,13 +4596,28 @@ SOURCES.push({
     // Normalize ANY /pornstars|/models|/profiles base to /profiles/{slug}.
     var slugM = modelUrl.replace(/\/$/, '').match(/\/(?:pornstars|models|profiles)\/([^\/?#]+)/);
     var slug = slugM ? slugM[1] : modelUrl.replace(/\/$/, '').split('/').pop();
-    var url = 'https://www.xvideos.com/profiles/' + slug + '/videos/best/' + pageIdx;
-    return cherryFetch(url).then(function(text) {
-      var data;
-      try { data = JSON.parse(text); } catch (e) { data = null; }
-      var vids = (data && data.videos) || [];
+    var base = 'https://www.xvideos.com/profiles/' + slug + '/videos/';
+    // `videos` comes as an ARRAY or, when the site drops entries, as an OBJECT keyed by position ({"1":…,"3":…}) —
+    // .forEach on it threw and the model opened empty (TV 2026-10-14: «Shinaryen27», 397 videos). A model whose «best»
+    // page is empty while it has videos is read from «new».
+    function list(data) {
+      var v = (data && data.videos) || [];
+      return Array.isArray(v) ? v : Object.keys(v).map(function (k) { return v[k]; });
+    }
+    function get(kind) {
+      return cherryFetch(base + kind + '/' + pageIdx).then(function (text) {
+        try { return JSON.parse(text); } catch (e) { return null; }
+      });
+    }
+    var memo = self._xvNewOnly || (self._xvNewOnly = {});   // models read from «new», decided on their first page
+    var first = memo[slug] ? get('new') : get('best').then(function (data) {
+      if (list(data).length || !(data && data.nb_videos > 0)) return data;
+      memo[slug] = true;
+      return get('new');
+    });
+    return first.then(function(data) {
       var items = [];
-      vids.forEach(function(o) { var c = self._mapModelVideo(o); if (c) items.push(c); });
+      list(data).forEach(function(o) { var c = self._mapModelVideo(o); if (c) items.push(c); });
       // total_pages from nb_videos / nb_per_page when present, else derive.
       var total = (data && data.nb_videos && data.nb_per_page)
         ? Math.ceil(data.nb_videos / data.nb_per_page)
@@ -5475,7 +5503,7 @@ SOURCES.push({
   cfg: { categories: _cats('4k-porn:4K porn,1080p-porn:1080p porn,60fps-porn:60 FPS porn,amateur:Amateur,anal-sex-hd:Anal,asian:Asian,babe:Babe,bdsm:BDSM,beach-porn:Beach,big-ass:Big ass,big-dick:Big dick,big-tits:Big tits,bisexual:Bisexual,blonde:Blonde,blowjob:Blowjob,bondage:Bondage,brunette:Brunette,casting:Casting,creampie:Creampie,cumshot:Cumshot,deepthroat:Deepthroat,ebony:Ebony,fetish:Fetish,fingering:Fingering,fisting:Fisting,gangbang:Gangbang,group-sex:Group sex,hairy-pussy:Hairy pussy,handjob:Handjob,hentai:Hentai,interracial:Interracial,japanese-girls-porn:Japanese,latina:Latina,lesbian:Lesbian,long-hair:Long hair,masturbation:Masturbation,mature:Mature,milf:MILF,old-and-young:Old and young,orgasm:Orgasm,orgy:Orgy,outdoor:Outdoor,pickup:Pickup,pov:POV,public:Public,pussy-licking:Pussy licking,redhead:Redhead,russian:Russian,porn-massage:Sex massage,sex-parties:Sex party,shaved-pussy:Shaved pussy,shemale:Shemale,small-tits:Small tits,squirt:Squirt,stockings:Stockings,tattooed:Tattooed,teen-porn:Teen porn,threesome:Threesome,vintage:Vintage'),
     // GLOBAL-feed sorts: per-category sort unsupported; sorts are base-path swaps.
     // 'top/week'/'top/month' are slash-bearing path bases → https://hqporner.com/top/week/{p}.
-    sorts: _cats('hdporn:Свежее,top:По популярности,top/week:За неделю,top/month:За месяц') },
+    sorts: _cats('hdporn:Свежее,top:По популярности,top/week:За неделю,top/month:За месяц'), catSorts: [] },
 
   browse: function(category, page, sort) {
     var self = this;
@@ -5571,7 +5599,7 @@ SOURCES.push({
   name: 'YouJizz',
   cfg: { categories: _cats('amateur:Amateur,anal:Anal,asian:Asian,bbc:BBC,big-ass:Big Ass,big-tits:Big Tits,blonde:Blonde,blowjob:Blowjob,casting:Casting,compilation:Compilation,creampie:Creampie,daddy:Daddy,ebony:Ebony,gangbang:Gangbang,hentai:Hentai,homemade:Homemade,interracial:Interracial,japanese:Japanese,japanese-uncensored:Japanese Uncensored,japanese-wife:Japanese Wife,latina:Latina,massage:Massage,mature:Mature,milf:MILF,mind-control:Mind Control,pinay:Pinay,pov:POV,sister:Sister,sleeping:Sleeping,stepdaughter:Stepdaughter,stepmom:Stepmom,stepmom-and-son:Stepmom And Son,stepsister:Stepsister,superheroine:Superheroine,taboo:Taboo,teen:Teen,threesome:Threesome,ai-generated:AI Generated,czech-streets:Czech Streets,private-society:Private Society'),
     // GLOBAL-feed sorts: per-category sort unsupported; sort is a separate listing root /{sort}/{page}.html.
-    sorts: _cats('most-popular:По популярности,trending:В тренде,top-rated:По рейтингу,top-rated-week:Топ за неделю,top-rated-month:Топ за месяц,highdefinition:Только HD,newest-clips:Свежее') },
+    sorts: _cats('most-popular:По популярности,trending:В тренде,top-rated:По рейтингу,top-rated-week:Топ за неделю,top-rated-month:Топ за месяц,highdefinition:Только HD,newest-clips:Свежее'), catSorts: [] },
   host: 'youjizz.com',
 
   _parseCards: function(html) {
@@ -8275,7 +8303,7 @@ SOURCES.push({
     host: 'www.lenporno.net',
     // Feed sorts are root paths (the site's own nav). Categories sort only through a session cookie (?sort=N answers 301
     // + SID cookie → the proxy, without a jar, always got the newest list) — a category stays newest whatever the sort.
-    cfg: { sorts: _cats('hdvideo:Свежее,most-popular:Популярное за неделю,the-best:Лучшее за неделю'), categories: _cats('russkoye:Русское,molodyye:Молодые,zrelyye:Зрелые,mamki:Мамки,analnoye:Анальное,minet:Минет,domashneye:Домашнее,krasotki:Красотки,bryunetki:Брюнетки,blondinki:Блондинки,bolshiye-dojki:Большие дойки,bolshiye-popki:Большие попки,bolshiye-chleny:Большие члены,khudyye:Худые,v-chulkakh:В чулках,ot-pervogo-litsa:От первого лица,gruppovoye:Групповое,kasting:Кастинг,studenty:Студенты,izmena:Измена,gheny:Жены,mzhm:МЖМ,blacked:Негры,aziatskoye:Азиатское,yaponskoye:Японское,mulatki:Мулатки,rakom:Раком,sperma:Сперма,bdsm:БДСМ,masturbatsiya:Мастурбация,lesbiyanki:Лесбиянки,massazh:Массаж,volosatyye:Волосатые,dvoynoye-proniknoveniye:Двойное проникновение,dominirovaniye:Доминирование,orgazmy:Оргазмы,zhestkoye:Жесткое,na-prirode:На природе,na-publike:На публике,pikap:Пикап') },
+    cfg: { sorts: _cats('hdvideo:Свежее,most-popular:Популярное за неделю,the-best:Лучшее за неделю'), catSorts: [] /* a category page has no sort */, categories: _cats('russkoye:Русское,molodyye:Молодые,zrelyye:Зрелые,mamki:Мамки,analnoye:Анальное,minet:Минет,domashneye:Домашнее,krasotki:Красотки,bryunetki:Брюнетки,blondinki:Блондинки,bolshiye-dojki:Большие дойки,bolshiye-popki:Большие попки,bolshiye-chleny:Большие члены,khudyye:Худые,v-chulkakh:В чулках,ot-pervogo-litsa:От первого лица,gruppovoye:Групповое,kasting:Кастинг,studenty:Студенты,izmena:Измена,gheny:Жены,mzhm:МЖМ,blacked:Негры,aziatskoye:Азиатское,yaponskoye:Японское,mulatki:Мулатки,rakom:Раком,sperma:Сперма,bdsm:БДСМ,masturbatsiya:Мастурбация,lesbiyanki:Лесбиянки,massazh:Массаж,volosatyye:Волосатые,dvoynoye-proniknoveniye:Двойное проникновение,dominirovaniye:Доминирование,orgazmy:Оргазмы,zhestkoye:Жесткое,na-prirode:На природе,na-publike:На публике,pikap:Пикап') },
 
     search: function (query, page) {
         // The site's search form is POST /search/ with field `text`; it also honours GET
