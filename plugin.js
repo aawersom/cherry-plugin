@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.52';
+  var CHERRY_VERSION = '0.13.53';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -2690,7 +2690,9 @@
       '.cherry-cat .card{position:relative;}',
       '.cherry-cat .cherry-tfull{display:none;}',
       '.cherry-cat .card.focus .cherry-tfull{display:block;position:absolute;left:0;right:0;z-index:6;color:#fff;font-size:.9em;line-height:1.3;white-space:normal;word-wrap:break-word;padding:0 .15em .35em;background:#111;border-radius:0 0 .3em .3em;}',
-      '.cherry-cat .card.focus .card__title{visibility:hidden;}',
+      // hidden only where the full title replaces it (the overlay sits right before the caption): the home channel tiles
+      // have no overlay, and the plain rule blanked the focused channel's name (owner 2026-10-14)
+      '.cherry-cat .card.focus .cherry-tfull + .card__title{visibility:hidden;}',
 
       /* ---- P2.3 Home letter tiles ------------------------------ */
       '.cherry-cat .cherry-tile{position:absolute;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;border-radius:.6em;}',
