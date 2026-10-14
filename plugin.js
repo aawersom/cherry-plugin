@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.57';
+  var CHERRY_VERSION = '0.13.58';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -3257,11 +3257,19 @@ var _SIMILAR_FILLER = (function () {
 })();
 // Two-letter act tags survive the length floor («first time DP» had no other content word).
 var _SHORT_TAGS = { dp: 1 };
+// A keyboard-mash upload name says nothing: letters mixed with digits («rya7jjb9u») or hardly a vowel («lhdstgkpjfs»,
+// «ntbirsnfrply» — pornone's related block, TV 2026-10-14). Such a title has no content word → it goes last in «Похожие».
+function _gibberish(w) {
+  if (w.length >= 6 && /[0-9]/.test(w) && /[a-zа-я]/.test(w)) return true;
+  if (w.length < 6) return false;
+  var v = (w.match(/[aeiouyаеиоуыэюя]/g) || []).length;
+  return v / w.length < 0.2;
+}
 function _similarWords(title) {
   return _normText(String(title || '').replace(/['’]s\b/gi, ''))
     .replace(/\bstep (sister|sis|brother|bro|mom|mother|dad|father|son|daughter)\b/g, 'step$1')   // «Step-sister» = «stepsister»
     .split(' ').filter(function (w) {
-      return (w.length > 2 || _SHORT_TAGS[w]) && !STOP_WORDS[w] && !_SIMILAR_FILLER[w] && !/^\d+$/.test(w);
+      return (w.length > 2 || _SHORT_TAGS[w]) && !STOP_WORDS[w] && !_SIMILAR_FILLER[w] && !/^\d+$/.test(w) && !_gibberish(w);
     });
 }
 // Act / theme words — the EN side of the RU→EN map and the synonym table: what a title is ABOUT, as opposed to the words
