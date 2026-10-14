@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.54';
+  var CHERRY_VERSION = '0.13.55';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -1023,9 +1023,15 @@
   // «Все видео» promises the newest videos: the channel's «Свежее» sort, wherever it sits in the
   // list (sorts[0] is «По популярности» on youjizz, xhamster, huyamba, ebalovo, porno666, lenkino,
   // pornobriz, ebun). No such sort → '' = the site's own default listing (home / latest-updates).
-  function _latestSort(src) {
+  // «Все видео» shows each channel's POPULAR videos (owner 2026-10-14; was the newest): the week's popular where the site
+  // has it (no all-time classics forever on top), else «По популярности», else any popular / best / top sort, else the
+  // site's default. Label-driven: every adapter names its sorts in Russian.
+  function _popularSort(src) {
     var sorts = (src && src.cfg && src.cfg.sorts) || [];
-    for (var i = 0; i < sorts.length; i++) if (sorts[i].label === 'Свежее') return sorts[i].id;
+    var tests = [/попул.*недел/i, /(лучш|топ).*недел/i, /^за неделю$/i, /^по популярности$/i, /популяр|лучш|топ/i];
+    for (var t = 0; t < tests.length; t++) {
+      for (var i = 0; i < sorts.length; i++) if (tests[t].test(sorts[i].label)) return sorts[i].id;
+    }
     return '';
   }
 
@@ -1778,6 +1784,21 @@
           picked.forEach(function (v, k) { v._srcRank = k; });
           return picked;
         }
+        // Round by round (owner 2026-10-14): every channel's 1st video, then every channel's 2nd, … — channels in home-tile
+        // order within a round. A search keeps three tiers, each round by round: titles naming the whole query, then a
+        // tag-search site's hits whose title lacks the words (eporner's «lagi viral di x…» for «блондинка» led round 1 on
+        // a strict round), then the rest. Late batches arrive as their own rounds below the first screen.
+        var _tileOrder = {};
+        _act.forEach(function (s, i) { _tileOrder[s.id] = i; });
+        function _byPosition(items) {
+          return items.map(function (v, i) {
+            var tier = (!groups.length || _groupHits(v.title) === groups.length) ? 0 : (v._siteRelevant ? 1 : 2);
+            return { v: v, k: [tier, v._srcRank || 0, _tileOrder[v.source] || 0, i] };
+          }).sort(function (a, b) {
+            for (var j = 0; j < 4; j++) if (a.k[j] !== b.k[j]) return a.k[j] - b.k[j];
+            return 0;
+          }).map(function (x) { return x.v; });
+        }
         // Several batches → ranked, cross-source-deduped cards. Dedup key = normalized title
         // (40 chars) + duration bucketed to 15 s — the same video posted on several sites; kept
         // across the progressive batches so a late source never repeats an on-screen video.
@@ -1785,7 +1806,7 @@
           var flat = [];
           batches.forEach(function (r) { flat = flat.concat(_pick(r)); });
           if (_similar) flat = _similarRank(_seed.title, _seed.url, flat);
-          else if (groups.length) flat = _rankByRelevance(flat, object.query);
+          else flat = _byPosition(flat);
           flat = _oneCardPerVideo(flat, _similar ? _seed.title : '', _ocv);
           flat = flat.filter(function (v) {
             if (!v.title) return true;
@@ -1814,7 +1835,7 @@
           var _q = (_enQuery && !_RU_SOURCES[src.id]) ? _enQuery : object.query;
           var fetch = (_isSearch
             ? src.search(_q, page)
-            : src.browse('', page, _latestSort(src))
+            : src.browse('', page, _popularSort(src))
           ).then(function (r) {
             r = r || { items: [] };
             r._srcId = src.id;
