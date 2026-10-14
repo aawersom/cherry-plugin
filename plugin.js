@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.55';
+  var CHERRY_VERSION = '0.13.56';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -1334,7 +1334,7 @@
   // onCreate / onNext / onInstance hooks; cards are configured through card.use({…}). A screen
   // describes itself as hooks and this adapter maps them onto Maker, or onto the legacy
   // InteractionCategory when Maker is absent (older Lampa builds) — the screen code exists once.
-  //   hooks.cols              grid columns (5 video cards / 8 home tiles)
+  //   hooks.cols              grid columns (5 video cards / 6 home tiles) — a count Lampa has a cols--N rule for
   //   hooks.rootClass         classes on the screen root (the Cherry CSS scope)
   //   hooks.skeleton          shimmer placeholders while page 1 loads
   //   hooks.load(page, ok, fail, append)   ok(items, total_pages); page 1 = the first screen; a
@@ -2676,10 +2676,11 @@
       } catch (e) {}
     }
 
-    // Small square tiles, 8 per row, so every channel fits on screen.
+    // Square tiles, 6 per row across the full width (owner 2026-10-14). Lampa sizes a grid card by its cols--N class and
+    // has no rule for 8: «cols: 8» fell back to the default card width — 6 tiles and an empty strip on the right.
     // .cherry-cat → tile + focus styling; .cherry-home → square aspect override.
     return _cherryScreen(object, {
-      cols: 8, rootClass: 'cherry-cat cherry-home',
+      cols: 6, rootClass: 'cherry-cat cherry-home',
       load: _load, card: _card,
       empty: function () { return { descr: Lampa.Lang.translate('cherry_empty') }; }
     });
