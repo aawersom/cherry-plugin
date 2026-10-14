@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.56';
+  var CHERRY_VERSION = '0.13.57';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -5845,7 +5845,11 @@ SOURCES.push({
     getRelated: function (video) {
         if (!video || !video.url) return Promise.resolve([]);
         return cherryFetch(video.url).then(function (html) {
-            return _pornoneCards(html).filter(function (v) { return v.url !== video.url; }).slice(0, 20);
+            // pornone files an upload with no usable title under /pornone-sex-video-{id}/ — its cards read «2 cl», «麻豆»,
+            // «.... ...» and filled the «Похожие» block with nothing; they are left out of it
+            return _pornoneCards(html).filter(function (v) {
+                return v.url !== video.url && !/\/pornone-sex-video-\d+\//.test(v.url || '');
+            }).slice(0, 20);
         }).catch(function () { return []; });
     },
 
@@ -6273,7 +6277,7 @@ function _porntrexPages(html, page, itemsLen) {
       }
     }
 
-    return items;
+    return cfg.collapse ? cfg.collapse(items) : items;   // a site's own repost spam (analdin auto-clips)
   }
 
   // Build a category-browse URL from a {slug}/{page} template + flags.
@@ -6644,7 +6648,23 @@ SOURCES.push(_kvsEngine({
     catPageBase: 1, catPage1Omit: true,
     categories: _cats('sex:Sex,blowjobs:Blowjobs,hot:Hot,pussy:Pussy,ass:Ass,sexy:Sexy,hardcore:Hardcore,babes:Babes,big-tits:Big Tits,tits:Tits,brunettes:Brunettes,teens:Teens 18+,big-ass:Big Ass,amateurs:Amateurs,blondes:Blondes,doggy-style:Doggy Style,anal:Anal,big-cock:Big Cock,cumshots:Cumshots,sluts:Sluts,pussy-licking:Pussy Licking,crazy:Crazy,pornstars:Pornstars,masturbation:Masturbation,young:Young,cowgirl:Cowgirl,oral:Oral,milfs:MILFs,pov:POV,hd:HD,small-tits:Small Tits,tattoos:Tattoos,lesbians:Lesbians,homemade:Homemade,interracial:Interracial,busty:Busty,natural-tits:Natural Tits,reverse-cowgirl:Reverse Cowgirl,facial:Facial,mature:Mature'),
     sortedFeed: true,   // the bare feed ignores ?sort_by= → sorted feeds via /most-popular/ /top-rated/
-    sorts: _cats('post_date:Свежее,video_viewed:По популярности,video_viewed_today:Популярное за день,video_viewed_week:Популярное за неделю,video_viewed_month:Популярное за месяц,rating_week:Рейтинг за неделю,rating:По рейтингу,duration:Длинные'),
+    // opens on the week's popular: «Свежее» is flooded with auto-cut 5- / 8-minute excerpts of one scene (TV 2026-10-14)
+    sorts: _cats('video_viewed_week:Популярное за неделю,post_date:Свежее,video_viewed:По популярности,video_viewed_today:Популярное за день,video_viewed_month:Популярное за месяц,rating_week:Рейтинг за неделю,rating:По рейтингу,duration:Длинные'),
+    // one card per auto-cut scene: analdin re-cuts a scene into 300/301- and 480-second clips, each under another SEO prefix
+    // («Extreme Granny Screw Two Youthfull Whores, Sydney Cole…», «Bdsm Fingering Two Youthfull Bitches, Sydney Cole…»);
+    // titles differ, the performer slug ending the URL and the clip length do not
+    collapse: function (items) {
+        var seen = {};
+        return items.filter(function (v) {
+            if (v.duration !== 300 && v.duration !== 301 && v.duration !== 480) return true;
+            var who = (String(v.url || '').replace(/\/$/, '').split('/').pop().match(/-([a-z]+-[a-z]+)$/) || [])[1];
+            if (!who) return true;
+            var k = who + '|' + (v.duration === 480 ? 480 : 300);
+            if (seen[k]) return false;
+            seen[k] = 1;
+            return true;
+        });
+    },
     searchUrl: function(query, page) {
         // KVS search = /search/{q}/ PATH (the ?s= param is ignored → homepage feed). Page N =
         // ?from_videos=N — the /{q}/{p}/ path re-served page 1 (only 10% new). Stand: p2 100% new.
