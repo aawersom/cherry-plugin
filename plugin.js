@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.62';
+  var CHERRY_VERSION = '0.13.63';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -4108,12 +4108,17 @@ SOURCES.push({
     return cherryFetch(video.url).then(function (html) {
       // The video's OWN poster is og:image (= the player's image_url). The first hdnea URL on the page was often a
       // related card's: 4 of 8 refreshed favorites showed another video (2026-10-16).
-      var og = ((html.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i) || [])[1] || '').replace(/&amp;/g, '&');
+      // A page variant without og:image (premium layout: 2 of 17 favorites on the TV, 2026-10-16) still shows the poster
+      // in the player box.
+      var og = ((html.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i) || [])[1] ||
+        (html.match(/id="videoWrapPlayer">\s*<img src="([^"]+)"/) || [])[1] || '').replace(/&amp;/g, '&');
       var id = (og.match(/\/videos\/\d{6}\/\d{2}\/(\d+)\//) || [])[1];
       if (id && og.indexOf('hdnea=') === -1) {
         // og's hash= copy is bound to the IP that fetched the page; a time-tokened copy of the same poster loads anywhere
         var same = html.match(new RegExp('https?://[a-z0-9.-]*phncdn\\.com/[^"\'\\s<>]*/' + id + '/[^"\'\\s<>]*hdnea=[^"\'\\s<>]*', 'i'));
         if (same) return same[0].replace(/&amp;/g, '&');
+        // without one, load the hash= copy the way the page came (the TV fetches pornhub through the VPS: direct → error)
+        if (/[?&]hash=/.test(og)) return buildProxyUrl(og);
       }
       return og;
     }).catch(function () { return ''; });
