@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.59';
+  var CHERRY_VERSION = '0.13.60';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -1834,7 +1834,7 @@
         _act.forEach(function (src) {
           var _q = (_enQuery && !_RU_SOURCES[src.id]) ? _enQuery : object.query;
           var fetch = (_isSearch
-            ? src.search(_q, page)
+            ? _searchWithHandle(src, _q, page)
             : src.browse('', page, _popularSort(src))
           ).then(function (r) {
             r = r || { items: [] };
@@ -1934,7 +1934,7 @@
         // the all-sources search uses). Voice input on a RU TV is always Cyrillic, so without
         // this a spoken query returned 0 on eporner/youjizz/porntrex/familyporn… (stand 2026-10-07).
         var _chQ = (!_RU_SOURCES[src.id] && _translateQuery(object.query)) || object.query;
-        promise = src.search(_chQ, page, currentSort);
+        promise = _searchWithHandle(src, _chQ, page, currentSort);
       } else {
         promise = src.browse(currentCategory, page, currentSort);
       }
@@ -3251,6 +3251,7 @@ var _SIMILAR_FILLER = (function () {
     'too good rare content exclusive exclusives weekly dot com www official premium their them ' +
     // praise says nothing about the video: «Stunning Babe Lindsay Lee First Ever DP» was searched as «stunning dp» (TV 2026-10-13)
     'stunning gorgeous lovely pretty cute amazing incredible beautiful ' +
+    'onlyfans fansly leaked leak leaks ' +
     'трахает трахнул ебет выебал большой большая большие красивая сочная горячая').split(/\s+/);
   for (var i = 0; i < list.length; i++) set[list[i]] = true;
   return set;
@@ -3405,6 +3406,34 @@ function _similarFirst(seedTitle, seedUrl, items) {
   // a title without one content word («2 cl», «麻豆», «.... ...» — pornone's end-screen uploads) says nothing: last
   var named = rest.filter(function (v) { return _similarWords(v.title).length; });
   return top.concat(named, rest.filter(function (v) { return named.indexOf(v) === -1; }));
+}
+
+/**
+ * The joined handle of a name query: «amira west» → «amirawest». OnlyFans uploads go by the handle («Amirawest 026»),
+ * and a site's search for the two words misses them (2026-10-16). Only for 2–3 plain Latin words that are no topic /
+ * filler / stop words — «big tits» has no handle. '' otherwise.
+ */
+function _nameWords(query) {
+  // «amira west onlyfans» → [amira, west]: stop / filler words are dropped before the join
+  var w = _normText(query).split(' ').filter(function (x) { return x && !STOP_WORDS[x] && !_SIMILAR_FILLER[x]; });
+  if (w.length < 2 || w.length > 3) return null;
+  for (var i = 0; i < w.length; i++) if (!/^[a-z]{3,}$/.test(w[i]) || _isTag(w[i])) return null;
+  return w;
+}
+function _nameHandle(query) { var w = _nameWords(query); return w ? w.join('') : ''; }
+/** A site's search; when it names no video with every query word, the same site is asked for the joined handle too. */
+function _searchWithHandle(src, query, page, sort) {
+  return Promise.resolve(src.search(query, page, sort)).then(function (r) {
+    r = r || { items: [] };
+    var w = _nameWords(query);
+    var named = function (v) { var t = _normText(v.title); return w.every(function (x) { return t.indexOf(x) !== -1; }); };
+    if (!w || (r.items || []).some(named)) return r;
+    return Promise.resolve(src.search(w.join(''), page, sort)).then(function (r2) {
+      var seen = {}, items = [];
+      ((r2 && r2.items) || []).concat(r.items || []).forEach(function (v) { if (v && !seen[v.id]) { seen[v.id] = 1; items.push(v); } });
+      return { items: items, total_pages: Math.max(r.total_pages || 1, (r2 && r2.total_pages) || 1) };
+    }, function () { return r; });
+  });
 }
 
 
@@ -4981,8 +5010,11 @@ SOURCES.push({
     // global search re-ranks by title words anyway.
     // Orientation (&gay=) is honoured from the sort id's ~gayN suffix (default straight=0).
     var gay = self._orient(sort).gay;
+    // …but a NAME is matched by the API itself: the plain order named it in 48 of 50 top-10 titles, most-popular in 17
+    // (5 performers, 2026-10-16) — popularity pulls in the big videos that merely tag her
+    var order = _nameWords(query) ? '' : '&order=most-popular';
     var url = 'https://www.eporner.com/api/v2/video/search/?query=' + encodeURIComponent(query) +
-      '&per_page=30&page=' + p + '&order=most-popular&thumbsize=medium&gay=' + gay + '&format=json';
+      '&per_page=30&page=' + p + order + '&thumbsize=medium&gay=' + gay + '&format=json';
     return self._apiFetch(url).then(function(text) {
       var data = JSON.parse(text);
       return { items: (data.videos || []).map(self._mapVideo), total_pages: parseInt(data.total_pages, 10) || 1 };
@@ -6340,6 +6372,17 @@ function _porntrexPages(html, page, itemsLen) {
       cfg: { categories: cfg.categories || [], sorts: cfg.sorts || [] },
 
       search: function(query, page) {
+        // cfg.searchUrls: a site whose own search is dead answers through several listings (analdin: its model and
+        // tag pages), merged in order, one card per video; a listing that fails (a 404 model) just adds nothing.
+        if (cfg.searchUrls) {
+          return Promise.all(cfg.searchUrls(query, page).map(function (u) {
+            return cherryFetch(u).then(function (html) { return _kvsParseCards(html, cfg); }, function () { return []; });
+          })).then(function (lists) {
+            var seen = {}, items = [];
+            lists.forEach(function (l) { l.forEach(function (v) { if (!seen[v.id]) { seen[v.id] = 1; items.push(v); } }); });
+            return { items: items, total_pages: _derivePages(items.length, page, 20) };
+          });
+        }
         return cherryFetch(cfg.searchUrl(query, page)).then(function(html) {
           var items = _kvsParseCards(html, cfg);
           var total = typeof cfg.searchTotalPages === 'number'
@@ -6685,6 +6728,15 @@ SOURCES.push(_kvsEngine({
         var q = encodeURIComponent(query);
         return page > 1 ? 'https://www.analdin.com/search/' + q + '/?from_videos=' + page
                         : 'https://www.analdin.com/search/' + q + '/';
+    },
+    // analdin's own search is dead: its results block answers «There is no data in this list» for every query and sort
+    // (2026-10-16, also straight from the PC). Its model and tag pages work and page as /N/: «angela white» →
+    // /models/angela-white/ (30 a page) + /tags/angela-white/, «blonde» → /tags/blonde/ (100 a page).
+    searchUrls: function (query, page) {
+        var slug = String(query || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+        if (!slug) return [];
+        var tail = page > 1 ? page + '/' : '';
+        return ['https://www.analdin.com/models/' + slug + '/' + tail, 'https://www.analdin.com/tags/' + slug + '/' + tail];
     },
     browseUrl: function(page) {
         return page > 1
