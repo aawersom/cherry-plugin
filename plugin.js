@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.63';
+  var CHERRY_VERSION = '0.13.64';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -1035,6 +1035,25 @@
     return '';
   }
 
+  // «Fetish» (owner 2026-10-16: BDSM / fetish, fisting / toys, pissing / squirt / feet, rough / group): each channel's
+  // OWN categories on those themes, matched by label (EN and RU adapters alike). A channel without one sits it out.
+  var _FETISH_RX = /bdsm|бдсм|bondage|бондаж|femdom|фемдом|госпож|доминир|strap|страпон|pegging|latex|латекс|fetish|фетиш|spank|fist|фистинг|toy|игрушк|dildo|piss|писс|squirt|сквирт|feet|foot|ступн|gang ?bang|групп|bukkake|буккаке|double pen|двойное прон|rough|жестк|жёстк|deepthroat|extreme/i;
+  function _fetishCats(src) {
+    if (!src._fetish) src._fetish = ((src.cfg && src.cfg.categories) || []).filter(function (c) { return _FETISH_RX.test(c.label); }).map(function (c) { return c.id; });
+    return src._fetish;
+  }
+  // Page p of the «Fetish» feed for the i-th channel: its categories in turn — the channels start on different themes
+  // (i shifts the turn), each category's site page 1 before any page 2.
+  function _fetishPage(src, i, page) {
+    var cats = _fetishCats(src), j = page - 1;
+    return { cat: cats[(j + i) % cats.length], page: Math.floor(j / cats.length) + 1 };
+  }
+  // Inside a category: the popular sort among the ones a category page takes (cfg.catSorts; [] = none).
+  function _fetishSort(src) {
+    var c = (src && src.cfg) || {};
+    return c.catSorts ? _popularSort({ cfg: { sorts: c.catSorts } }) : _popularSort(src);
+  }
+
   // Sources offered to the user — tiles, «Все видео» / global search fan-out, health dots.
   // A `disabled: true` adapter (site down) stays registered so favorites/history/related
   // for its cards still resolve through sourceById, but it is not shown as a channel.
@@ -1734,6 +1753,7 @@
       // Paginates: each source uses the SAME `page`; any full batch ⇒ more pages.
       if ((object.all_sources && object.query) || object.all_videos) {
         var _act = _activeSources();
+        if (object.fetish) _act = _act.filter(function (s) { return _fetishCats(s).length; });
         if (!_act.length) { resolve([], 1); return; }
         _failNeed = _act.length;
         var _isSearch = !!object.query;
@@ -1838,9 +1858,10 @@
         if (progress) setTimeout(function () { windowOver = true; _first(); }, FIRST_SCREEN_MS);
         _act.forEach(function (src) {
           var _q = (_enQuery && !_RU_SOURCES[src.id]) ? _enQuery : object.query;
+          var fp = object.fetish ? _fetishPage(src, _tileOrder[src.id], page) : null;
           var fetch = (_isSearch
             ? _searchWithHandle(src, _q, page)
-            : src.browse('', page, _popularSort(src))
+            : fp ? src.browse(fp.cat, fp.page, _fetishSort(src)) : src.browse('', page, _popularSort(src))
           ).then(function (r) {
             r = r || { items: [] };
             r._srcId = src.id;
@@ -2566,6 +2587,8 @@
       results.push({ title: Lampa.Lang.translate('cherry_favorites'), img: '', _kind: 'favorites', _initial: '♥', _action: true });
       // 3) Sync entry — set the cross-device PIN; opening Cherry also auto-syncs.
       results.push({ title: Lampa.Lang.translate('cherry_sync'), img: '', _kind: 'sync', _initial: '⟲', _action: true });
+      // 3b) «Fetish» — a channel of its own: every channel's fetish categories, round by round (all_videos grid).
+      results.push({ title: 'Fetish', img: '', _kind: 'fetish', _initial: 'F', _color: _tileColor('fetish') });
       // 4) One card per ACTIVE source (disabled = site down, see _activeSources) — stable
       //    brand colour + first letter.
       _activeSources().forEach(function (src) {
@@ -2612,6 +2635,15 @@
             title:      Lampa.Lang.translate('cherry_all_videos'),
             source_id:  (SOURCES[0] && SOURCES[0].id) || '',
             all_videos: true,
+            page:       1
+          });
+        } else if (element._kind === 'fetish') {
+          Lampa.Activity.push({
+            component:  'cherry_grid',
+            title:      'Fetish',
+            source_id:  (SOURCES[0] && SOURCES[0].id) || '',
+            all_videos: true,
+            fetish:     true,
             page:       1
           });
         } else if (element._kind === 'continue') {
