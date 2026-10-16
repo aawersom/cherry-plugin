@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.61';
+  var CHERRY_VERSION = '0.13.62';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -120,7 +120,7 @@
           // the token mismatches → 410/buffering. youjizz streams on *.youjizz.com
           // (e.g. cdne-mobile.youjizz.com); porntrex streams on *.cdntrex.com.
           if (PROXY_URL_2_HOSTS[h] || /\.bigcdn\.cc$/.test(h) || /(?:^|\.)pornone\.com$/.test(h) ||
-              /(?:^|\.)youjizz\.com$/.test(h) || /\.cdntrex\.com$/.test(h) ||
+              /(?:^|\.)youjizz\.com$/.test(h) || /\.cdntrex\.com$/.test(h) || /(?:^|\.)tnaflix\.com$/.test(h) ||
               /(?:^|\.)phncdn\.com$/.test(h)) base = PROXY_URL_2;   // pornhub HLS: same IP as its page (see PROXY_URL_2_HOSTS)
         } catch (e) {}
       }
@@ -1260,8 +1260,13 @@
           Object.keys(proxiedQuality).forEach(function (k) { proxiedQuality[k] = _viaProxy(proxiedQuality[k]); });
         }
         if (_isAndroid() && !_inner) {
-          _finalUrl = _extPlayerUrl(_finalUrl);
-          Object.keys(proxiedQuality).forEach(function (k) { proxiedQuality[k] = _extPlayerUrl(proxiedQuality[k]); });
+          // the Lampa app percent-encodes ',' in whatever it hands MX (TV 2026-10-16), and a CDN that checks its token
+          // with the literal comma (cfg.literalComma: tnaflix «secure=…==,exp») answers that with 403 — MX gets such a
+          // stream through the proxy, whose url= carries the comma encoded and sends it on raw
+          var lit = source && source.cfg && source.cfg.literalComma;
+          var ext = function (u) { return lit && String(u).indexOf(',') !== -1 ? _viaProxy(u) : _extPlayerUrl(u); };
+          _finalUrl = ext(_finalUrl);
+          Object.keys(proxiedQuality).forEach(function (k) { proxiedQuality[k] = ext(proxiedQuality[k]); });
         }
         // «Смотреть в качестве…»: the owner picks a rung first (MX gets one URL — the Lampa app passes no quality list
         // to it); without a pick the best rung ≤1080p plays.
@@ -7981,6 +7986,7 @@ SOURCES.push({
     name: 'TNAFlix',
     host: 'tnaflix.com',
     cfg: {
+        literalComma: true,
         sorts: _cats('new:Свежее,featured:По популярности,toprated:По рейтингу'),
         categories: _cats('amateur-porn:Amateur,anal-porn:Anal,asian-porn:Asian,babe-videos:Babes,bbw-porn:BBW,bdsm-porn:BDSM,big-boobs:Huge Tits,big-cock:Huge Cocks,blonde-porn:Blonde,blowjob-videos:Blowjobs,brunette-porn:Brunette,creampie-videos:Creampie,cum-videos:Cumshots,czech-porn:Czech,double-penetration:Double Penetration,ebony-porn:Ebony,euro-porn:Euro,facial-porn:Facial,feet-porn:Foot Fetish,fetish-videos:Fetish,gang-bang:Gang Bang,german-porn:German,granny-porn:Granny,group-sex:Group Sex,hairy-porn:Hairy,handjobs-porn:Handjobs,hardcore-porn:Hardcore,homemade-porn:Homemade,interracial-porn:Interracial,japanese-porn:Japanese,latina-porn:Latina,lesbian-porn:Lesbian,massage-porn:Massage,masturbation-videos:Masturbation,mature-porn:Mature,milf-porn:MILF,petite-porn:Petite,porn-stars:Porn Stars,pov-porn:POV,public-porn:Public,redhead-porn:Redhead,russian-porn:Russian,solo-porn:Solo,squirting-videos:Squirting,teen-porn:Teens (18+),threesome-sex:Threesome,toy-videos:Sex Toys,vintage-sex:Vintage,webcam-shows:Webcam,reality-porn:Reality')
     },
