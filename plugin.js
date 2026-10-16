@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.60';
+  var CHERRY_VERSION = '0.13.61';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -6174,7 +6174,8 @@ function _porntrexPages(html, page, itemsLen) {
   // «Рекомендуем это порно», id="related_videos"), else the whole page. Whole-page parsing put static «new / top of
   // the week» rails ABOVE the real block first: hellporno 5, porno666 3, jopaonline 5, huyamba 4 unrelated cards
   // (related audit 2026-10-11). A block that parses empty falls back to the whole page.
-  var _RELATED_BLOCK = [/id="list_videos_related_videos"/, /<h[23][^>]*>\s*Related videos\s*<\/h[23]>/i, /Рекомендуем это порно/, /id="related_videos"/];
+  var _RELATED_BLOCK = [/id="list_videos_related_videos"/, /<h[23][^>]*>\s*Related videos\s*<\/h[23]>/i, /Рекомендуем это порно/, /id="related_videos"/,
+    /id="custom_list_videos_custom_related_videos"/];   // ok.xxx / pornhat skin
   function _relatedParse(parser, html) {
     for (var i = 0; i < _RELATED_BLOCK.length; i++) {
       var m = _RELATED_BLOCK[i].exec(html);
@@ -6355,8 +6356,10 @@ function _porntrexPages(html, page, itemsLen) {
   // KVS global feeds: /latest-updates/ IGNORES ?sort_by= (xozilla, analdin, pornve, familyporn, ebun — every sort gave the
   // same newest list, TV audit 2026-10-11). The sorted global lists are /top-rated/ (rating*) and /most-popular/ (views,
   // duration, comments) WITH an explicit ?sort_by= — bare /most-popular/ is a weekly/monthly list (ebun's: id order).
-  function _kvsSortedFeedUrl(origin, s, p, sp) {
-    return origin + (/^rating/.test(s) ? '/top-rated/' : '/most-popular/') + (p > 1 ? p + '/' : '') + '?' + (sp || 'sort_by') + '=' + s;
+  // roots: a skin that renamed the sorted feeds (fpo.xxx: /top-2/, /popular-2/ — its /top-rated/ /most-popular/ are 404)
+  function _kvsSortedFeedUrl(origin, s, p, sp, roots) {
+    var r = roots || { rating: '/top-rated/', other: '/most-popular/' };
+    return origin + (/^rating/.test(s) ? r.rating : r.other) + (p > 1 ? p + '/' : '') + '?' + (sp || 'sort_by') + '=' + s;
   }
 
   function _kvsEngine(cfg) {
@@ -6427,7 +6430,7 @@ function _porntrexPages(html, page, itemsLen) {
           // NO category, sorted (xozilla/analdin): the /latest-updates/ feed IGNORES ?sort_by= — every sort
           // returned the same newest list (TV audit 2026-10-11). The sorted global lists live at /top-rated/
           // (rating*) and /most-popular/ (views, duration, comments) with the same ?sort_by=.
-          url = _kvsSortedFeedUrl(cfg.browseUrl(1).replace(/^(https?:\/\/[^/]+).*/, '$1'), s, p, sp);
+          url = _kvsSortedFeedUrl(cfg.browseUrl(1).replace(/^(https?:\/\/[^/]+).*/, '$1'), s, p, sp, cfg.sortedFeedRoots);
         } else if (cfg.sortMode === 'path') {
           // PATH sort, NO category (crocotube/ebun GLOBAL feed): the sort is a root
           // path segment /{sort}/{page}/, NOT a query param. The «Свежее» default
@@ -7836,6 +7839,200 @@ SOURCES.push(_kvsEngine({
     }
 }));
 
+// ---- FPO.XXX (added v0.13.61, owner: «сайты, куда попадают и видео с OnlyFans») — KVS with renamed feed roots: newest
+// /new-1/ (the home page is today's views; /latest-updates/ 404), sorted /popular-2/ + /top-2/ with ?sort_by= (/most-popular/
+// /top-rated/ 404). 280 categories, ?sort_by= inside them. Search /search/{q-hyphens}/, page N ?from_videos=N (/2/ 404).
+// Pages are cached one by one, so neighbours overlap — the grid dedups by id. Stream = flashvars LQ (480p, plain .mp4) / HQ
+// (…_720p.mp4) on get_file → videosNN, IP-BOUND (the token carries the client IP): page and stream from one IP, as every
+// KVS get_file site (native on Android; a proxied page takes its stream along). Research 2026-10-16, scratchpad/sites/fpoxxx.md.
+SOURCES.push(_kvsEngine({
+    id: 'fpoxxx',
+    name: 'FPO.XXX',
+    host: 'www.fpo.xxx',
+    categoryFmt: 'https://www.fpo.xxx/categories/{slug}/{page}/',
+    catPageBase: 1, catPage1Omit: true,
+    categories: _cats('big-tits:Big Tits,big-ass:Big Ass,milf:MILF,anal:Anal,big-cock:Big Cock,hardcore:Hardcore,blowjobs:Blowjobs,big-natural-tits:Big Natural Tits,threesome:Threesome,bbc:BBC,lesbian:Lesbian,blonde:Blonde,interracial:Interracial,small-tits:Small Tits,babe:Babe,family:Family,brunettes:Brunette,teen:Teen,pov:POV,creampie:Creampie,handjob:Handjob,latina:Latina,cheating:Cheating,cumshots:Cumshots,double-penetration:Double Penetration,mature:Mature,facials:Facials,solo:Solo Girls,massage:Massage,ebony:Ebony,red-head:Red Head,old-young:Old and Young,masturbation:Masturbation,amateur:Amateur,asian:Asian,bbw:BBW,german:German,rough-sex:Rough Sex,gangbang:Gangbang,japanese:Japanese,squirting:Squirting,russian:Russian,stockings:Stockings,public:Public,homemade:Homemade,vintage:Vintage,fetish:Fetish,french:French'),
+    sortedFeed: true,
+    sortedFeedRoots: { rating: '/top-2/', other: '/popular-2/' },
+    sorts: _cats('post_date:Свежее,video_viewed_week:Популярное за неделю,video_viewed_month:Популярное за месяц,video_viewed:По популярности,rating_week:Рейтинг за неделю,rating_month:Рейтинг за месяц,rating:По рейтингу,duration:Длинные,most_commented:По комментариям'),
+    searchUrl: function (query, page) {
+        var q = encodeURIComponent(String(query || '').trim().replace(/\s+/g, '-'));
+        return 'https://www.fpo.xxx/search/' + q + '/' + (page > 1 ? '?from_videos=' + page : '');
+    },
+    browseUrl: function (page) {
+        return page > 1 ? 'https://www.fpo.xxx/new-1/' + page + '/' : 'https://www.fpo.xxx/new-1/';
+    },
+    hrefRxSrc: 'href="(https://www\\.fpo\\.xxx/video/(\\d+)/[^"]+/)"',
+    idFromUrl: function (url, m) { return 'fpo-' + (m && m[2] ? m[2] : url.replace(/[^0-9]/g, '')); },
+    modelIndex: {
+        url: function (p) { return p > 1 ? 'https://www.fpo.xxx/models-2/' + p + '/' : 'https://www.fpo.xxx/models-2/'; },
+        hrefRx: /href="(https:\/\/www\.fpo\.xxx\/models\/[^"\/]+\/)"/g,
+        nameRx: [/title="([^"]+)"/],
+        thumbRx: [/src="(https:\/\/www\.fpo\.xxx\/contents\/models\/[^"]+\.jpg)"/]
+    },
+    stripBase64: true,
+    chunkWindow: { before: 0, after: 1300 },
+    thumbRx: [/data-original="(https?:[^"]+\.jpg)"/],
+    titleRx: [/<strong class="title">\s*([^<]+?)\s*<\/strong>/, /title="([^"]+)"/, /alt="([^"]+)"/],
+    pagesRx: /<li class="last"><a [^>]*data-parameters="[^"]*(?:from|from_albums):(\d+)"/,
+    getStream: function (video) {
+        return cherryFetch(video.url).then(function (html) {
+            var r = _kvsFlashvarsQuality(html);
+            // «LQ» = the plain .mp4 = 854x480 (ffprobe); «HQ» takes 720p from its file name in the reader
+            if (r && r.quality && r.quality.LQ) { r.quality['480p'] = r.quality.LQ; delete r.quality.LQ; }
+            return r;
+        }).catch(function () { return { url: '', quality: {} }; });
+    }
+}));
+
+// ---- OK.XXX + PornHat (added v0.13.61) — one network: a KVS backend in a custom skin. Newest = / then /N/ (?sort_by=
+// post_date|video_viewed|rating|duration — the week / month sorts return an unsorted power-of-two id order, not offered);
+// no categories → tags /tags/{slug}/{N}/ (?sort_by= inside); search /search/{q-hyphens}/{N}/ (%20 → 403). Cards: relative
+// /video/{id}/ (ok.xxx) or /video/{slug}/ (pornhat), duration / views behind fa-clock-o / fa-eye, previews in
+// data-preview-custom. The video page has no flashvars: its <source label=360p|480p|720p> get_file links all redirect to ONE
+// multi-quality HLS master on cdn.privatehost.com whose URL has no «.m3u8» — the player would take it for an mp4, so the
+// master is read and its variants (each «…/index-v1-a1.m3u8») become the quality map. Not IP-bound, CORS *, no Referer;
+// links live ~2 h. Research 2026-10-16, scratchpad/sites/okxxx.md.
+function _privatehostStream(video) {
+    return cherryFetch(video.url).then(function (html) {
+        var src = (html.match(/<source src="([^"]+get_file[^"]+)"/) || [])[1];
+        if (!src) return extractStreams(html);
+        return cherryFetch(src).then(function (master) {
+            var quality = {}, best = '', bestH = 0, lines = String(master || '').split(/\r?\n/);
+            for (var i = 0; i < lines.length - 1; i++) {
+                var res = /RESOLUTION=\d+x(\d+)/.exec(lines[i]);
+                if (!res) continue;
+                var u = lines[i + 1].trim();
+                // a master read through our proxy comes back with proxied variants: hand the player the CDN's own URL
+                var inner = _isProxied(u) && /[?&]url=([^&]+)/.exec(u);
+                if (inner) u = decodeURIComponent(inner[1]);
+                if (!/^https?:/.test(u)) continue;
+                var h = parseInt(res[1], 10);
+                quality[h + 'p'] = u;
+                if (h > bestH) { bestH = h; best = u; }
+            }
+            return best ? { url: best, quality: quality } : { url: src, quality: {} };
+        });
+    }).catch(function () { return { url: '', quality: {} }; });
+}
+function _okNetwork(id, name, origin, hrefRxSrc, idOf) {
+    return _kvsEngine({
+        id: id, name: name, host: origin.replace(/^https:\/\//, ''),
+        categoryFmt: origin + '/tags/{slug}/{page}/',
+        catPageBase: 1, catPage1Omit: true,
+        categories: _cats('blowjob:Blowjob,big-tits:Big Tits,big-ass:Big Ass,big-cock:Big Cock,brunette:Brunette,blonde:Blonde,milf:MILF,amateur:Amateur,babe:Babe,masturbation:Masturbation,cumshot:Cumshot,curvy:Curvy,natural-tits:Natural Tits,small-tits:Small Tits,pussy-licking:Pussy Licking,handjob:Handjob,anal:Anal,pov:POV,skinny:Skinny,deep-throat:Deep Throat,asian:Asian,toys:Toys,japanese:Japanese,fetish:Fetish,lesbian:Lesbian,interracial:Interracial,petite:Petite,threesome:Threesome,solo:Solo,creampie:Creampie,lingerie:Lingerie,reality:Reality,rough:Rough,mature:Mature,mom:Mom,stockings:Stockings,redhead:Redhead,facial:Facial,latino:Latina,step-fantasy:Step Fantasy,ebony:Ebony,homemade:Homemade,hardcore:Hardcore,pornstar:Pornstar'),
+        sorts: _cats('post_date:Свежее,video_viewed:По популярности,rating:По рейтингу,duration:Длинные'),
+        searchUrl: function (query, page) {
+            return origin + '/search/' + encodeURIComponent(String(query || '').trim().replace(/\s+/g, '-')) + '/' + (page > 1 ? page + '/' : '');
+        },
+        browseUrl: function (page) { return page > 1 ? origin + '/' + page + '/' : origin + '/'; },
+        hrefRxSrc: hrefRxSrc,
+        normalizeUrl: function (raw) { return origin + raw; },
+        idFromUrl: function (url, m) { return idOf(m); },
+        modelIndex: {
+            url: function (p) { return origin + '/models/' + (p > 1 ? p + '/' : ''); },
+            hrefRx: /href="(\/models\/(?!videos\/|updated\/|\d+\/)[a-z0-9-]+\/)"/g,
+            nameRx: [/title="([^"]+)"/],
+            thumbRx: [/data-original="([^"]+\.jpg)"/],
+            videosUrl: function (modelUrl, p) {
+                var u = /^https?:/.test(modelUrl) ? modelUrl : origin + modelUrl;
+                return u.replace(/\/+$/, '') + '/' + (p > 1 ? p + '/' : '');
+            }
+        },
+        stripBase64: true,
+        chunkWindow: { before: 0, after: 3500 },
+        thumbRx: [/data-original="(https?:[^"]+\.jpg)"/],
+        // the chunk starts AT href=: «<a href=… title=» would read the NEXT card's title
+        titleRx: [/^href="[^"]+" title="([^"]+)"/, /alt="([^"]+)"/],
+        durationRx: /fa-clock-o"><\/i>\s*<span>([^<]+)</,
+        viewsRx: /fa-eye"><\/i>\s*<span>([^<]+)</,
+        previewRx: /data-preview-custom="([^"]+\.mp4[^"]*)"/,
+        pagesRx: /class="pagination-last"><a href="[^"]*\/(\d+)\/"/,
+        getStream: _privatehostStream
+    });
+}
+SOURCES.push(_okNetwork('okxxx', 'OK.XXX', 'https://ok.xxx', 'href="(/video/(\\d+)/)"', function (m) { return 'okx-' + m[2]; }));
+SOURCES.push(_okNetwork('pornhat', 'PornHat', 'https://www.pornhat.com', 'href="(/video/([a-z0-9-]+)/)"', function (m) { return 'phat-' + m[2]; }));
+
+// ---- TNAFlix (added v0.13.61; the one researched site with OnlyFans uploads by name: «Amira_West_onlyfans_Sex.mp4») —
+// plain HTML, no Cloudflare. Feeds /new | /featured | /toprated, page N = /{sort}/{N}; a category /{slug}/{most-recent|
+// featured|top-rated}/{N}; search /search?what={q}&page={N}. Cards: <div data-vid data-num>…, full title in .video-title,
+// lazy thumb data-src, duration .video-duration, hover clip data-trailer. Stream: <source src … size="1080|720|…"> mp4 in
+// the page, NOT IP-bound, no Referer, token ~3 h. The page holds 48 related cards; performers at /profile/{slug}?page=N.
+// Some site-rewritten titles are refusal text («I cannot assist with this request…») — such cards are dropped.
+// Research 2026-10-16, scratchpad/sites/tnaflix.md.
+var _TNA = 'https://www.tnaflix.com';
+function _tnaCards(html, skipId) {
+    var items = [], rx = /<div data-vid="(\d+)" data-num="[^>]*>([\s\S]*?)(?=<div data-vid="|<\/section>|$)/g, m;
+    while ((m = rx.exec(html)) !== null) {
+        var b = m[2], pick = function (r) { var x = r.exec(b); return x ? x[1] : ''; };
+        var url = pick(/<a class="thumb[^"]*" href="([^"]+)"/), title = _decodeHtml(pick(/class="video-title[^"]*">\s*([\s\S]*?)\s*<\/a>/));
+        if (!url || m[1] === skipId || /^i\s*(?:cannot|can(?:'|’)?t)\b/i.test(title)) continue;   // «I cant / can't / cannot assist…»
+        var q = pick(/max-quality">([^<]+)</);
+        items.push({ id: 'tna-' + m[1], source: 'tnaflix', title: title,
+                     thumb: pick(/<img[^>]*?\bdata-src="(https?:\/\/[^"]+)"/) || pick(/<img[^>]*?\bsrc="(https?:\/\/[^"]+)"/),
+                     url: url, duration: parseDur(pick(/video-duration">([\d:]+)</)), views: 0,
+                     preview: _decodeHtml(pick(/data-trailer="([^"]+)"/)), hd: /2160/.test(q) ? '4K' : (/1080|720/.test(q) ? 'HD' : '') });
+    }
+    return items;
+}
+SOURCES.push({
+    id: 'tnaflix',
+    name: 'TNAFlix',
+    host: 'tnaflix.com',
+    cfg: {
+        sorts: _cats('new:Свежее,featured:По популярности,toprated:По рейтингу'),
+        categories: _cats('amateur-porn:Amateur,anal-porn:Anal,asian-porn:Asian,babe-videos:Babes,bbw-porn:BBW,bdsm-porn:BDSM,big-boobs:Huge Tits,big-cock:Huge Cocks,blonde-porn:Blonde,blowjob-videos:Blowjobs,brunette-porn:Brunette,creampie-videos:Creampie,cum-videos:Cumshots,czech-porn:Czech,double-penetration:Double Penetration,ebony-porn:Ebony,euro-porn:Euro,facial-porn:Facial,feet-porn:Foot Fetish,fetish-videos:Fetish,gang-bang:Gang Bang,german-porn:German,granny-porn:Granny,group-sex:Group Sex,hairy-porn:Hairy,handjobs-porn:Handjobs,hardcore-porn:Hardcore,homemade-porn:Homemade,interracial-porn:Interracial,japanese-porn:Japanese,latina-porn:Latina,lesbian-porn:Lesbian,massage-porn:Massage,masturbation-videos:Masturbation,mature-porn:Mature,milf-porn:MILF,petite-porn:Petite,porn-stars:Porn Stars,pov-porn:POV,public-porn:Public,redhead-porn:Redhead,russian-porn:Russian,solo-porn:Solo,squirting-videos:Squirting,teen-porn:Teens (18+),threesome-sex:Threesome,toy-videos:Sex Toys,vintage-sex:Vintage,webcam-shows:Webcam,reality-porn:Reality')
+    },
+    browse: function (category, page, sort) {
+        var p = page || 1, s = sort || 'new', url;
+        if (category) url = _TNA + '/' + category + '/' + ({ 'new': 'most-recent', featured: 'featured', toprated: 'top-rated' }[s] || 'most-recent') + (p > 1 ? '/' + p : '');
+        else url = _TNA + '/' + s + (p > 1 ? '/' + p : '');
+        return cherryFetch(url).then(function (html) {
+            var items = _tnaCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 40) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+    search: function (query, page) {
+        var p = page || 1;
+        return cherryFetch(_TNA + '/search?what=' + encodeURIComponent(String(query || '').trim()).replace(/%20/g, '+') + (p > 1 ? '&page=' + p : '')).then(function (html) {
+            var items = _tnaCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 40) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+    getRelated: function (video) {
+        if (!video || !video.url) return Promise.resolve([]);
+        var own = (String(video.url).match(/video(\d+)/) || [])[1];
+        return cherryFetch(video.url).then(function (html) { return _tnaCards(html, own).slice(0, 30); }).catch(function () { return []; });
+    },
+    getModels: function (page) {
+        var p = page || 1;
+        return cherryFetch(_TNA + '/pornstars' + (p > 1 ? '?page=' + p : '')).then(function (html) {
+            var out = [], rx = /<a class="thumb bg-dark" href="(https:\/\/www\.tnaflix\.com\/profile\/[^"]+)">\s*<img[^>]*?src="([^"]+)"[\s\S]*?<div class="thumb-title">([^<]+)<\/div>/g, m;
+            while ((m = rx.exec(html)) !== null) out.push({ url: m[1], thumb: m[2], name: _decodeHtml(m[3]).trim() });
+            return out;
+        }).catch(function () { return []; });
+    },
+    browseByModel: function (modelUrl, page) {
+        var p = page || 1;
+        return cherryFetch(String(modelUrl).split('?')[0] + (p > 1 ? '?page=' + p : '')).then(function (html) {
+            var items = _tnaCards(html);
+            return { items: items, total_pages: _derivePages(items.length, p, 40) };
+        }).catch(function () { return { items: [], total_pages: 0 }; });
+    },
+    getStream: function (video) {
+        return cherryFetch(video.url).then(function (html) {
+            var quality = {}, best = '', bestH = 0, rx = /<source src="([^"]+)" type="video\/mp4" size="(\d+)"/g, m;
+            while ((m = rx.exec(html)) !== null) {
+                var u = m[1].replace(/&amp;/g, '&'), h = parseInt(m[2], 10);
+                quality[h + 'p'] = u;
+                if (h > bestH) { bestH = h; best = u; }
+            }
+            return best ? { url: best, quality: quality } : extractStreams(html);
+        }).catch(function () { return { url: '', quality: {} }; });
+    }
+});
+
 // ---- 9. Huyamba — revived 2026-09-04 on the live mirror play.huyamba.mobi (fuq.huyamba.mobi
 // is 404, huyamba.mobi leaks raw PHP). Plain KVS: listing /videos/?by={sort}&from={p} (`page=`
 // is IGNORED — every page repeats page 1; only `from=` paginates), categories
@@ -7902,7 +8099,8 @@ function _kvsFlashvarsQuality(html) {
     var varM = /(video_url|video_alt_url\d*)\s*[=:]\s*['"](https?:[^'"]+)['"]/g;
     var files = [], fm;
     while ((fm = varM.exec(html)) !== null) {
-        var t = texts[fm[1]] || '', size = (t.match(/(\d{3,4})\s*p?/) || [])[1];
+        // a word label («HQ», fpo.xxx) takes the size the file name carries (…_720p.mp4)
+        var t = texts[fm[1]] || '', size = (t.match(/(\d{3,4})\s*p?/) || [])[1] || (fm[2].match(/_(\d{3,4})p\.mp4/i) || [])[1];
         var low = /_lq\.mp4/i.test(fm[2]) || /low|\blq\b|\bsd\b/i.test(t);
         var label = size ? size + 'p' : (t || slots[fm[1]] || fm[1]);
         var rank = size ? parseInt(size, 10) : (t ? (low ? 1 : 2) : (parseInt(slots[fm[1]], 10) || 0));
