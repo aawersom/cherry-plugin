@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.64';
+  var CHERRY_VERSION = '0.13.65';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -191,6 +191,8 @@
     // lenkino: same family as ebalovo (UA-bound tokens, mobile mirror) — page here, stream via
     // the adapter's androidProxyStream flag.
     'www.lenkino.adult': 1,
+    // lenkino's newer videos play in an embed of ebalovo's engine — the same UA-bound tokens
+    'www.ebembed.in': 1,
     // porno666: get_file tokens are IP-bound and the CDN 403s foreign Referers (ebun's farm) —
     // page and get_file share this host, so both go through the proxy with no Referer.
     'porno666.link': 1,
@@ -3124,8 +3126,12 @@ function extractStreams(html) {
   var kvs = html.match(/https?:\/\/[^"'\s]+get_file[^"'\s]+\.mp4[^"'\s]*/g);
   // Skip hover clips: every sidebar/related card carries data-preview="…get_file/…/{itsId}_preview.mp4"
   // — taking one played a clip of ANOTHER video (porno666, stand 2026-10-07: «не то видео»).
+  // …and a site that hides the word (lenkino: get_file/27/{opaque token}.mp4/) still marks the clip by the attribute: an
+  // 8-second clip of a related card played as the video (TV 2026-10-17)
+  var clips = {}, cRe = /data-preview="([^"]+)"/g, cm;
+  while ((cm = cRe.exec(html)) !== null) clips[cm[1]] = 1;
   if (kvs) kvs.forEach(function(u) {
-    if (_CLIP_URL_RX.test(u)) return;
+    if (_CLIP_URL_RX.test(u) || clips[u]) return;
     var q = (u.match(/(\d{3,4}p)/i) || ['', 'mp4'])[1]; quality[q] = u;
   });
   // Source tags with res/label/title attribute (both orders)
@@ -8139,9 +8145,14 @@ function _kvsFlashvarsQuality(html) {
     var slots = { video_url: '480p', video_alt_url: '720p', video_alt_url2: '1080p' }, texts = {};
     var tRe = /(video_url|video_alt_url\d*)_text\s*[=:]\s*['"]([^'"]+)['"]/g, tm;
     while ((tm = tRe.exec(html)) !== null) texts[tm[1]] = tm[2];
+    // «…_redirect: '1'» = the site has no such file for a guest: kt_player sends the viewer to the site instead (lenkino /
+    // ebembed 720p answers its video page, 2026-10-17) — and Lampa plays the highest rung, so it must not be offered
+    var gone = {}, rRe = /(video_url|video_alt_url\d*)_redirect\s*[=:]\s*['"]1['"]/g, rm;
+    while ((rm = rRe.exec(html)) !== null) gone[rm[1]] = 1;
     var varM = /(video_url|video_alt_url\d*)\s*[=:]\s*['"](https?:[^'"]+)['"]/g;
     var files = [], fm;
     while ((fm = varM.exec(html)) !== null) {
+        if (gone[fm[1]]) continue;
         // a word label («HQ», fpo.xxx) takes the size the file name carries (…_720p.mp4)
         var t = texts[fm[1]] || '', size = (t.match(/(\d{3,4})\s*p?/) || [])[1] || (fm[2].match(/_(\d{3,4})p\.mp4/i) || [])[1];
         var low = /_lq\.mp4/i.test(fm[2]) || /low|\blq\b|\bsd\b/i.test(t);
@@ -8377,8 +8388,11 @@ SOURCES.push({
     },
 
     getStream: function (video) {
-        return cherryFetch(video.url).then(_kvsFlashvarsQuality)
-            .catch(function () { return { url: '', quality: {} }; });
+        return cherryFetch(video.url).then(function (html) {
+            // newer videos carry no flashvars: the player is an embed (www.ebembed.in/embed/{id}/, ebalovo's engine)
+            var embed = !/video_url\s*[=:]/.test(html) && (html.match(/<iframe src="(https?:\/\/[^"]+\/embed\/\d+\/?)"/) || [])[1];
+            return embed ? cherryFetch(embed, video.url).then(_kvsFlashvarsQuality) : _kvsFlashvarsQuality(html);
+        }).catch(function () { return { url: '', quality: {} }; });
     },
 
     getModels: function (page) {
