@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.65';
+  var CHERRY_VERSION = '0.13.66';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -1183,6 +1183,8 @@
 
   /** @param {Object=} opts { pickQuality: true } → the quality list (≤1080p) is offered before the player starts */
   function playVideo(video, source, opts) {
+    // a torrent tracker's card is a release, not a stream: Lampa's torrent screen takes it (pornolab)
+    if (source && source.playTorrent) { source.playTorrent(video); return; }
     var gen = ++_playGen, seq0 = _fallbackSeq;
     Lampa.Noty.show(Lampa.Lang.translate('cherry_loading'));
 
@@ -1756,6 +1758,8 @@
       if ((object.all_sources && object.query) || object.all_videos) {
         var _act = _activeSources();
         if (object.fetish) _act = _act.filter(function (s) { return _fetishCats(s).length; });
+        // a login-bound source (pornolab: releases, not videos) joins a SEARCH once the owner is logged in — never a feed
+        _act = _act.filter(function (s) { return !s.needsLogin || (object.query && !s.needsLogin()); });
         if (!_act.length) { resolve([], 1); return; }
         _failNeed = _act.length;
         var _isSearch = !!object.query;
@@ -2259,7 +2263,7 @@
       function next() {
         if (_availStop || !queue.length) return;
         var v = queue.shift(), src = sourceById(v.source);
-        if (!src) { next(); return; }
+        if (!src || !src.getStream) { next(); return; }   // a torrent release has no stream to probe
         var f0 = _netFails;
         Promise.race([
           Promise.resolve(src.getStream(v)).catch(function () { return null; }),
@@ -2339,7 +2343,7 @@
       // helps any transient CDN failure, not just favorites.
       try {
         var _adp = sourceById(element.source);
-        if (_adp && typeof _adp.refreshThumb === 'function' && element.thumb) {
+        if (_adp && typeof _adp.refreshThumb === 'function' && (element.thumb || _adp.lazyThumb)) {
           var _img = ui.html.find('.card__img')[0];
           if (_img && _img.tagName === 'IMG') {
             var _heal = function () {
@@ -2351,8 +2355,9 @@
               }).catch(function () {});
             };
             _img.addEventListener('error', _heal);
-            // Already failed before this hook attached (lazy-loaded src set earlier).
-            if (_img.complete && _img.naturalWidth === 0 && _img.getAttribute('src')) _heal();
+            // Already failed before this hook attached (lazy-loaded src set earlier); a source whose list has no posters
+            // (lazyThumb: pornolab) resolves this card's now.
+            if ((_img.complete && _img.naturalWidth === 0 && _img.getAttribute('src')) || !element.thumb) _heal();
           }
         }
       } catch (e) {}
@@ -2552,7 +2557,7 @@
       var cache = _healthGet(), now = Date.now();
       var _act = _activeSources();
       _act.forEach(function (s) { var e = cache[s.id]; _paintDot(s.id, e ? !!e.ok : null); });
-      var stale = _act.filter(function (s) { var e = cache[s.id]; return !e || (now - e.t) > _HEALTH_TTL; });
+      var stale = _act.filter(function (s) { var e = cache[s.id]; return (!e || (now - e.t) > _HEALTH_TTL) && !(s.needsLogin && s.needsLogin()); });
       var i = 0, running = 0, LIMIT = 4;
       function next() {
         while (running < LIMIT && i < stale.length) {
@@ -9047,5 +9052,154 @@ function _jopaPages(html, page, itemsLen) {
             /["']\/(\d+)["'][^>]*(?:last|>>)/i.exec(html);
     return m ? (parseInt(m[1], 10) || _derivePages(itemsLen, page, 20)) : _derivePages(itemsLen, page, 20);
 }
+
+// ---- Pornolab (torrent tracker, added v0.13.66) ----
+// The largest base there is (studio site-rips by year, Russian, JAV, special interest), behind a login. Only the session
+// cookie (bb_data, valid a year) is kept, in Lampa storage — never the password, never in this public file. Every
+// request goes through the VPS proxy, which carries the cookie (`cookie=`) and hands back the one a login sets
+// (`noredirect=1` → X-Set-Cookie). A card is a tracker.php row (50 a page): title, size, seeds; its poster is the first
+// image of the topic, fetched when the card is drawn (`lazyThumb`). Play = Lampa's own torrent screen → TorrServer, which
+// takes the .torrent through the same proxy link (dl.php wants the cookie; the private torrent carries the passkey).
+var _PL = 'https://pornolab.net/forum/', _PL_COOKIE = 'cherry_pl_cookie', _plLoggingIn = null;
+function _plProxy(u, extra) {
+    return PROXY_URL_2 + '/proxy?url=' + encodeURIComponent(u) + '&key=' + encodeURIComponent(getProxyKey()) + (extra || '');
+}
+function _plCookie() { return Lampa.Storage.get(_PL_COOKIE, '') || ''; }
+// Asks the owner for login + password (once, however many requests wait), keeps only the session cookie.
+function _plLogin() {
+    if (_plLoggingIn) return _plLoggingIn;
+    _plLoggingIn = new Promise(function (resolve, reject) {
+        function ask(title, done) {
+            Lampa.Input.edit({ title: title, value: '', free: true, nosave: true }, function (v) {
+                done(String(v == null ? '' : (v.value != null ? v.value : v)).trim());
+            });
+        }
+        ask('Pornolab: логин', function (user) {
+            if (!user) { Lampa.Controller.toggle('content'); reject(new Error('pornolab: no login')); return; }
+            ask('Pornolab: пароль', function (pass) {
+                Lampa.Controller.toggle('content');
+                if (!pass) { reject(new Error('pornolab: no password')); return; }
+                var body = 'login_username=' + encodeURIComponent(user) + '&login_password=' + encodeURIComponent(pass) +
+                    '&login=' + encodeURIComponent('Вход');
+                // a plain-text body keeps the POST a simple request (no preflight); the proxy posts it as a form
+                fetch(_plProxy(_PL + 'login.php', '&noredirect=1'), { method: 'POST', body: body }).then(function (r) {
+                    var m = (r.headers.get('X-Set-Cookie') || '').match(/(?:^|;\s*)(bb_data=[^;]+)/);
+                    if (!m) throw new Error('pornolab: login refused');
+                    Lampa.Storage.set(_PL_COOKIE, m[1]);
+                    resolve(m[1]);
+                }).catch(function (e) { Lampa.Noty.show('Pornolab: вход не удался', { style: 'warn' }); reject(e); });
+            });
+        });
+    });
+    var clear = function () { _plLoggingIn = null; };
+    _plLoggingIn.then(clear, clear);
+    return _plLoggingIn;
+}
+// A page as the logged-in owner (windows-1251 → text); a login form instead of the page = the session ended → once more.
+function _plGet(u) {
+    function get(ck) {
+        return fetch(_plProxy(u, '&cookie=' + encodeURIComponent(ck))).then(function (r) {
+            if (!r.ok) throw new Error('pornolab: HTTP ' + r.status);
+            return r.arrayBuffer();
+        }).then(function (b) { return new TextDecoder('windows-1251').decode(b); });
+    }
+    var ck = _plCookie();
+    return (ck ? get(ck) : _plLogin().then(get)).then(function (html) {
+        if (html.indexOf('name="login_username"') === -1) return html;
+        Lampa.Storage.set(_PL_COOKIE, '');
+        return _plLogin().then(get);
+    });
+}
+function _plText(s) { return String(s || '').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim(); }
+// Non-video forums share the tracker (games, photos, comics, audio) — their rows are not cards.
+var _PL_NOT_VIDEO = /Игры|Games|Фото|Photo|Журнал|Magazine|Комикс|Comics|Манга|Manga|Аудио|Audio|Рисунки|Artwork/i;
+function _plRows(html) {
+    var items = [], rows = html.split('<tr class="tCenter');
+    for (var i = 1; i < rows.length; i++) {
+        var r = rows[i], a = r.match(/class="med tLink[^"]*" href="\.\/viewtopic\.php\?t=(\d+)">([\s\S]*?)<\/a>/);
+        if (!a || _PL_NOT_VIDEO.test(_plText((r.match(/class="gen f" href="tracker\.php\?f=\d+">([\s\S]*?)<\/a>/) || [])[1]))) continue;
+        var full = _plText(a[2]);
+        // the trailing «[2026-09-07, Anal, …, 480p, WEB-DL]» is the release's tag list: its resolution goes in the pill
+        var tags = (full.match(/\[([^\[\]]*)\]\s*$/) || [])[1] || '';
+        var res = (tags.match(/\b(\d{3,4}p|4K|UHD)\b/i) || [])[1] || '';
+        var size = _plText((r.match(/dl-stub" href="dl\.php\?t=\d+">([\s\S]*?)<\/a>/) || [])[1]);
+        var seeds = (r.match(/<b class="seedmed">(\d+)<\/b>/) || [])[1] || '0';
+        items.push({
+            id: 'pl-' + a[1], source: 'pornolab', url: _PL + 'viewtopic.php?t=' + a[1], thumb: '',
+            title: tags ? full.slice(0, full.length - tags.length - 2).trim() : full,
+            hd: [res, size, '↑' + seeds].filter(Boolean).join(' · ')
+        });
+    }
+    return items;
+}
+function _plPages(html, page) {
+    var n = parseInt((html.match(/Результатов поиска:\s*(\d+)/) || [])[1], 10) || 0;
+    return Math.max(page, Math.ceil(n / 50));
+}
+// sort id → tracker order (o) + period (tm); always descending
+var _PL_SORT = { pop7: 'o=4&tm=7', fresh: 'o=1', seeds: 'o=10', dl: 'o=4' };
+function _plList(params, page, sort) {
+    var url = _PL + 'tracker.php?' + params + (params ? '&' : '') + (_PL_SORT[sort] || _PL_SORT.pop7) + '&s=2' +
+        (page > 1 ? '&start=' + (page - 1) * 50 : '');
+    return _plGet(url).then(function (html) { return { items: _plRows(html), total_pages: _plPages(html, page) }; });
+}
+// A topic's poster (first post image). Cards resolve theirs when drawn — 3 topics at a time, each once a session.
+var _plPosters = {}, _plQueue = [], _plBusy = 0;
+function _plPump() {
+    while (_plBusy < 3 && _plQueue.length) {
+        var job = _plQueue.shift();
+        _plBusy++;
+        (function (job) {
+            _plGet(_PL + 'viewtopic.php?t=' + job.t).then(function (html) {
+                return ((html.match(/class="postImg[^"]*" title="(https?:[^"]+)"/) || [])[1] || '').replace(/&amp;/g, '&');
+            }, function () { return ''; }).then(function (u) {
+                if (u) _plPosters[job.t] = u;
+                _plBusy--;
+                job.done(u);
+                _plPump();
+            });
+        })(job);
+    }
+}
+SOURCES.push({
+    id: 'pornolab',
+    name: 'Pornolab',
+    host: 'pornolab.net',
+    lazyThumb: true,
+    // no session → no request on its own (the home health probe would ask for the password at every Cherry open)
+    needsLogin: function () { return !_plCookie(); },
+    cfg: {
+        sorts: _cats('pop7:Популярное за неделю,fresh:Свежее,seeds:По сидам,dl:По скачиваниям'),
+        // a category = one or more forums (f[]), ids joined by «-»
+        categories: _cats('1875-1876-1872-1873:Сайтрипы 2025–2026,1707:Сцены из фильмов,1678:Паки по актрисам,1673-1718-555:Полные фильмы,' +
+            '1450-1775:Полные фильмы HD,1674-902-1675-1877-1878-1831-1803-1741:Русское,1676:Русское любительское,1719-1818-1849:Японское и китайское,' +
+            '1823:VR и 3D,1853:Компиляции и PMV,1874:С переводом,284:Ролики разное,1682:БДСМ,1733:Фемдом и страпон,1734:Фистинг и дилдо,' +
+            '509:Буккаке,1859:Гэнг-бэнг,1685:Писсинг,1762:Фетиш,1754:Подглядывание,1758:Бисексуалы,1680-1715:Транс,1768-1671:Эротика')
+    },
+    browse: function (category, page, sort) {
+        var f = category ? category.split('-').map(function (id) { return 'f[]=' + id; }).join('&') : '';
+        return _plList(f, page || 1, sort);
+    },
+    search: function (query, page, sort) {
+        return _plList('nm=' + encodeURIComponent(query), page || 1, sort || 'seeds');
+    },
+    refreshThumb: function (video) {
+        var t = (String(video && video.url).match(/[?&]t=(\d+)/) || [])[1];
+        if (!t) return Promise.resolve('');
+        if (_plPosters[t]) return Promise.resolve(_plPosters[t]);
+        return new Promise(function (resolve) { _plQueue.push({ t: t, done: resolve }); _plPump(); });
+    },
+    // Lampa's torrent screen: TorrServer fetches the .torrent through the proxy link, lists the files, plays the picked one.
+    // The «movie» has no id, so nothing lands in Lampa's own history.
+    playTorrent: function (video) {
+        var t = (String(video.url).match(/[?&]t=(\d+)/) || [])[1];
+        function go(ck) {
+            Lampa.Torrent.start({ title: video.title, Link: _plProxy(_PL + 'dl.php?t=' + t, '&cookie=' + encodeURIComponent(ck)), poster: video.thumb || '' },
+                { title: video.title, img: video.thumb || '' });
+        }
+        var ck = _plCookie();
+        if (ck) go(ck); else _plLogin().then(go, function () {});
+    }
+});
 
 })();
