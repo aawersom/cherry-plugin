@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.67';
+  var CHERRY_VERSION = '0.13.68';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -9140,7 +9140,8 @@ function _plPages(html, page) {
 }
 // sort id → tracker order (o) + period (tm, by registration); always descending. «Popular this week» = the week's most
 // seeded: by downloads (o=4) a fifth of the week's top had no seeder (TV 2026-10-23), by seeds every one plays.
-var _PL_SORT = { pop7: 'o=10&tm=7', fresh: 'o=1', seeds: 'o=10', dl: 'o=4' };
+// Not offered: «most discussed» (o=15 — games fill it) and «largest» (o=7 — 100+ GB packs).
+var _PL_SORT = { pop7: 'o=10&tm=7', pop32: 'o=10&tm=32', seeds: 'o=10', dl: 'o=4', fresh: 'o=1' };
 function _plList(params, page, sort) {
     var order = _PL_SORT[sort] || _PL_SORT.pop7;
     function list(order) {
@@ -9177,12 +9178,19 @@ SOURCES.push({
     // no session → no request on its own (the home health probe would ask for the password at every Cherry open)
     needsLogin: function () { return !_plCookie(); },
     cfg: {
-        sorts: _cats('pop7:Популярное за неделю,fresh:Свежее,seeds:По сидам,dl:По скачиваниям'),
-        // a category = one or more forums (f[]), ids joined by «-»
-        categories: _cats('1875-1876-1872-1873:Сайтрипы 2025–2026,1707:Сцены из фильмов,1678:Паки по актрисам,1673-1718-555:Полные фильмы,' +
-            '1450-1775:Полные фильмы HD,1674-902-1675-1877-1878-1831-1803-1741:Русское,1676:Русское любительское,1719-1818-1849:Японское и китайское,' +
-            '1823:VR и 3D,1853:Компиляции и PMV,1874:С переводом,284:Ролики разное,1682:БДСМ,1733:Фемдом и страпон,1734:Фистинг и дилдо,' +
-            '509:Буккаке,1859:Гэнг-бэнг,1685:Писсинг,1762:Фетиш,1754:Подглядывание,1758:Бисексуалы,1680-1715:Транс,1768-1671:Эротика')
+        sorts: _cats('pop7:Популярное за неделю,pop32:Популярное за месяц,seeds:Самые раздаваемые,dl:Самые скачиваемые,fresh:Свежее'),
+        // a category = one or more forums (f[]), ids joined by «-». A parent forum finds nothing on its own (tracker.php
+        // searches only the forums named), so a whole section lists every subforum. Sections first, then single topics.
+        categories: _cats(
+            '1780-1110-1678-1124-1784-1769-1793-1797-1804-1819-1825-1836-1842-1846-1857-1861-1867-1872-1875-1451-1788-1789-1792-1798-1805-' +
+            '1820-1826-1837-1843-1847-1856-1862-1868-1873-1876-1707-1874-284-1853-1823:Все зарубежные ролики,' +
+            '1111-508-555-1845-1673-1112-1718-553-1143-1646-1851-1713-512-1712-1775-1450:Все полные фильмы,' +
+            '902-1675-36-1830-1803-1831-1877-1878-1741-1676:Всё русское,1801-1719-997-1818-1849:Всё японское и китайское,' +
+            '1715-1680-1758-1682-1733-1754-1734-1791-509-1859-1685-1762:Всё нетрадиционное,' +
+            '1875-1876-1872-1873:Сайтрипы 2025–2026,1707:Сцены из фильмов,1678:Паки по актрисам,1450-1775:Полные фильмы HD,' +
+            '1877-1878-1831-1803:Русские сайтрипы,1676:Русское любительское,1823:VR и 3D,1853:Компиляции и PMV,1874:С переводом,284:Ролики разное,' +
+            '1682:БДСМ,1733:Фемдом и страпон,1734:Фистинг и дилдо,509:Буккаке,1859:Гэнг-бэнг,1685:Писсинг,1762:Фетиш,1754:Подглядывание,' +
+            '1758:Бисексуалы,1680-1715:Транс,1768-1671:Эротика')
     },
     browse: function (category, page, sort) {
         var f = category ? category.split('-').map(function (id) { return 'f[]=' + id; }).join('&') : '';
