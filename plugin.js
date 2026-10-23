@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.66';
+  var CHERRY_VERSION = '0.13.67';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -1060,7 +1060,9 @@
   // A `disabled: true` adapter (site down) stays registered so favorites/history/related
   // for its cards still resolve through sourceById, but it is not shown as a channel.
   function _activeSources() {
-    return SOURCES.filter(function (s) { return !s.disabled; });
+    var on = SOURCES.filter(function (s) { return !s.disabled; });
+    // `first: true` leads the channels (owner 2026-10-23: Pornolab right after the action tiles) — tiles and fan-out rounds alike
+    return on.filter(function (s) { return s.first; }).concat(on.filter(function (s) { return !s.first; }));
   }
 
   /**
@@ -9136,12 +9138,17 @@ function _plPages(html, page) {
     var n = parseInt((html.match(/Результатов поиска:\s*(\d+)/) || [])[1], 10) || 0;
     return Math.max(page, Math.ceil(n / 50));
 }
-// sort id → tracker order (o) + period (tm); always descending
-var _PL_SORT = { pop7: 'o=4&tm=7', fresh: 'o=1', seeds: 'o=10', dl: 'o=4' };
+// sort id → tracker order (o) + period (tm, by registration); always descending. «Popular this week» = the week's most
+// seeded: by downloads (o=4) a fifth of the week's top had no seeder (TV 2026-10-23), by seeds every one plays.
+var _PL_SORT = { pop7: 'o=10&tm=7', fresh: 'o=1', seeds: 'o=10', dl: 'o=4' };
 function _plList(params, page, sort) {
-    var url = _PL + 'tracker.php?' + params + (params ? '&' : '') + (_PL_SORT[sort] || _PL_SORT.pop7) + '&s=2' +
-        (page > 1 ? '&start=' + (page - 1) * 50 : '');
-    return _plGet(url).then(function (html) { return { items: _plRows(html), total_pages: _plPages(html, page) }; });
+    var order = _PL_SORT[sort] || _PL_SORT.pop7;
+    function list(order) {
+        var url = _PL + 'tracker.php?' + params + (params ? '&' : '') + order + '&s=2' + (page > 1 ? '&start=' + (page - 1) * 50 : '');
+        return _plGet(url).then(function (html) { return { items: _plRows(html), total_pages: _plPages(html, page) }; });
+    }
+    // a small forum may have no release this week → its all-time list instead of an empty screen
+    return list(order).then(function (r) { return (r.items.length || page > 1 || order.indexOf('&tm=') === -1) ? r : list(order.replace(/&tm=\d+/, '')); });
 }
 // A topic's poster (first post image). Cards resolve theirs when drawn — 3 topics at a time, each once a session.
 var _plPosters = {}, _plQueue = [], _plBusy = 0;
@@ -9165,6 +9172,7 @@ SOURCES.push({
     id: 'pornolab',
     name: 'Pornolab',
     host: 'pornolab.net',
+    first: true,
     lazyThumb: true,
     // no session → no request on its own (the home health probe would ask for the password at every Cherry open)
     needsLogin: function () { return !_plCookie(); },
