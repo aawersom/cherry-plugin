@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.68';
+  var CHERRY_VERSION = '0.13.69';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -9159,7 +9159,10 @@ function _plPump() {
         _plBusy++;
         (function (job) {
             _plGet(_PL + 'viewtopic.php?t=' + job.t).then(function (html) {
-                return ((html.match(/class="postImg[^"]*" title="(https?:[^"]+)"/) || [])[1] || '').replace(/&amp;/g, '&');
+                var img = ((html.match(/class="postImg[^"]*" title="(https?:[^"]+)"/) || [])[1] || '').replace(/&amp;/g, '&');
+                // through the VPS: on the owner's home ISP (Vault-113, no VPN) fastpic connections hang 10–20 s or never
+                // finish — 60 of 60 posters still loading after 45 s on the TV, 2026-10-27
+                return img ? _plProxy(img) : '';
             }, function () { return ''; }).then(function (u) {
                 if (u) _plPosters[job.t] = u;
                 _plBusy--;
