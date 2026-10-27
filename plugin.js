@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.69';
+  var CHERRY_VERSION = '0.13.70';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -9151,22 +9151,35 @@ function _plList(params, page, sort) {
     // a small forum may have no release this week → its all-time list instead of an empty screen
     return list(order).then(function (r) { return (r.items.length || page > 1 || order.indexOf('&tm=') === -1) ? r : list(order.replace(/&tm=\d+/, '')); });
 }
-// A topic's poster (first post image). Cards resolve theirs when drawn — 3 topics at a time, each once a session.
-var _plPosters = {}, _plQueue = [], _plBusy = 0;
+// A topic's poster (first post image). Cards resolve theirs when drawn, 6 topics at a time. A topic page is ~140 KB
+// for one link (the poster sits ~83 KB in; tracker pages ignore Range), so the links are kept across sessions
+// (`cherry_pl_posters`, topic → image, ≤ 800): a grid seen before asks for its posters only.
+var _PL_POSTERS = 'cherry_pl_posters', _plPosters = null, _plSaveT = 0, _plQueue = [], _plBusy = 0;
+function _plPosterMap() {
+    if (!_plPosters) { var m = Lampa.Storage.get(_PL_POSTERS, {}); _plPosters = (m && typeof m === 'object' && !Array.isArray(m)) ? m : {}; }
+    return _plPosters;
+}
+function _plRemember(t, img) {
+    var m = _plPosterMap(), keys;
+    m[t] = img;
+    if ((keys = Object.keys(m)).length > 800) keys.slice(0, keys.length - 800).forEach(function (k) { delete m[k]; });   // lowest ids = oldest topics
+    clearTimeout(_plSaveT);
+    _plSaveT = setTimeout(function () { Lampa.Storage.set(_PL_POSTERS, m); }, 2000);
+}
+// through the VPS: on the owner's home ISP (Vault-113, no VPN) fastpic connections hang 10–20 s or never finish —
+// 60 of 60 posters still loading after 45 s on the TV, 2026-10-27
+function _plPosterUrl(img) { return img ? _plProxy(img) : ''; }
 function _plPump() {
-    while (_plBusy < 3 && _plQueue.length) {
+    while (_plBusy < 6 && _plQueue.length) {
         var job = _plQueue.shift();
         _plBusy++;
         (function (job) {
             _plGet(_PL + 'viewtopic.php?t=' + job.t).then(function (html) {
-                var img = ((html.match(/class="postImg[^"]*" title="(https?:[^"]+)"/) || [])[1] || '').replace(/&amp;/g, '&');
-                // through the VPS: on the owner's home ISP (Vault-113, no VPN) fastpic connections hang 10–20 s or never
-                // finish — 60 of 60 posters still loading after 45 s on the TV, 2026-10-27
-                return img ? _plProxy(img) : '';
-            }, function () { return ''; }).then(function (u) {
-                if (u) _plPosters[job.t] = u;
+                return ((html.match(/class="postImg[^"]*" title="(https?:[^"]+)"/) || [])[1] || '').replace(/&amp;/g, '&');
+            }, function () { return ''; }).then(function (img) {
+                if (img) _plRemember(job.t, img);
                 _plBusy--;
-                job.done(u);
+                job.done(_plPosterUrl(img));
                 _plPump();
             });
         })(job);
@@ -9205,7 +9218,8 @@ SOURCES.push({
     refreshThumb: function (video) {
         var t = (String(video && video.url).match(/[?&]t=(\d+)/) || [])[1];
         if (!t) return Promise.resolve('');
-        if (_plPosters[t]) return Promise.resolve(_plPosters[t]);
+        var known = _plPosterMap()[t];
+        if (known) return Promise.resolve(_plPosterUrl(known));
         return new Promise(function (resolve) { _plQueue.push({ t: t, done: resolve }); _plPump(); });
     },
     // Lampa's torrent screen: TorrServer fetches the .torrent through the proxy link, lists the files, plays the picked one.
