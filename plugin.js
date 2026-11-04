@@ -7,17 +7,19 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.70';
+  var CHERRY_VERSION = '0.13.71';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
   // ============================================================
   var PROXY_URL = 'https://cherry-proxy.aawersom.workers.dev';
-  // Secondary proxy on a self-hosted VPS (stable IP, unmetered bandwidth) — replaces
-  // Deno Deploy (free egress quota kept dying on video streaming). Runs the Deno proxy
-  // script via systemd behind Caddy/TLS (sslip.io). Used for sites that block CF
-  // datacenter IPs + KVS sites whose CDN tokens are IP-bound (need one stable egress IP).
-  var PROXY_URL_2 = 'https://185-36-141-21.sslip.io';
+  // Secondary proxy on a self-hosted VPS (stable IP, unmetered bandwidth). Runs the Deno proxy
+  // script (workers/cherry-proxy-deno) via systemd behind the server's Caddy/TLS. Used for sites
+  // that block CF datacenter IPs + KVS sites whose CDN tokens are IP-bound (one stable egress IP).
+  // Since 2026-11-04 the VPS also carries the owner's VPN: its address AND its own secret key live
+  // on the device only (Lampa storage `cherry_vps_url` / `cherry_vps_key`) — this public file names
+  // neither, and a server move needs no release. Empty = no VPS: its sites go through the CF worker.
+  var PROXY_URL_2 = String(Lampa.Storage.get('cherry_vps_url', '') || '').replace(/\/+$/, '');
   // Tertiary proxy — VPS with rotating residential IPs (set to '' if not deployed)
   // Deploy workers/cherry-proxy-vps/index.js on Beget VPS, then fill in your IP:PORT
   var PROXY_URL_3 = '';
@@ -95,6 +97,10 @@
   function getProxyKey() {
     return Lampa.Storage.get('cherry_proxy_key', '1206');
   }
+  // The VPS has a key of its own (not an open proxy on a server shared with a VPN); the others keep the default.
+  function _keyFor(base) {
+    return base === PROXY_URL_2 ? Lampa.Storage.get('cherry_vps_key', '') : getProxyKey();
+  }
 
   // ============================================================
   // PROXY HELPERS
@@ -130,7 +136,7 @@
 
   /** @param {string} base proxy origin @param {string} url @param {string=} referer @returns {string} */
   function _proxyVia(base, url, referer) {
-    var key = getProxyKey();
+    var key = _keyFor(base);
     var p = base + '/proxy?url=' + encodeURIComponent(url);
     if (key)     p += '&key=' + encodeURIComponent(key);
     if (referer) p += '&referer=' + encodeURIComponent(referer);
@@ -9064,7 +9070,7 @@ function _jopaPages(html, page, itemsLen) {
 // takes the .torrent through the same proxy link (dl.php wants the cookie; the private torrent carries the passkey).
 var _PL = 'https://pornolab.net/forum/', _PL_COOKIE = 'cherry_pl_cookie', _plLoggingIn = null;
 function _plProxy(u, extra) {
-    return PROXY_URL_2 + '/proxy?url=' + encodeURIComponent(u) + '&key=' + encodeURIComponent(getProxyKey()) + (extra || '');
+    return PROXY_URL_2 + '/proxy?url=' + encodeURIComponent(u) + '&key=' + encodeURIComponent(_keyFor(PROXY_URL_2)) + (extra || '');
 }
 function _plCookie() { return Lampa.Storage.get(_PL_COOKIE, '') || ''; }
 // Asks the owner for login + password (once, however many requests wait), keeps only the session cookie.
@@ -9190,6 +9196,8 @@ SOURCES.push({
     name: 'Pornolab',
     host: 'pornolab.net',
     first: true,
+    // its login and cookies exist on the VPS proxy only — no VPS on this device, no channel
+    disabled: !PROXY_URL_2,
     lazyThumb: true,
     // no session → no request on its own (the home health probe would ask for the password at every Cherry open)
     needsLogin: function () { return !_plCookie(); },
