@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.71';
+  var CHERRY_VERSION = '0.13.72';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -9068,7 +9068,7 @@ function _jopaPages(html, page, itemsLen) {
 // (`noredirect=1` → X-Set-Cookie). A card is a tracker.php row (50 a page): title, size, seeds; its poster is the first
 // image of the topic, fetched when the card is drawn (`lazyThumb`). Play = Lampa's own torrent screen → TorrServer, which
 // takes the .torrent through the same proxy link (dl.php wants the cookie; the private torrent carries the passkey).
-var _PL = 'https://pornolab.net/forum/', _PL_COOKIE = 'cherry_pl_cookie', _plLoggingIn = null;
+var _PL = 'https://pornolab.net/forum/', _PL_COOKIE = 'cherry_pl_cookie', _plLoggingIn = null, _plDeclined = 0;
 function _plProxy(u, extra) {
     return PROXY_URL_2 + '/proxy?url=' + encodeURIComponent(u) + '&key=' + encodeURIComponent(_keyFor(PROXY_URL_2)) + (extra || '');
 }
@@ -9076,6 +9076,9 @@ function _plCookie() { return Lampa.Storage.get(_PL_COOKIE, '') || ''; }
 // Asks the owner for login + password (once, however many requests wait), keeps only the session cookie.
 function _plLogin() {
     if (_plLoggingIn) return _plLoggingIn;
+    // a cancelled login is not asked again by the next waiting request (the grid, the health probe and every poster each
+    // asked in turn — the owner could leave only by restarting Lampa, TV 2026-11-04); a minute later it may ask again
+    if (Date.now() - _plDeclined < 60000) return Promise.reject(new Error('pornolab: login declined'));
     _plLoggingIn = new Promise(function (resolve, reject) {
         function ask(title, done) {
             Lampa.Input.edit({ title: title, value: '', free: true, nosave: true }, function (v) {
@@ -9083,10 +9086,10 @@ function _plLogin() {
             });
         }
         ask('Pornolab: логин', function (user) {
-            if (!user) { Lampa.Controller.toggle('content'); reject(new Error('pornolab: no login')); return; }
+            if (!user) { _plDeclined = Date.now(); Lampa.Controller.toggle('content'); reject(new Error('pornolab: no login')); return; }
             ask('Pornolab: пароль', function (pass) {
                 Lampa.Controller.toggle('content');
-                if (!pass) { reject(new Error('pornolab: no password')); return; }
+                if (!pass) { _plDeclined = Date.now(); reject(new Error('pornolab: no password')); return; }
                 var body = 'login_username=' + encodeURIComponent(user) + '&login_password=' + encodeURIComponent(pass) +
                     '&login=' + encodeURIComponent('Вход');
                 // a plain-text body keeps the POST a simple request (no preflight); the proxy posts it as a form
