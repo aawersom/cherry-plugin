@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.72';
+  var CHERRY_VERSION = '0.13.73';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -3728,7 +3728,9 @@ function _ruLookup(key) {
 // results with the word in the title: hqporner 0%, perfektdamen 5%, porndig 17%, eporner/pornhub
 // 23%, analdin 26%, xozilla 39% — yet each honours the query). Their results are site-relevant even
 // when no title word matches; the global ranker credits them instead of sinking them.
-var _TAG_SEARCH = { hqporner: 1, perfektdamen: 1, porndig: 1, eporner: 1, pornhub: 1, analdin: 1, xozilla: 1 };  // xhamster left (v0.13.44): original titles → its full-text results carry the query words  // crocotube: English titles (stand-verified) — a Cyrillic query there returns 0
+// pornolab: its search reads the release's tag list («[2026, Anal, Blonde, Big Tits, Russian]»), which the card title
+// drops — 7 of 45 'blonde' titles name it, 1 of 50 for 'русская', so the global search showed 1–7 of its releases (2026-11-04).
+var _TAG_SEARCH = { hqporner: 1, perfektdamen: 1, porndig: 1, eporner: 1, pornhub: 1, analdin: 1, xozilla: 1, pornolab: 1 };  // xhamster left (v0.13.44): original titles → its full-text results carry the query words  // crocotube: English titles (stand-verified) — a Cyrillic query there returns 0
 
 // Translate a Cyrillic query to English for English-title sites. Greedy multi-word phrase match
 // first, then single words; untranslatable words are dropped. Returns '' if nothing translated
