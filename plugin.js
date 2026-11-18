@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.74';
+  var CHERRY_VERSION = '0.13.75';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -67,6 +67,9 @@
     // fetched the EMBED, and the CDN rejects any foreign Referer (403 for the WebView's
     // lampa.mx). VPS = one stable IP for embed + stream, and the proxy sends no Referer.
     '666-emded.com': 1,
+    // ebun's own pages (listing www1., video pages x.ebun.top): 403 to the home VPN exit (TV 2026-11-18) → their
+    // fallback went to the CF worker while the embed + stream sat on the VPS → 403 on the stream. All of ebun on the VPS.
+    'www1.ebun.tv': 1, 'x.ebun.top': 1,
     // pornhub video PAGE (2026-09-05): the flashvars are HLS-only now and the SEGMENT tokens
     // (ipa=1) are bound to the IP that fetched the page. The CF worker's egress differs
     // between requests → 470 on every segment (playlist loads, video never starts). The VPS
@@ -200,6 +203,8 @@
     // external player played. Forcing embed + get_file through the proxy (→ VPS) gives one
     // IP for both and a Referer-less fetch. Stand: inner player currentTime > 0.
     '666-emded.com': 1,
+    // ebun's pages too (403 to the home VPN exit, 2026-11-18): page, embed and stream all on the VPS, one IP
+    'www1.ebun.tv': 1, 'x.ebun.top': 1,
     // huyamba: the device (mobile UA) is redirected to the dead rt.huyamba.xyz → 0 cards
     // natively; via the proxy (desktop UA) the listing loads. Stream token not IP-bound.
     'play.huyamba.mobi': 1,
@@ -246,9 +251,26 @@
     try { return /(^|\.)tizam\.cc$/.test(new URL(url).hostname); } catch (e) { return false; }
   }
   var _cfDownUntil = 0;   // CF failed a stream probe: skip it (no 4-second wait per play) for the next 10 min
+  // With an EXTERNAL player (MX) these channels leave the TV directly — page natively, stream raw — instead of through
+  // the VPS. Owner's TV, 2026-11-18: the router sends Cherry's domains through a VPN with ONE fixed exit, so page and
+  // stream share an IP (their IP-bound tokens hold), and video stays off the VPS, which sits behind Cloudflare now.
+  // Measured on the TV: porntrex (85 titled cards), familyporn, perfektdamen (raw HLS) play directly. The inner player
+  // keeps the VPS (these CDNs send no CORS). Not here, with the reason: pornhub (the page natively = age gate, no
+  // flashvars), ebun (403 to the VPN exit), hqporner (0 cards from the native page), tnaflix (the Lampa app
+  // percent-encodes the token's comma for MX → 403; needs the proxy either way). A failed native page still falls back
+  // to the proxy and the stream follows it (_fallbackBase).
+  var _ANDROID_DIRECT_EXT = {
+    'porntrex.com': 1, 'www.porntrex.com': 1,
+    'familyporn.tv': 1,
+    'www.perfektdamen.co': 1
+  };
+  function _directExt(url) {
+    try { return _isAndroid() && !_innerPlayerSelected() && !!_ANDROID_DIRECT_EXT[new URL(url).hostname]; } catch (e) { return false; }
+  }
   function _forceProxyAndroid(url) {
     try {
       var h = new URL(url).hostname;
+      if (_directExt(url)) return false;
       if (_ANDROID_FORCE_PROXY[h]) return true;
       // pornhub stream CDN subdomains vary (em-h, im-h, ev-h, hm-h…) on *.phncdn.com — suffix
       // match so the m3u8 + segments route through the proxy. pornhub.com is intentionally NOT
@@ -1259,7 +1281,7 @@
         if (_isAndroid()) {
           if (fbBase) return _proxyVia(fbBase, u);
           if (!noCf && _cfFaster(u)) return buildProxyUrl(u, null, true);
-          return (_forceProxyAndroid(u) || source.androidProxyStream) ? buildProxyUrl(u) : u;
+          return (_forceProxyAndroid(u) || (source.androidProxyStream && !_directExt(u))) ? buildProxyUrl(u) : u;
         }
         return buildProxyUrl(u);
       }
