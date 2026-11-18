@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.73';
+  var CHERRY_VERSION = '0.13.74';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -141,6 +141,24 @@
     if (key)     p += '&key=' + encodeURIComponent(key);
     if (referer) p += '&referer=' + encodeURIComponent(referer);
     return p;
+  }
+
+  // A saved card's poster may be a VPS-proxied link, which carries this device's VPS address and key — and saved cards
+  // go to the synced bucket and to every device on the PIN. Kept as `vps:` + the path without the key, rebuilt on read
+  // with the reading device's VPS (its raw link where there is none).
+  var _VPS_TAG = 'vps:';
+  function _thumbStore(u) {
+    u = String(u || '');
+    if (!PROXY_URL_2 || u.indexOf(PROXY_URL_2 + '/proxy?') !== 0) return u;
+    return _VPS_TAG + u.slice(PROXY_URL_2.length).replace(/&key=[^&]*/, '');
+  }
+  function _thumbLoad(u) {
+    u = String(u || '');
+    if (u.indexOf(_VPS_TAG) !== 0) return u;
+    var rest = u.slice(_VPS_TAG.length);
+    if (PROXY_URL_2) return PROXY_URL_2 + rest + '&key=' + encodeURIComponent(_keyFor(PROXY_URL_2));
+    var m = rest.match(/[?&]url=([^&]*)/);
+    return m ? decodeURIComponent(m[1]) : '';
   }
 
   // True when this URL is routed to a SECONDARY proxy (Deno/VPS), so a failover to
@@ -617,10 +635,12 @@
       // Search-query records share the sync bucket; a v0.13.27-or-older device merges them in
       // as favorites — drop them here so they never show as cards (and heal such a device).
       var n = list.length;
-      list = list.filter(function (v) { return !(v && v.source === _RECENT_SRC); });
+      list = list.filter(function (v) { return v && v.id != null && v.source !== _RECENT_SRC; });
       if (list.length !== n) migrated = true;
       var recs = list.map(function (v) {
-        if (v && typeof v.added === 'number' && typeof v.deleted === 'number') return v;
+        var t = _thumbStore(v.thumb);
+        if (t !== (v.thumb || '') && v.thumb) { v.thumb = t; migrated = true; }   // a VPS link saved before v0.13.74
+        if (typeof v.added === 'number' && typeof v.deleted === 'number') return v;
         migrated = true;
         return {
           id:       v.id,
@@ -655,7 +675,7 @@
             title:    _cleanTitle(r.title),
             // Legacy records saved before v0.13.11 may hold the unsubstituted xvideos/xnxx
             // hover template (…/xv_THUMBNUM_t.jpg) — a 404 as a poster. Normalize on read.
-            thumb:    (r.thumb   || '').replace(/THUMBNUM/g, '1'),
+            thumb:    _thumbLoad(r.thumb).replace(/THUMBNUM/g, '1'),
             url:      r.url      || '',
             duration: r.duration || 0,
             views:    r.views    || 0
@@ -696,7 +716,7 @@
           list.unshift(rec);
         }
         rec.title    = video.title    || '';
-        rec.thumb    = video.thumb    || '';
+        rec.thumb    = _thumbStore(video.thumb);
         rec.url      = video.url      || '';
         rec.duration = video.duration || 0;
         rec.views    = video.views    || 0;
@@ -721,6 +741,7 @@
       local.forEach(function (r) { index[r.id + '@' + r.source] = r; });
       remote.forEach(function (rr) {
         if (!rr || rr.id == null) return;
+        if (rr.thumb) rr.thumb = _thumbStore(rr.thumb);
         var key = rr.id + '@' + rr.source;
         var cur = index[key];
         if (!cur) {
@@ -2698,12 +2719,19 @@
             });
           }
         } else if (element._kind === 'source') {
-          Lampa.Activity.push({
-            component: 'cherry_grid',
-            title:     element.title,
-            source_id: element._source_id,
-            page:      1
-          });
+          var _open = function () {
+            Lampa.Activity.push({
+              component: 'cherry_grid',
+              title:     element.title,
+              source_id: element._source_id,
+              page:      1
+            });
+          };
+          // a login-bound channel asks here, while this screen holds the remote: asked from the grid's first load, the
+          // keyboard lost the remote to the grid Lampa activates right after (Pornolab, TV 2026-11-16)
+          var _ls = SOURCES.filter(function (s) { return s.id === element._source_id; })[0];
+          if (_ls && _ls.login && _ls.needsLogin && _ls.needsLogin()) _ls.login().then(_open, function () {});
+          else _open();
         }
       });
 
@@ -9070,17 +9098,32 @@ function _jopaPages(html, page, itemsLen) {
 // (`noredirect=1` → X-Set-Cookie). A card is a tracker.php row (50 a page): title, size, seeds; its poster is the first
 // image of the topic, fetched when the card is drawn (`lazyThumb`). Play = Lampa's own torrent screen → TorrServer, which
 // takes the .torrent through the same proxy link (dl.php wants the cookie; the private torrent carries the passkey).
-var _PL = 'https://pornolab.net/forum/', _PL_COOKIE = 'cherry_pl_cookie', _plLoggingIn = null, _plDeclined = 0;
+var _PL = 'https://pornolab.net/forum/', _PL_COOKIE = 'cherry_pl_cookie', _plLoggingIn = null, _plEndedT = 0;
 function _plProxy(u, extra) {
     return PROXY_URL_2 + '/proxy?url=' + encodeURIComponent(u) + '&key=' + encodeURIComponent(_keyFor(PROXY_URL_2)) + (extra || '');
 }
 function _plCookie() { return Lampa.Storage.get(_PL_COOKIE, '') || ''; }
-// Asks the owner for login + password (once, however many requests wait), keeps only the session cookie.
+// Every tracker request is bounded: a TCP-blocked VPS (home ISP, TV 2026-11-16) left the grid spinning, a hung login
+// blocked the channel until Lampa restarted, and six hung poster fetches held the poster queue for good.
+var _PL_TIMEOUT_MS = 15000;
+function _plFetch(u, opts) {
+    if (!PROXY_URL_2) return Promise.reject(new Error('pornolab: no VPS'));
+    return new Promise(function (resolve, reject) {
+        var ctl = (typeof AbortController === 'function') ? new AbortController() : null, o = opts || {};
+        if (ctl) o.signal = ctl.signal;
+        var timer = setTimeout(function () { try { if (ctl) ctl.abort(); } catch (e) {} reject(new Error('pornolab: timeout')); }, _PL_TIMEOUT_MS);
+        fetch(u, o).then(function (r) {
+            return r.arrayBuffer().then(function (b) { clearTimeout(timer); resolve({ r: r, b: b }); });
+        }).catch(function (e) { clearTimeout(timer); reject(e); });
+    });
+}
+// Asks the owner for login + password (once, however many callers wait), keeps only the session cookie. Called ONLY by
+// an explicit action — the channel tile (before its screen opens) and Enter on a release. A prompt opened from a loading
+// grid lost the remote to the screen Lampa activates right after (keys went to the grid behind the keyboard, TV
+// 2026-11-16), and background callers (posters, the all-channel search) popped it at random moments.
 function _plLogin() {
+    if (!PROXY_URL_2) return Promise.reject(new Error('pornolab: no VPS'));
     if (_plLoggingIn) return _plLoggingIn;
-    // a cancelled login is not asked again by the next waiting request (the grid, the health probe and every poster each
-    // asked in turn — the owner could leave only by restarting Lampa, TV 2026-11-04); a minute later it may ask again
-    if (Date.now() - _plDeclined < 60000) return Promise.reject(new Error('pornolab: login declined'));
     _plLoggingIn = new Promise(function (resolve, reject) {
         function ask(title, done) {
             Lampa.Input.edit({ title: title, value: '', free: true, nosave: true }, function (v) {
@@ -9088,19 +9131,22 @@ function _plLogin() {
             });
         }
         ask('Pornolab: логин', function (user) {
-            if (!user) { _plDeclined = Date.now(); Lampa.Controller.toggle('content'); reject(new Error('pornolab: no login')); return; }
+            if (!user) { Lampa.Controller.toggle('content'); reject(new Error('pornolab: no login')); return; }
             ask('Pornolab: пароль', function (pass) {
                 Lampa.Controller.toggle('content');
-                if (!pass) { _plDeclined = Date.now(); reject(new Error('pornolab: no password')); return; }
+                if (!pass) { reject(new Error('pornolab: no password')); return; }
                 var body = 'login_username=' + encodeURIComponent(user) + '&login_password=' + encodeURIComponent(pass) +
                     '&login=' + encodeURIComponent('Вход');
                 // a plain-text body keeps the POST a simple request (no preflight); the proxy posts it as a form
-                fetch(_plProxy(_PL + 'login.php', '&noredirect=1'), { method: 'POST', body: body }).then(function (r) {
-                    var m = (r.headers.get('X-Set-Cookie') || '').match(/(?:^|;\s*)(bb_data=[^;]+)/);
-                    if (!m) throw new Error('pornolab: login refused');
+                _plFetch(_plProxy(_PL + 'login.php', '&noredirect=1'), { method: 'POST', body: body }).then(function (x) {
+                    var m = (x.r.headers.get('X-Set-Cookie') || '').match(/(?:^|;\s*)(bb_data=[^;]+)/);
+                    if (!m) { Lampa.Noty.show('Pornolab: неверный логин или пароль', { style: 'warn' }); throw new Error('pornolab: login refused'); }
                     Lampa.Storage.set(_PL_COOKIE, m[1]);
                     resolve(m[1]);
-                }).catch(function (e) { Lampa.Noty.show('Pornolab: вход не удался', { style: 'warn' }); reject(e); });
+                }, function (e) {
+                    Lampa.Noty.show('Pornolab: сервер не отвечает — проверьте сеть', { style: 'warn' });
+                    throw e;
+                }).catch(reject);
             });
         });
     });
@@ -9108,19 +9154,19 @@ function _plLogin() {
     _plLoggingIn.then(clear, clear);
     return _plLoggingIn;
 }
-// A page as the logged-in owner (windows-1251 → text); a login form instead of the page = the session ended → once more.
+// A page as the logged-in owner (windows-1251 → text). Never asks for the password: no session, or a login form instead
+// of the page (the session ended) → Error('pornolab: login'); the owner logs in again from the channel tile.
 function _plGet(u) {
-    function get(ck) {
-        return fetch(_plProxy(u, '&cookie=' + encodeURIComponent(ck))).then(function (r) {
-            if (!r.ok) throw new Error('pornolab: HTTP ' + r.status);
-            return r.arrayBuffer();
-        }).then(function (b) { return new TextDecoder('windows-1251').decode(b); });
-    }
     var ck = _plCookie();
-    return (ck ? get(ck) : _plLogin().then(get)).then(function (html) {
+    if (!ck) return Promise.reject(new Error('pornolab: login'));
+    return _plFetch(_plProxy(u, '&cookie=' + encodeURIComponent(ck))).then(function (x) {
+        if (!x.r.ok) throw new Error('pornolab: HTTP ' + x.r.status);
+        var html = new TextDecoder('windows-1251').decode(x.b);
         if (html.indexOf('name="login_username"') === -1) return html;
         Lampa.Storage.set(_PL_COOKIE, '');
-        return _plLogin().then(get);
+        // one notice for the grid, its posters and the search that all hit it at once
+        if (Date.now() - _plEndedT > 60000) { _plEndedT = Date.now(); Lampa.Noty.show('Pornolab: сессия закончилась — откройте канал заново, чтобы войти', { style: 'warn' }); }
+        throw new Error('pornolab: login');
     });
 }
 function _plText(s) { return String(s || '').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim(); }
@@ -9204,8 +9250,9 @@ SOURCES.push({
     // its login and cookies exist on the VPS proxy only — no VPS on this device, no channel
     disabled: !PROXY_URL_2,
     lazyThumb: true,
-    // no session → no request on its own (the home health probe would ask for the password at every Cherry open)
+    // no session → no request on its own; the channel tile asks for the login before the grid opens (`login`)
     needsLogin: function () { return !_plCookie(); },
+    login: function () { return _plLogin(); },
     cfg: {
         sorts: _cats('pop7:Популярное за неделю,pop32:Популярное за месяц,seeds:Самые раздаваемые,dl:Самые скачиваемые,fresh:Свежее'),
         // a category = one or more forums (f[]), ids joined by «-». A parent forum finds nothing on its own (tracker.php
@@ -9230,7 +9277,7 @@ SOURCES.push({
     },
     refreshThumb: function (video) {
         var t = (String(video && video.url).match(/[?&]t=(\d+)/) || [])[1];
-        if (!t) return Promise.resolve('');
+        if (!t || !PROXY_URL_2) return Promise.resolve('');
         var known = _plPosterMap()[t];
         if (known) return Promise.resolve(_plPosterUrl(known));
         return new Promise(function (resolve) { _plQueue.push({ t: t, done: resolve }); _plPump(); });
@@ -9238,6 +9285,8 @@ SOURCES.push({
     // Lampa's torrent screen: TorrServer fetches the .torrent through the proxy link, lists the files, plays the picked one.
     // The «movie» has no id, so nothing lands in Lampa's own history.
     playTorrent: function (video) {
+        // a synced favorite on a device without the VPS (lampa.mx, a second TV): say so instead of a broken link
+        if (!PROXY_URL_2) { Lampa.Noty.show('Pornolab работает только на устройстве с VPS', { style: 'warn' }); return; }
         var t = (String(video.url).match(/[?&]t=(\d+)/) || [])[1];
         function go(ck) {
             Lampa.Torrent.start({ title: video.title, Link: _plProxy(_PL + 'dl.php?t=' + t, '&cookie=' + encodeURIComponent(ck)), poster: video.thumb || '' },
