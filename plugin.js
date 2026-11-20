@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.77';
+  var CHERRY_VERSION = '0.13.78';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -9324,9 +9324,29 @@ SOURCES.push({
 // ---- Torrent trackers without a login (added v0.13.77, owner 2026-11-20: «аналоги Pornolab», right after it) ----
 // A card is a release; Enter opens Lampa's torrent screen with the release's MAGNET (TorrServer finds the metadata in
 // the DHT and the trackers named in the link) — no .torrent download, no account, no daily limit (Pornolab: 10 a day).
-// No posters: neither site has one per release. Both join a SEARCH only (`torrent`), never the «Все видео» feed.
+// Posters: Sukebei's release page carries a picture (30 of 30 sampled) — fetched when the card is drawn, like Pornolab's;
+// TPB has none anywhere (0 of 30 descriptions), so its card gets a drawn poster with the release name (`_textPoster`),
+// and so does a Sukebei release without a picture. Both join a SEARCH only (`torrent`), never the «Все видео» feed.
 function _magnetPlay(video) {
-    Lampa.Torrent.start({ title: video.title, Link: video.url, poster: '' }, { title: video.title, img: '' });
+    var img = /^https?:/.test(video.thumb || '') ? video.thumb : '';
+    Lampa.Torrent.start({ title: video.title, Link: video.url, poster: img }, { title: video.title, img: img });
+}
+// A 16:9 SVG card with the release name — no network, nothing to fail. The top-left stays clear for the source badge.
+function _textPoster(title) {
+    var words = String(title || '').replace(/[\[\]()_|]+/g, ' ').split(/\s+/).filter(Boolean), lines = [], cur = '';
+    words.forEach(function (w) {
+        if (cur && (cur + ' ' + w).length > 26) { lines.push(cur); cur = w; } else cur = cur ? cur + ' ' + w : w;
+    });
+    if (cur) lines.push(cur);
+    if (lines.length > 4) { lines = lines.slice(0, 4); lines[3] = lines[3].slice(0, 24) + '…'; }
+    function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+    var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">' +
+        '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3a2340"/>' +
+        '<stop offset="1" stop-color="#14161f"/></linearGradient></defs><rect width="640" height="360" fill="url(#g)"/>' +
+        lines.map(function (l, i) {
+            return '<text x="32" y="' + (104 + i * 48) + '" font-family="sans-serif" font-size="36" fill="#f2f2f2">' + esc(l) + '</text>';
+        }).join('') + '</svg>';
+    return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
 }
 function _fmtBytes(n) {
     n = +n || 0;
@@ -9359,7 +9379,7 @@ function _tpbItems(text) {
     return list.filter(function (t) { return t && t.info_hash && t.id !== '0' && _TPB_VIDEO[t.category] && +t.seeders > 0; }).map(function (t) {
         var name = String(t.name || '').trim();
         return {
-            id: 'tpb-' + t.id, source: 'tpb', thumb: '', title: name,
+            id: 'tpb-' + t.id, source: 'tpb', thumb: _textPoster(name), title: name,
             url: 'magnet:?xt=urn:btih:' + t.info_hash + '&dn=' + encodeURIComponent(name) +
                 _TR_COMMON.map(function (tr) { return '&tr=' + encodeURIComponent(tr); }).join(''),
             hd: [_relRes(name), _fmtBytes(t.size), '↑' + t.seeders].filter(Boolean).join(' · '),
@@ -9430,12 +9450,59 @@ function _sukList(cat, query, page, sort) {
         '&o=desc' + (page > 1 ? '&p=' + page : '');
     return cherryFetch(url).then(function (html) { return { items: _sukRows(html), total_pages: _sukPages(html, page) }; });
 }
+// A release's poster = the first picture of its description (image hosts vary: imagetwist, imgccc, 1img, wasabi…).
+// Shown through the VPS — those hosts are not in the router's VPN list and the home ISP may block them; links are kept
+// across sessions (`cherry_suk_posters`, release → image, ≤ 800; '' = none: the drawn poster, no second fetch).
+var _SUK_POSTERS = 'cherry_suk_posters', _sukPosters = null, _sukSaveT = 0, _sukQueue = [], _sukBusy = 0;
+function _sukPosterMap() {
+    if (!_sukPosters) { var m = Lampa.Storage.get(_SUK_POSTERS, {}); _sukPosters = (m && typeof m === 'object' && !Array.isArray(m)) ? m : {}; }
+    return _sukPosters;
+}
+function _sukRemember(id, img) {
+    var m = _sukPosterMap(), keys;
+    m[id] = img;
+    if ((keys = Object.keys(m)).length > 800) keys.slice(0, keys.length - 800).forEach(function (k) { if (k !== id) delete m[k]; });
+    clearTimeout(_sukSaveT);
+    _sukSaveT = setTimeout(function () { Lampa.Storage.set(_SUK_POSTERS, m); }, 2000);
+}
+function _sukImg(html) {
+    var d = (String(html).match(/id="torrent-description"[^>]*>([\s\S]*?)<\/div>/) || [])[1] || '';
+    return (_sukUnesc(d).match(/https?:\/\/[^\s"'<>\[\]()]+?\.(?:jpe?g|png|webp)/i) || [])[0] || '';
+}
+function _sukPoster(img, title) {
+    if (!img) return _textPoster(title);
+    return PROXY_URL_2 ? _proxyVia(PROXY_URL_2, img) : buildProxyUrl(img, null, true);
+}
+function _sukPump() {
+    while (_sukBusy < 4 && _sukQueue.length) {
+        var job = _sukQueue.shift();
+        _sukBusy++;
+        (function (job) {
+            function done(img, keep) {
+                if (keep) _sukRemember(job.id, img);
+                _sukBusy--;
+                job.done(_sukPoster(img, job.title));
+                _sukPump();
+            }
+            // a failed fetch is not remembered (the next showing tries again); an answered page is, picture or not
+            cherryFetch(_SUK + 'view/' + job.id).then(function (html) { done(_sukImg(html), true); }, function () { done('', false); });
+        })(job);
+    }
+}
 SOURCES.push({
     id: 'sukebei',
     name: 'Sukebei',
     host: 'sukebei.nyaa.si',
     first: true,
     torrent: true,
+    lazyThumb: true,
+    refreshThumb: function (video) {
+        var id = (String(video && video.id).match(/^suk-(\d+)$/) || [])[1];
+        if (!id) return Promise.resolve(_textPoster(video && video.title));
+        var m = _sukPosterMap();
+        if (id in m) return Promise.resolve(_sukPoster(m[id], video.title));
+        return new Promise(function (resolve) { _sukQueue.push({ id: id, title: video.title, done: resolve }); _sukPump(); });
+    },
     cfg: {
         sorts: _cats('seeds:Больше сидов,new:Свежее,size:Крупнее,dl:Скачиваемые'),
         categories: _cats('2_2:Видео,1_1:Аниме')
