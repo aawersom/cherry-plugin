@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.75';
+  var CHERRY_VERSION = '0.13.77';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -1004,7 +1004,7 @@
                 '&key=' + encodeURIComponent(getProxyKey());
       // One bucket carries favorites AND recent search queries (records with source _RECENT_SRC).
       var local = Fav._records().concat(_recentRecords());
-      console.log('[Cherry] Sync.run: POST', url, '| local records =', local.length);
+      console.log('[Cherry] Sync.run: POST', String(url).split('?')[0], '| local records =', local.length);   // no ?pin=&key= in the device log (adb reads it)
       return cherryPostJson(url, { records: local })
         .then(function (res) {
           var got = (res && Array.isArray(res.records)) ? res.records.length : -1;
@@ -1809,8 +1809,9 @@
       if ((object.all_sources && object.query) || object.all_videos) {
         var _act = _activeSources();
         if (object.fetish) _act = _act.filter(function (s) { return _fetishCats(s).length; });
-        // a login-bound source (pornolab: releases, not videos) joins a SEARCH once the owner is logged in — never a feed
-        _act = _act.filter(function (s) { return !s.needsLogin || (object.query && !s.needsLogin()); });
+        // a torrent tracker (pornolab, tpb, sukebei: releases, not videos) joins a SEARCH — never a feed; a login-bound
+        // one only once the owner is logged in
+        _act = _act.filter(function (s) { return !s.torrent || (object.query && !(s.needsLogin && s.needsLogin())); });
         if (!_act.length) { resolve([], 1); return; }
         _failNeed = _act.length;
         var _isSearch = !!object.query;
@@ -2731,7 +2732,7 @@
               Lampa.Controller.toggle('content');
               // v may arrive as a string or, on some builds, an object — coerce safely.
               var p = String(v == null ? '' : (v.value != null ? v.value : v)).trim();
-              console.log('[Cherry] sync tile: entered value =', v, '→ pin =', p);
+              console.log('[Cherry] sync tile: PIN entered,', p.length, 'digits');
               if (/^[0-9]{4,12}$/.test(p)) {
                 Lampa.Noty.show(Lampa.Lang.translate('cherry_sync') + '… (PIN ' + p + ')');
                 Sync.setPin(p);   // runs a REPORTED sync → shows result/error Noty
@@ -9269,6 +9270,7 @@ SOURCES.push({
     name: 'Pornolab',
     host: 'pornolab.net',
     first: true,
+    torrent: true,
     // its login and cookies exist on the VPS proxy only — no VPS on this device, no channel
     disabled: !PROXY_URL_2,
     lazyThumb: true,
@@ -9317,6 +9319,130 @@ SOURCES.push({
         var ck = _plCookie();
         if (ck) go(ck); else _plLogin().then(go, function () {});
     }
+});
+
+// ---- Torrent trackers without a login (added v0.13.77, owner 2026-11-20: «аналоги Pornolab», right after it) ----
+// A card is a release; Enter opens Lampa's torrent screen with the release's MAGNET (TorrServer finds the metadata in
+// the DHT and the trackers named in the link) — no .torrent download, no account, no daily limit (Pornolab: 10 a day).
+// No posters: neither site has one per release. Both join a SEARCH only (`torrent`), never the «Все видео» feed.
+function _magnetPlay(video) {
+    Lampa.Torrent.start({ title: video.title, Link: video.url, poster: '' }, { title: video.title, img: '' });
+}
+function _fmtBytes(n) {
+    n = +n || 0;
+    return n >= 1073741824 ? (n / 1073741824).toFixed(2) + ' GB' : n >= 1048576 ? Math.round(n / 1048576) + ' MB' : '';
+}
+// the resolution a release name carries («… WEB-DL 720p», «[FHD]», «4K») → the card's pill
+function _relRes(name) {
+    var m = String(name).match(/\b(2160|1080|720|480|360)p\b/i);
+    if (m) return m[1] + 'p';
+    if (/\b(4K|UHD)\b/i.test(name)) return '4K';
+    if (/\bFHD\b/.test(name)) return '1080p';
+    return '';
+}
+// client-side order for an answer that comes in one piece
+function _relSort(items, sort) {
+    var key = sort === 'new' ? 'added' : sort === 'size' ? 'size' : 'seeders';
+    return items.slice().sort(function (a, b) { return (b[key] || 0) - (a[key] || 0); });
+}
+var _TR_COMMON = ['udp://tracker.opentrackr.org:1337/announce', 'udp://open.stealth.si:80/announce', 'udp://tracker.torrent.eu.org:451/announce',
+    'udp://exodus.desync.com:6969/announce', 'udp://tracker.openbittorrent.com:6969/announce'];
+
+// ---- The Pirate Bay, XXX section, through its JSON API (apibay.org) ----
+// q.php?q=…&cat=500 = search (≤ 100); precompiled/data_top100_<cat>.json = the 100 most seeded; q.php?q=category:500 =
+// the latest 50. One page each. Video subcategories only — 503 pictures and 504 games are dropped.
+var _TPB = 'https://apibay.org/', _TPB_VIDEO = { 501: 1, 502: 1, 505: 1, 506: 1, 507: 1, 599: 1 };
+function _tpbItems(text) {
+    var list;
+    try { list = JSON.parse(text); } catch (e) { list = []; }
+    if (!Array.isArray(list)) return [];
+    return list.filter(function (t) { return t && t.info_hash && t.id !== '0' && _TPB_VIDEO[t.category] && +t.seeders > 0; }).map(function (t) {
+        var name = String(t.name || '').trim();
+        return {
+            id: 'tpb-' + t.id, source: 'tpb', thumb: '', title: name,
+            url: 'magnet:?xt=urn:btih:' + t.info_hash + '&dn=' + encodeURIComponent(name) +
+                _TR_COMMON.map(function (tr) { return '&tr=' + encodeURIComponent(tr); }).join(''),
+            hd: [_relRes(name), _fmtBytes(t.size), '↑' + t.seeders].filter(Boolean).join(' · '),
+            seeders: +t.seeders || 0, size: +t.size || 0, added: +t.added || 0
+        };
+    });
+}
+function _tpbList(url, sort) {
+    return cherryFetch(url).then(function (text) { return { items: _relSort(_tpbItems(text), sort), total_pages: 1 }; });
+}
+SOURCES.push({
+    id: 'tpb',
+    name: 'TPB',
+    host: 'apibay.org',
+    first: true,
+    torrent: true,
+    cfg: {
+        sorts: _cats('seeds:Больше сидов,new:Свежее,size:Крупнее'),
+        categories: _cats('new:Новое,h48:Популярное за 48 часов,505:HD,507:UHD / 4K,501:Фильмы,506:Клипы')
+    },
+    browse: function (category, page, sort) {
+        if ((page || 1) > 1) return Promise.resolve({ items: [], total_pages: 1 });
+        var url = category === 'new' ? _TPB + 'q.php?q=category:500'
+            : _TPB + 'precompiled/data_top100_' + (category === 'h48' ? '48h_500' : (category || '500')) + '.json';
+        return _tpbList(url, sort || (category === 'new' ? 'new' : 'seeds'));
+    },
+    search: function (query, page, sort) {
+        if ((page || 1) > 1) return Promise.resolve({ items: [], total_pages: 1 });
+        return _tpbList(_TPB + 'q.php?q=' + encodeURIComponent(query) + '&cat=500', sort || 'seeds');
+    },
+    playTorrent: _magnetPlay
+});
+
+// ---- Sukebei (sukebei.nyaa.si, 18+ only): JAV, amateur, hentai — the base the western trackers lack ----
+// The listing: 75 rows a page, server-side sort and paging, the magnet in every row. Videos only: real life (2_2) and
+// anime (1_1) — the search runs over everything (0_0) and drops the rows of pictures, games, manga.
+var _SUK = 'https://sukebei.nyaa.si/', _SUK_SORT = { seeds: 's=seeders', new: 's=id', size: 's=size', dl: 's=downloads' };
+var _SUK_VIDEO = { '2_2': 1, '1_1': 1 };
+function _sukUnesc(s) { return String(s || '').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'); }
+function _sukBytes(s) {
+    var m = String(s).match(/([\d.]+)\s*(KiB|MiB|GiB|TiB)/);
+    return m ? +m[1] * { KiB: 1024, MiB: 1048576, GiB: 1073741824, TiB: 1099511627776 }[m[2]] : 0;
+}
+function _sukRows(html) {
+    var items = [], rows = String(html).split('<tr class="');
+    for (var i = 1; i < rows.length; i++) {
+        var r = rows[i], v = r.match(/href="\/view\/(\d+)" title="([^"]*)"/), mg = r.match(/href="(magnet:\?xt=urn:btih:[^"]+)"/);
+        if (!v || !mg || !_SUK_VIDEO[(r.match(/href="\/\?c=(\d_\d)"/) || [])[1]]) continue;
+        // the text-only centred cells: size, date, seeders, leechers, downloads (the links cell holds tags — no match)
+        var txt = (r.match(/<td class="text-center"[^>]*>[^<]*<\/td>/g) || []).map(function (c) { return c.replace(/<[^>]+>/g, '').trim(); });
+        var name = _sukUnesc(v[2]), seeds = parseInt(txt[2], 10) || 0;
+        items.push({
+            id: 'suk-' + v[1], source: 'sukebei', thumb: '', title: name, url: _sukUnesc(mg[1]),
+            hd: [_relRes(name), String(txt[0] || '').replace('GiB', 'GB').replace('MiB', 'MB'), '↑' + seeds].filter(Boolean).join(' · '),
+            seeders: seeds, size: _sukBytes(txt[0]), added: +((r.match(/data-timestamp="(\d+)"/) || [])[1]) || 0
+        });
+    }
+    return items;
+}
+function _sukPages(html, page) {
+    var n = parseInt((String(html).match(/out of (\d+) results/) || [])[1], 10), max = page;
+    if (n) return Math.max(page, Math.ceil(n / 75));
+    (String(html).match(/(?:\?|&amp;|&)p=(\d+)/g) || []).forEach(function (m) { max = Math.max(max, +m.replace(/\D/g, '')); });
+    return max;
+}
+function _sukList(cat, query, page, sort) {
+    var url = _SUK + '?f=0&c=' + cat + '&q=' + encodeURIComponent(query || '') + '&' + (_SUK_SORT[sort] || _SUK_SORT.seeds) +
+        '&o=desc' + (page > 1 ? '&p=' + page : '');
+    return cherryFetch(url).then(function (html) { return { items: _sukRows(html), total_pages: _sukPages(html, page) }; });
+}
+SOURCES.push({
+    id: 'sukebei',
+    name: 'Sukebei',
+    host: 'sukebei.nyaa.si',
+    first: true,
+    torrent: true,
+    cfg: {
+        sorts: _cats('seeds:Больше сидов,new:Свежее,size:Крупнее,dl:Скачиваемые'),
+        categories: _cats('2_2:Видео,1_1:Аниме')
+    },
+    browse: function (category, page, sort) { return _sukList(category || '2_2', '', page || 1, sort); },
+    search: function (query, page, sort) { return _sukList('0_0', query, page || 1, sort); },
+    playTorrent: _magnetPlay
 });
 
 })();
