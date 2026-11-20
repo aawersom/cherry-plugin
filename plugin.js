@@ -7,7 +7,7 @@
   // Build version (semantic) — shown ONLY in Lampa Settings → «Cherry · vX.Y.Z» so a TV can
   // confirm it loaded the latest plugin (Lampa caches plugins). Bump on every deploy:
   // patch (0.9.1→0.9.2) for fixes, minor (0.9.x→0.10.0) for features.
-  var CHERRY_VERSION = '0.13.78';
+  var CHERRY_VERSION = '0.13.79';
 
   // ============================================================
   // CONFIG — user sets these after deploying their proxy
@@ -9469,6 +9469,11 @@ function _sukImg(html) {
     var d = (String(html).match(/id="torrent-description"[^>]*>([\s\S]*?)<\/div>/) || [])[1] || '';
     return (_sukUnesc(d).match(/https?:\/\/[^\s"'<>\[\]()]+?\.(?:jpe?g|png|webp)/i) || [])[0] || '';
 }
+// «SNOS-462», «[FHD] JQJ-001 …», «ABF-200» → the code; FC2-PPV and bare numbers are not JAV codes
+function _javCode(title) {
+    var m = String(title || '').toUpperCase().match(/(?:^|[^A-Z0-9])([A-Z]{2,6})-(\d{2,5})(?![0-9])/);
+    return m && !/^(FC|PPV|FC2)$/.test(m[1]) ? m[1] + '-' + m[2] : '';
+}
 function _sukPoster(img, title) {
     if (!img) return _textPoster(title);
     return PROXY_URL_2 ? _proxyVia(PROXY_URL_2, img) : buildProxyUrl(img, null, true);
@@ -9485,7 +9490,17 @@ function _sukPump() {
                 _sukPump();
             }
             // a failed fetch is not remembered (the next showing tries again); an answered page is, picture or not
-            cherryFetch(_SUK + 'view/' + job.id).then(function (html) { done(_sukImg(html), true); }, function () { done('', false); });
+            function page() { cherryFetch(_SUK + 'view/' + job.id).then(function (html) { done(_sukImg(html), true); }, function () { done('', false); }); }
+            // a JAV code in the name → the studio's cover (DMM) by r18.dev, whose content id is irregular (snos00462,
+            // ssis839, 118abf200 — built by hand it lands on DMM's «now printing»); no code / unknown to r18 → the page
+            var code = _javCode(job.title);
+            if (!code) { page(); return; }
+            cherryFetch('https://r18.dev/videos/vod/movies/detail/-/dvd_id=' + code + '/json').then(function (text) {
+                var j; try { j = JSON.parse(text); } catch (e) { j = null; }
+                var jk = (j && j.images && j.images.jacket_image) || {};
+                var img = String(jk.large2 || jk.large || '').trim();
+                if (/^https?:\/\//.test(img)) done(img, true); else page();
+            }, page);
         })(job);
     }
 }
